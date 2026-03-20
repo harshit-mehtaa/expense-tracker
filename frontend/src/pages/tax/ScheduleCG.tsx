@@ -16,13 +16,14 @@ const ASSET_TYPE_LABELS: Record<CapitalGainAssetType, string> = {
   PROPERTY: 'Property',
   BONDS: 'Bonds',
   GOLD: 'Gold',
+  FOREIGN_EQUITY: 'Foreign Equity (RSU/ESOP/Stocks)',
   OTHER: 'Other',
 };
 
 const entrySchema = z.object({
   fyYear: z.string(),
   assetName: z.string().min(1, 'Required'),
-  assetType: z.enum(['EQUITY_LISTED', 'EQUITY_MUTUAL_FUND', 'DEBT_MUTUAL_FUND', 'PROPERTY', 'BONDS', 'GOLD', 'OTHER']),
+  assetType: z.enum(['EQUITY_LISTED', 'EQUITY_MUTUAL_FUND', 'DEBT_MUTUAL_FUND', 'PROPERTY', 'BONDS', 'GOLD', 'FOREIGN_EQUITY', 'OTHER']),
   purchaseDate: z.string().min(1, 'Required'),
   saleDate: z.string().min(1, 'Required'),
   purchasePrice: z.coerce.number().positive('Must be positive'),
@@ -30,6 +31,8 @@ const entrySchema = z.object({
   indexedCost: z.coerce.number().positive().optional().or(z.literal('')),
   isSection112AEligible: z.boolean().optional(),
   isPreApril2023Purchase: z.boolean().optional(),
+  foreignTaxPaid: z.coerce.number().min(0).optional().or(z.literal('')),
+  exchangeRateAtSale: z.coerce.number().positive().optional().or(z.literal('')),
   notes: z.string().optional(),
 });
 
@@ -88,6 +91,8 @@ export default function ScheduleCG({ fy }: Props) {
       purchaseDate: new Date(data.purchaseDate).toISOString(),
       saleDate: new Date(data.saleDate).toISOString(),
       indexedCost: data.indexedCost === '' ? undefined : data.indexedCost,
+      foreignTaxPaid: data.foreignTaxPaid === '' ? undefined : data.foreignTaxPaid,
+      exchangeRateAtSale: data.exchangeRateAtSale === '' ? undefined : data.exchangeRateAtSale,
     };
     if (editId) {
       updateMutation.mutate({ id: editId, data: payload });
@@ -110,6 +115,8 @@ export default function ScheduleCG({ fy }: Props) {
       indexedCost: entry.indexedCost ?? '',
       isSection112AEligible: entry.isSection112AEligible,
       isPreApril2023Purchase: entry.isPreApril2023Purchase,
+      foreignTaxPaid: entry.foreignTaxPaid ?? '',
+      exchangeRateAtSale: entry.exchangeRateAtSale ?? '',
       notes: entry.notes ?? '',
     });
   };
@@ -125,6 +132,9 @@ export default function ScheduleCG({ fy }: Props) {
           <SummaryCard label="LTCG (20% – Indexation)" value={summary.ltcg.withIndexation} />
           {summary.ltcg.debtMFSlab > 0 && (
             <SummaryCard label="Debt MF (Slab)" value={summary.ltcg.debtMFSlab} />
+          )}
+          {summary.ltcg.foreign20Pct > 0 && (
+            <SummaryCard label="Foreign Equity LTCG (20%)" value={summary.ltcg.foreign20Pct} note="No indexation" />
           )}
           <SummaryCard label="Total Taxable Gain" value={summary.totalTaxableGain} highlight />
         </div>
@@ -188,6 +198,22 @@ export default function ScheduleCG({ fy }: Props) {
               </div>
             )}
           </div>
+
+          {assetType === 'FOREIGN_EQUITY' && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm space-y-3">
+              <p className="text-amber-800 font-medium">RSU/ESOP note: Enter FMV at vest/exercise as Purchase Price. Only the sale leg is tracked here — perquisite income at vest/exercise should appear in your Form 16.</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Foreign Tax Paid (₹ equivalent) — optional</label>
+                  <input type="number" step="0.01" {...register('foreignTaxPaid')} className="input" placeholder="For DTAA credit reference" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Exchange Rate at Sale (INR/USD) — optional</label>
+                  <input type="number" step="0.0001" {...register('exchangeRateAtSale')} className="input" placeholder="e.g. 83.5" />
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="flex flex-wrap gap-4">
             {(assetType === 'EQUITY_LISTED' || assetType === 'EQUITY_MUTUAL_FUND') && (

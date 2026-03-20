@@ -205,6 +205,8 @@ export async function getITR2Summary(userId: string, fy: string) {
     },
     scheduleOS: {
       breakdown: os.breakdown,
+      foreignDividend: os.foreignDividend,
+      totalForeignWithholdingTax: os.totalForeignWithholdingTax,
       grossTotal: os.grossTotal,
       deduction80TTA: os.deduction80TTA,
       taxableTotal: os.taxableTotal,

@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { taxApi } from '@/api/tax';
-import type { OtherSourceType } from '@/types/tax';
+import type { OtherSourceType, OtherIncomeSummary } from '@/types/tax';
 import { formatINR } from '@/lib/indianFormat';
 
 const formatCurrency = formatINR;
@@ -15,12 +15,13 @@ const SOURCE_LABELS: Record<OtherSourceType, string> = {
   SAVINGS_INTEREST: 'Savings Account Interest',
   DIVIDEND: 'Dividend',
   GIFT: 'Gift',
+  FOREIGN_DIVIDEND: 'Foreign Dividend',
   OTHER: 'Other',
 };
 
 const entrySchema = z.object({
   fyYear: z.string(),
-  sourceType: z.enum(['FD_INTEREST', 'RD_INTEREST', 'SAVINGS_INTEREST', 'DIVIDEND', 'GIFT', 'OTHER']),
+  sourceType: z.enum(['FD_INTEREST', 'RD_INTEREST', 'SAVINGS_INTEREST', 'DIVIDEND', 'GIFT', 'FOREIGN_DIVIDEND', 'OTHER']),
   description: z.string().min(1, 'Required'),
   amount: z.coerce.number().positive('Must be positive'),
   tdsDeducted: z.coerce.number().min(0).optional().or(z.literal('')),
@@ -48,7 +49,7 @@ export default function ScheduleOS({ fy }: Props) {
     queryFn: () => taxApi.getOtherIncomeSummary(fy),
   });
 
-  const { register, handleSubmit, reset, formState: { errors } } = useForm<EntryForm>({
+  const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<EntryForm>({
     resolver: zodResolver(entrySchema),
     defaultValues: { fyYear: fy },
   });
@@ -86,6 +87,8 @@ export default function ScheduleOS({ fy }: Props) {
     }
   };
 
+  const sourceType = watch('sourceType');
+
   const startEdit = (entry: any) => {
     setEditId(entry.id);
     setShowForm(true);
@@ -105,14 +108,20 @@ export default function ScheduleOS({ fy }: Props) {
       {summary && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-            {Object.entries(summary.breakdown).map(([key, val]) => (
+            {(Object.entries(summary.breakdown) as [keyof OtherIncomeSummary['breakdown'], number][]).map(([key, val]) => (
               val > 0 && (
                 <div key={key} className="bg-white border rounded-lg p-4">
                   <p className="text-xs text-gray-500">{SOURCE_LABELS[key as OtherSourceType] ?? key}</p>
-                  <p className="text-lg font-semibold text-gray-900 mt-1">{formatCurrency(val as number)}</p>
+                  <p className="text-lg font-semibold text-gray-900 mt-1">{formatCurrency(val)}</p>
                 </div>
               )
             ))}
+            {summary.foreignDividend > 0 && (
+              <div className="bg-white border rounded-lg p-4">
+                <p className="text-xs text-gray-500">Foreign Dividend</p>
+                <p className="text-lg font-semibold text-gray-900 mt-1">{formatCurrency(summary.foreignDividend)}</p>
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-white border rounded-lg p-4">
@@ -132,11 +141,20 @@ export default function ScheduleOS({ fy }: Props) {
             </div>
             {summary.totalTdsDeducted > 0 && (
               <div className="bg-white border rounded-lg p-4">
-                <p className="text-xs text-gray-500">TDS Deducted</p>
+                <p className="text-xs text-gray-500">TDS Deducted (Domestic)</p>
                 <p className="text-lg font-semibold text-gray-700 mt-1">{formatCurrency(summary.totalTdsDeducted)}</p>
               </div>
             )}
           </div>
+          {summary.totalForeignWithholdingTax > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm">
+              <p className="font-medium text-amber-800">DTAA Credit Note</p>
+              <p className="text-amber-700 mt-1">
+                Foreign withholding tax paid: <strong>{formatCurrency(summary.totalForeignWithholdingTax)}</strong>.
+                You may claim DTAA relief on foreign dividend income. Report this in Schedule FSI / Schedule TR in ITR-2 to avoid double taxation. This system does not compute the credit — consult a CA or your ITR filing software.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -177,8 +195,13 @@ export default function ScheduleOS({ fy }: Props) {
               {errors.amount && <p className="text-red-500 text-xs mt-1">{errors.amount.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">TDS Deducted (₹) — optional</label>
+              <label className="block text-sm font-medium mb-1">
+                {sourceType === 'FOREIGN_DIVIDEND' ? 'Foreign Withholding Tax (₹ equivalent) — optional' : 'TDS Deducted (₹) — optional'}
+              </label>
               <input type="number" step="0.01" {...register('tdsDeducted')} className="input" placeholder="0" />
+              {sourceType === 'FOREIGN_DIVIDEND' && (
+                <p className="text-xs text-amber-700 mt-1">Stored for DTAA credit reference. Taxed at slab rate.</p>
+              )}
             </div>
             <div className="md:col-span-2">
               <label className="block text-sm font-medium mb-1">Notes</label>
@@ -207,7 +230,7 @@ export default function ScheduleOS({ fy }: Props) {
                 <th className="pb-2 pr-3">Description</th>
                 <th className="pb-2 pr-3">Type</th>
                 <th className="pb-2 pr-3 text-right">Amount</th>
-                <th className="pb-2 pr-3 text-right">TDS</th>
+                <th className="pb-2 pr-3 text-right">TDS / WHT</th>
                 <th className="pb-2"></th>
               </tr>
             </thead>

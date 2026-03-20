@@ -8,6 +8,7 @@ import * as svc from '../services/taxService';
 import * as cgSvc from '../services/capitalGainsService';
 import * as osSvc from '../services/otherIncomeService';
 import * as hpSvc from '../services/housePropertyService';
+import * as faSvc from '../services/foreignAssetService';
 
 /** Validate and return a safe FY string; falls back to current FY on bad input */
 function parseFY(raw: unknown): string {
@@ -82,7 +83,7 @@ router.get('/hra-calculator', asyncHandler(async (req, res) => {
 const cgEntrySchema = z.object({
   fyYear: z.string().regex(/^\d{4}-\d{2}$/),
   assetName: z.string().min(1),
-  assetType: z.enum(['EQUITY_LISTED', 'EQUITY_MUTUAL_FUND', 'DEBT_MUTUAL_FUND', 'PROPERTY', 'BONDS', 'GOLD', 'OTHER']),
+  assetType: z.enum(['EQUITY_LISTED', 'EQUITY_MUTUAL_FUND', 'DEBT_MUTUAL_FUND', 'PROPERTY', 'BONDS', 'GOLD', 'FOREIGN_EQUITY', 'OTHER']),
   purchaseDate: z.string().datetime(),
   saleDate: z.string().datetime(),
   purchasePrice: z.number().positive(),
@@ -91,6 +92,8 @@ const cgEntrySchema = z.object({
   isListed: z.boolean().optional(),
   isSection112AEligible: z.boolean().optional(),
   isPreApril2023Purchase: z.boolean().optional(),
+  foreignTaxPaid: z.number().min(0).optional(),
+  exchangeRateAtSale: z.number().positive().optional(),
   investmentId: z.string().optional(),
   notes: z.string().optional(),
 });
@@ -130,7 +133,7 @@ router.delete('/capital-gains/:id', asyncHandler(async (req, res) => {
 
 const osEntrySchema = z.object({
   fyYear: z.string().regex(/^\d{4}-\d{2}$/),
-  sourceType: z.enum(['FD_INTEREST', 'RD_INTEREST', 'SAVINGS_INTEREST', 'DIVIDEND', 'GIFT', 'OTHER']),
+  sourceType: z.enum(['FD_INTEREST', 'RD_INTEREST', 'SAVINGS_INTEREST', 'DIVIDEND', 'GIFT', 'FOREIGN_DIVIDEND', 'OTHER']),
   description: z.string().min(1),
   amount: z.number().positive(),
   tdsDeducted: z.number().min(0).optional(),
@@ -213,6 +216,51 @@ router.put('/house-property/:id', asyncHandler(async (req, res) => {
 
 router.delete('/house-property/:id', asyncHandler(async (req, res) => {
   const entry = await hpSvc.deleteHouseProperty(req.user!.userId, req.params.id);
+  if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  sendSuccess(res, { deleted: true });
+}));
+
+// ─── Schedule FA: Foreign Assets ──────────────────────────────────────────────
+
+const faEntrySchema = z.object({
+  fyYear: z.string().regex(/^\d{4}-\d{2}$/),
+  category: z.enum(['BANK_ACCOUNT', 'EQUITY_AND_MF', 'DEBT', 'IMMOVABLE_PROPERTY', 'OTHER']),
+  country: z.string().min(1),
+  assetDescription: z.string().min(1),
+  acquisitionCostINR: z.number().min(0),
+  peakValueINR: z.number().min(0),
+  closingValueINR: z.number().min(0),
+  incomeAccruedINR: z.number().min(0).optional(),
+  notes: z.string().optional(),
+});
+
+router.get('/foreign-assets', asyncHandler(async (req, res) => {
+  const fy = parseFY(req.query.fy);
+  const entries = await faSvc.listForeignAssets(req.user!.userId, fy);
+  sendSuccess(res, entries);
+}));
+
+router.get('/foreign-assets/summary', asyncHandler(async (req, res) => {
+  const fy = parseFY(req.query.fy);
+  const summary = await faSvc.getForeignAssetSummary(req.user!.userId, fy);
+  sendSuccess(res, summary);
+}));
+
+router.post('/foreign-assets', asyncHandler(async (req, res) => {
+  const data = faEntrySchema.parse(req.body);
+  const entry = await faSvc.createForeignAsset(req.user!.userId, data as any);
+  sendSuccess(res, entry, 201);
+}));
+
+router.put('/foreign-assets/:id', asyncHandler(async (req, res) => {
+  const data = faEntrySchema.partial().parse(req.body);
+  const entry = await faSvc.updateForeignAsset(req.user!.userId, req.params.id, data as any);
+  if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  sendSuccess(res, entry);
+}));
+
+router.delete('/foreign-assets/:id', asyncHandler(async (req, res) => {
+  const entry = await faSvc.deleteForeignAsset(req.user!.userId, req.params.id);
   if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
   sendSuccess(res, { deleted: true });
 }));

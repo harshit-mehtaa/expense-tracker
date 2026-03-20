@@ -3,6 +3,7 @@ import type {
   CapitalGainEntry, CapitalGainSummary,
   OtherSourceIncome, OtherIncomeSummary,
   HousePropertyDetail, HousePropertyIncomeSummary,
+  ForeignAssetDisclosure, ForeignAssetSummary,
   ITR2Summary,
 } from '@/types/tax';
 
@@ -52,6 +53,18 @@ export const taxApi = {
     api.delete<{ data: { deleted: boolean } }>(`/tax/house-property/${id}`).then(unwrap),
   getHousePropertySummary: (fy: string) =>
     api.get<{ data: HousePropertyIncomeSummary }>(`/tax/house-property/summary?fy=${fy}`).then(unwrap),
+
+  // ─── Foreign Assets (Schedule FA) ──────────────────────────────────────────
+  listForeignAssets: (fy: string) =>
+    api.get<{ data: ForeignAssetDisclosure[] }>(`/tax/foreign-assets?fy=${fy}`).then(unwrap),
+  createForeignAsset: (data: object) =>
+    api.post<{ data: ForeignAssetDisclosure }>('/tax/foreign-assets', data).then(unwrap),
+  updateForeignAsset: (id: string, data: object) =>
+    api.put<{ data: ForeignAssetDisclosure }>(`/tax/foreign-assets/${id}`, data).then(unwrap),
+  deleteForeignAsset: (id: string) =>
+    api.delete<{ data: { deleted: boolean } }>(`/tax/foreign-assets/${id}`).then(unwrap),
+  getForeignAssetSummary: (fy: string) =>
+    api.get<{ data: ForeignAssetSummary }>(`/tax/foreign-assets/summary?fy=${fy}`).then(unwrap),
 
   // ─── ITR-2 Overview ────────────────────────────────────────────────────────
   getITR2Summary: (fy: string) =>

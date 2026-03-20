@@ -92,8 +92,13 @@ export default function ITR2Summary({ fy }: Props) {
           </tbody>
           <tfoot>
             <tr className="bg-blue-50 font-semibold">
-              <td className="px-3 py-3 text-blue-800" colSpan={4}>Total Additional Taxable Income</td>
-              <td className="px-3 py-3 text-right text-blue-800">{formatCurrency(totalTaxable)}</td>
+              <td className="px-3 py-3 text-blue-800" colSpan={4}>
+                Total Additional Taxable Income
+                {totalTaxable < 0 && (
+                  <span className="ml-2 text-xs font-normal text-amber-700">(CG/HP losses cannot offset salary — add to salary separately)</span>
+                )}
+              </td>
+              <td className="px-3 py-3 text-right text-blue-800">{formatCurrency(Math.max(totalTaxable, 0))}</td>
               <td></td>
             </tr>
           </tfoot>
@@ -112,6 +117,9 @@ export default function ITR2Summary({ fy }: Props) {
             {summary.scheduleCG.ltcg.debtMFSlab > 0 && (
               <BreakdownRow label="Debt MF (Slab rate)" value={summary.scheduleCG.ltcg.debtMFSlab} />
             )}
+            {summary.scheduleCG.ltcg.foreign20Pct > 0 && (
+              <BreakdownRow label="Foreign Equity LTCG (20%)" value={summary.scheduleCG.ltcg.foreign20Pct} note="No indexation" />
+            )}
           </div>
         </div>
 
@@ -124,6 +132,9 @@ export default function ITR2Summary({ fy }: Props) {
             <BreakdownRow label="Dividend" value={summary.scheduleOS.breakdown.dividend} />
             <BreakdownRow label="Gift" value={summary.scheduleOS.breakdown.gift} />
             <BreakdownRow label="Other" value={summary.scheduleOS.breakdown.other} />
+            {summary.scheduleOS.foreignDividend > 0 && (
+              <BreakdownRow label="Foreign Dividend" value={summary.scheduleOS.foreignDividend} />
+            )}
             {summary.scheduleOS.deduction80TTA > 0 && (
               <BreakdownRow label="Less: 80TTA Deduction" value={-summary.scheduleOS.deduction80TTA} />
             )}

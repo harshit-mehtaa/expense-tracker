@@ -196,6 +196,7 @@ enum CapitalGainAssetType {
   PROPERTY
   BONDS
   GOLD
+  FOREIGN_EQUITY // Foreign stocks, RSU/ESOP sale (24-month LTCG, 20% no indexation, no 112A)
   OTHER
 }
 
@@ -204,7 +205,16 @@ enum OtherSourceType {
   RD_INTEREST
   SAVINGS_INTEREST
   DIVIDEND
+  FOREIGN_DIVIDEND // Foreign dividends; tdsDeducted stores foreign withholding tax for DTAA credit
   GIFT
+  OTHER
+}
+
+enum ForeignAssetCategory {
+  BANK_ACCOUNT
+  EQUITY_AND_MF
+  DEBT
+  IMMOVABLE_PROPERTY
   OTHER
 }
 
@@ -247,13 +257,14 @@ model User {
   fixedDeposits    FixedDeposit[]
   recurringDeposits RecurringDeposit[]
   refreshTokens    RefreshToken[]
-  auditLogs        AuditLog[]
-  documents        Document[]
-  bankImports      BankStatementImport[]
-  categories       Category[]
-  capitalGains     CapitalGainEntry[]
-  otherIncomes     OtherSourceIncome[]
-  houseProperties  HousePropertyDetail[]
+  auditLogs              AuditLog[]
+  documents              Document[]
+  bankImports            BankStatementImport[]
+  categories             Category[]
+  capitalGains           CapitalGainEntry[]
+  otherIncomes           OtherSourceIncome[]
+  houseProperties        HousePropertyDetail[]
+  foreignAssetDisclosures ForeignAssetDisclosure[]
 
   @@index([email])
   @@index([deletedAt])
@@ -844,6 +855,8 @@ model CapitalGainEntry {
   isListed              Boolean              @default(true)
   isSection112AEligible Boolean              @default(false) // LTCG on listed equity/equity MF (10% tax, ₹1L aggregate exemption)
   isPreApril2023Purchase Boolean             @default(false) // DEBT_MF purchased before Apr 2023 → old LTCG rules
+  foreignTaxPaid        Decimal?             @db.Decimal(15, 2) // Tax paid in foreign country on this gain (DTAA credit reference)
+  exchangeRateAtSale    Decimal?             @db.Decimal(15, 4) // INR per 1 unit of foreign currency at sale date
   notes                 String?
   deletedAt             DateTime?
   createdAt             DateTime             @default(now())
@@ -895,6 +908,30 @@ model HousePropertyDetail {
 
   user       User        @relation(fields: [userId], references: [id])
   realEstate RealEstate? @relation(fields: [realEstateId], references: [id])
+
+  @@index([userId, fyYear])
+  @@index([deletedAt])
+}
+
+// ─── Schedule FA: Foreign Asset Disclosure ────────────────────────────────────
+
+model ForeignAssetDisclosure {
+  id                 String               @id @default(cuid())
+  userId             String
+  fyYear             String               // FY in which the asset was held (e.g. "2024-25")
+  category           ForeignAssetCategory
+  country            String               // Country name, e.g. "United States"
+  assetDescription   String               // e.g. "Apple Inc. shares (AAPL) held in Schwab account"
+  acquisitionCostINR Decimal              @db.Decimal(15, 2) // Cost of acquisition in INR
+  peakValueINR       Decimal              @db.Decimal(15, 2) // Peak value during the FY in INR
+  closingValueINR    Decimal              @db.Decimal(15, 2) // Closing value at FY end in INR
+  incomeAccruedINR   Decimal              @default(0) @db.Decimal(15, 2) // Income (dividends/interest) accrued in INR; 0 means no income
+  notes              String?
+  deletedAt          DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
 
   @@index([userId, fyYear])
   @@index([deletedAt])

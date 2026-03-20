@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils';
 import ScheduleCG from './ScheduleCG';
 import ScheduleOS from './ScheduleOS';
 import ScheduleHP from './ScheduleHP';
+import ScheduleFA from './ScheduleFA';
 import ITR2Summary from './ITR2Summary';
 
 function ProgressBar({ value, max, color = 'bg-green-500', label }: { value: number; max: number; color?: string; label?: string }) {
@@ -50,7 +51,7 @@ type ProfileForm = z.infer<typeof profileSchema>;
 export default function TaxCentrePage() {
   const { selectedFY } = useFY();
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'summary' | '80c' | 'advance' | 'hra' | 'cg' | 'os' | 'hp' | 'itr2'>('summary');
+  const [activeTab, setActiveTab] = useState<'summary' | '80c' | 'advance' | 'hra' | 'cg' | 'os' | 'hp' | 'fa' | 'itr2'>('summary');
   const [hraParams, setHraParams] = useState({ basicSalary: '', hraReceived: '', rentPaid: '', city: 'METRO' });
   const [hraResult, setHraResult] = useState<{ exempt: number; taxable: number } | null>(null);
   const [hraError, setHraError] = useState<string | null>(null);
@@ -114,6 +115,7 @@ export default function TaxCentrePage() {
     { id: 'cg', label: 'Capital Gains' },
     { id: 'os', label: 'Other Sources' },
     { id: 'hp', label: 'House Property' },
+    { id: 'fa', label: 'Foreign Assets (FA)' },
     { id: 'itr2', label: 'ITR-2 Overview' },
   ] as const;
 
@@ -476,6 +478,14 @@ export default function TaxCentrePage() {
         <div className="rounded-lg border bg-card p-6">
           <h2 className="font-semibold mb-4">Schedule HP — House Property</h2>
           <ScheduleHP fy={selectedFY} />
+        </div>
+      )}
+
+      {/* Foreign Assets Tab */}
+      {activeTab === 'fa' && (
+        <div className="rounded-lg border bg-card p-6">
+          <h2 className="font-semibold mb-4">Schedule FA — Foreign Assets</h2>
+          <ScheduleFA fy={selectedFY} />
         </div>
       )}
 

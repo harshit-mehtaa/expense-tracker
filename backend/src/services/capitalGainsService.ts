@@ -50,13 +50,14 @@ export async function deleteCapitalGain(userId: string, id: string) {
 export interface CapitalGainSummary {
   stcg: {
     equity15Pct: number;   // Listed equity + equity MF held < 12m → 15%
-    other: number;         // All other STCG → slab rate
+    other: number;         // All other STCG (incl. foreign equity < 24m) → slab rate
     total: number;
   };
   ltcg: {
     equity10Pct: number;   // 112A-eligible (listed equity/equity MF) LTCG after ₹1L exemption → 10%
     withIndexation: number; // Property/Gold/Bonds ≥ 24/36m → 20% with indexation
     debtMFSlab: number;    // DEBT_MF post-Apr 2023 purchase → slab rate
+    foreign20Pct: number;  // Foreign equity ≥ 24m → 20% without indexation (no 112A benefit)
     total: number;
   };
   totalTaxableGain: number;
@@ -80,6 +81,7 @@ const LONG_TERM_DAYS: Record<CapitalGainAssetType, number> = {
   PROPERTY: 730,             // 24 months
   BONDS: 1095,               // 36 months
   GOLD: 1095,                // 36 months
+  FOREIGN_EQUITY: 730,       // 24 months (applies to RSU/ESOP sales and direct foreign stocks)
   OTHER: 1095,               // default 36 months
 };
 
@@ -100,6 +102,7 @@ export async function calcCapitalGainsSummary(userId: string, fy: string): Promi
   let ltcg112ARaw = 0;    // sum of 112A-eligible LTCG before exemption
   let ltcgIndexation = 0;
   let ltcgDebtMFSlab = 0;
+  let ltcgForeign20 = 0;  // foreign equity LTCG ≥ 24m → 20% without indexation
 
   const details: CapitalGainSummary['entries'] = [];
 
@@ -128,6 +131,7 @@ export async function calcCapitalGainsSummary(userId: string, fy: string): Promi
         taxRate = 'Slab rate';
         taxBucket = 'DEBT_MF_SLAB';
       } else {
+        // Includes FOREIGN_EQUITY held < 24m → slab rate
         stcgOther += gain;
         taxRate = 'Slab rate';
         taxBucket = 'STCG_OTHER_SLAB';
@@ -139,6 +143,11 @@ export async function calcCapitalGainsSummary(userId: string, fy: string): Promi
         ltcgDebtMFSlab += gain;
         taxRate = 'Slab rate';
         taxBucket = 'DEBT_MF_SLAB';
+      } else if (e.assetType === 'FOREIGN_EQUITY') {
+        // Foreign equity ≥ 24m → 20% without indexation (no 112A benefit)
+        ltcgForeign20 += gain;
+        taxRate = '20% (foreign equity, no indexation)';
+        taxBucket = 'LTCG_FOREIGN_20';
       } else if (e.isSection112AEligible) {
         ltcg112ARaw += gain;
         taxRate = '10% (Sec 112A, ₹1L exempt)';
@@ -168,7 +177,7 @@ export async function calcCapitalGainsSummary(userId: string, fy: string): Promi
   const ltcgEquity10 = Math.max(ltcg112ARaw - 100000, 0);
 
   const stcgTotal = stcgEquity15 + stcgOther;
-  const ltcgTotal = ltcgEquity10 + ltcgIndexation + ltcgDebtMFSlab;
+  const ltcgTotal = ltcgEquity10 + ltcgIndexation + ltcgDebtMFSlab + ltcgForeign20;
 
   return {
     stcg: {
@@ -180,9 +189,10 @@ export async function calcCapitalGainsSummary(userId: string, fy: string): Promi
       equity10Pct: ltcgEquity10,
       withIndexation: ltcgIndexation,
       debtMFSlab: ltcgDebtMFSlab,
+      foreign20Pct: ltcgForeign20,
       total: ltcgTotal,
     },
-    totalTaxableGain: stcgTotal + ltcgTotal, // ltcgTotal already includes debtMFSlab
+    totalTaxableGain: stcgTotal + ltcgTotal,
     entries: details,
   };
 }

@@ -5,6 +5,7 @@ export type CapitalGainAssetType =
   | 'PROPERTY'
   | 'BONDS'
   | 'GOLD'
+  | 'FOREIGN_EQUITY'
   | 'OTHER';
 
 export type OtherSourceType =
@@ -13,6 +14,7 @@ export type OtherSourceType =
   | 'SAVINGS_INTEREST'
   | 'DIVIDEND'
   | 'GIFT'
+  | 'FOREIGN_DIVIDEND'
   | 'OTHER';
 
 export type HousePropertyUsage = 'SELF_OCCUPIED' | 'LET_OUT' | 'DEEMED_LET_OUT';
@@ -34,6 +36,8 @@ export interface CapitalGainEntry {
   isListed: boolean;
   isSection112AEligible: boolean;
   isPreApril2023Purchase: boolean;
+  foreignTaxPaid?: number;
+  exchangeRateAtSale?: number;
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -49,6 +53,7 @@ export interface CapitalGainSummary {
     equity10Pct: number;
     withIndexation: number;
     debtMFSlab: number;
+    foreign20Pct: number;
     total: number;
   };
   totalTaxableGain: number;
@@ -88,6 +93,8 @@ export interface OtherIncomeSummary {
     gift: number;
     other: number;
   };
+  foreignDividend: number;
+  totalForeignWithholdingTax: number;
   grossTotal: number;
   deduction80TTA: number;
   taxableTotal: number;
@@ -129,6 +136,38 @@ export interface HousePropertyIncomeSummary {
   taxableHPIncome: number;
 }
 
+// ─── Foreign Assets (Schedule FA) ─────────────────────────────────────────────
+
+export type ForeignAssetCategory =
+  | 'BANK_ACCOUNT'
+  | 'EQUITY_AND_MF'
+  | 'DEBT'
+  | 'IMMOVABLE_PROPERTY'
+  | 'OTHER';
+
+export interface ForeignAssetDisclosure {
+  id: string;
+  userId: string;
+  fyYear: string;
+  category: ForeignAssetCategory;
+  country: string;
+  assetDescription: string;
+  acquisitionCostINR: number;
+  peakValueINR: number;
+  closingValueINR: number;
+  incomeAccruedINR?: number;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ForeignAssetSummary {
+  count: number;
+  totalClosingValueINR: number;
+  totalIncomeAccruedINR: number;
+  byCategory: Record<string, { count: number; closingValueINR: number }>;
+}
+
 // ─── ITR-2 Summary ────────────────────────────────────────────────────────────
 
 export interface ITR2Summary {
@@ -142,6 +181,8 @@ export interface ITR2Summary {
   };
   scheduleOS: {
     breakdown: OtherIncomeSummary['breakdown'];
+    foreignDividend: number;
+    totalForeignWithholdingTax: number;
     grossTotal: number;
     deduction80TTA: number;
     taxableTotal: number;
