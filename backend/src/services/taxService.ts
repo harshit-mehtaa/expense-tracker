@@ -4,30 +4,42 @@ import { buildAmortizationSchedule } from './loanService';
 import type { Prisma } from '@prisma/client';
 
 // ─── Indian Tax Slabs (FY 2024-25) ───────────────────────────────────────────
+// TODO: Make FY-parameterised when multi-FY support is needed.
 
 function calcOldRegimeTax(taxableIncome: number): number {
-  if (taxableIncome <= 250000) return 0;
-  if (taxableIncome <= 500000) return (taxableIncome - 250000) * 0.05;
-  if (taxableIncome <= 1000000) return 12500 + (taxableIncome - 500000) * 0.20;
-  return 12500 + 100000 + (taxableIncome - 1000000) * 0.30;
+  let tax: number;
+  if (taxableIncome <= 250000) tax = 0;
+  else if (taxableIncome <= 500000) tax = (taxableIncome - 250000) * 0.05;
+  else if (taxableIncome <= 1000000) tax = 12500 + (taxableIncome - 500000) * 0.20;
+  else tax = 112500 + (taxableIncome - 1000000) * 0.30;
+  // Sec 87A rebate: full rebate (up to ₹12,500) if taxable income ≤ ₹5L
+  if (taxableIncome <= 500000) tax = Math.max(tax - 12500, 0);
+  return tax;
 }
 
 function calcNewRegimeTax(taxableIncome: number): number {
   // FY 2024-25 new regime slabs
-  if (taxableIncome <= 300000) return 0;
-  if (taxableIncome <= 700000) return (taxableIncome - 300000) * 0.05;
-  if (taxableIncome <= 1000000) return 20000 + (taxableIncome - 700000) * 0.10;
-  if (taxableIncome <= 1200000) return 50000 + (taxableIncome - 1000000) * 0.15;
-  if (taxableIncome <= 1500000) return 80000 + (taxableIncome - 1200000) * 0.20;
-  return 140000 + (taxableIncome - 1500000) * 0.30;
+  let tax: number;
+  if (taxableIncome <= 300000) tax = 0;
+  else if (taxableIncome <= 700000) tax = (taxableIncome - 300000) * 0.05;
+  else if (taxableIncome <= 1000000) tax = 20000 + (taxableIncome - 700000) * 0.10;
+  else if (taxableIncome <= 1200000) tax = 50000 + (taxableIncome - 1000000) * 0.15;
+  else if (taxableIncome <= 1500000) tax = 80000 + (taxableIncome - 1200000) * 0.20;
+  else tax = 140000 + (taxableIncome - 1500000) * 0.30;
+  // Sec 87A rebate: full rebate if taxable income ≤ ₹7L (new regime, FY 2023-24+)
+  if (taxableIncome <= 700000) tax = 0;
+  return tax;
 }
 
-function addSurchargeAndCess(tax: number, income: number): number {
+function addSurchargeAndCess(tax: number, income: number, regime: 'OLD' | 'NEW' = 'OLD'): number {
   let surcharge = 0;
   if (income > 5000000 && income <= 10000000) surcharge = tax * 0.10;
   else if (income > 10000000 && income <= 20000000) surcharge = tax * 0.15;
   else if (income > 20000000 && income <= 50000000) surcharge = tax * 0.25;
-  else if (income > 50000000) surcharge = tax * 0.37;
+  else if (income > 50000000) {
+    // New regime: surcharge capped at 25% (Budget 2023); old regime: 37%
+    surcharge = tax * (regime === 'NEW' ? 0.25 : 0.37);
+  }
   return (tax + surcharge) * 1.04; // 4% health + education cess
 }
 
@@ -109,6 +121,8 @@ export async function getTaxSummary(userId: string, fy: string) {
   }, 0);
 
   const nps80Ccd1b = Math.min(Number(profile?.nps80Ccd1B ?? 0), 50000);
+  const deduction80E = Number(profile?.deduction80E ?? 0);
+  const deduction80G = Number(profile?.deduction80G ?? 0);
   const other = Number(profile?.otherDeductions ?? 0);
 
   // Old Regime
@@ -119,13 +133,16 @@ export async function getTaxSummary(userId: string, fy: string) {
     profile.cityType === 'METRO',
   ) : 0;
 
-  const oldTaxableIncome = Math.max(grossSalary - standardDeduction - hraExempt - total80C - total80D - total24B - nps80Ccd1b - other, 0);
-  const oldTax = addSurchargeAndCess(calcOldRegimeTax(oldTaxableIncome), oldTaxableIncome);
+  const oldTaxableIncome = Math.max(
+    grossSalary - standardDeduction - hraExempt - total80C - total80D - total24B - nps80Ccd1b - deduction80E - deduction80G - other,
+    0,
+  );
+  const oldTax = addSurchargeAndCess(calcOldRegimeTax(oldTaxableIncome), oldTaxableIncome, 'OLD');
 
   // New Regime (fewer deductions; standard deduction ₹75K for FY24-25)
   const newStdDeduction = 75000;
   const newTaxableIncome = Math.max(grossSalary - newStdDeduction, 0);
-  const newTax = addSurchargeAndCess(calcNewRegimeTax(newTaxableIncome), newTaxableIncome);
+  const newTax = addSurchargeAndCess(calcNewRegimeTax(newTaxableIncome), newTaxableIncome, 'NEW');
 
   const taxPaid = Number(profile?.taxPaidAdvance ?? 0) + Number(profile?.taxPaidTds ?? 0) + Number(profile?.taxPaidSelfAssessment ?? 0);
 
@@ -156,6 +173,7 @@ export async function getTaxSummary(userId: string, fy: string) {
       refund: Math.max(taxPaid - newTax, 0),
     },
     taxPaid,
+    electedRegime: (profile?.regime ?? 'OLD') as 'OLD' | 'NEW',
     recommendedRegime: oldTax <= newTax ? 'OLD' : 'NEW',
     savings: Math.abs(oldTax - newTax),
   };
