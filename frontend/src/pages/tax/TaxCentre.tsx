@@ -11,6 +11,10 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useFY } from '@/contexts/FYContext';
 import { taxApi } from '@/api/tax';
 import { cn } from '@/lib/utils';
+import ScheduleCG from './ScheduleCG';
+import ScheduleOS from './ScheduleOS';
+import ScheduleHP from './ScheduleHP';
+import ITR2Summary from './ITR2Summary';
 
 function ProgressBar({ value, max, color = 'bg-green-500', label }: { value: number; max: number; color?: string; label?: string }) {
   const pct = Math.min((value / max) * 100, 100);
@@ -46,7 +50,7 @@ type ProfileForm = z.infer<typeof profileSchema>;
 export default function TaxCentrePage() {
   const { selectedFY } = useFY();
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'summary' | '80c' | 'advance' | 'hra'>('summary');
+  const [activeTab, setActiveTab] = useState<'summary' | '80c' | 'advance' | 'hra' | 'cg' | 'os' | 'hp' | 'itr2'>('summary');
   const [hraParams, setHraParams] = useState({ basicSalary: '', hraReceived: '', rentPaid: '', city: 'METRO' });
   const [hraResult, setHraResult] = useState<{ exempt: number; taxable: number } | null>(null);
   const [hraError, setHraError] = useState<string | null>(null);
@@ -107,6 +111,10 @@ export default function TaxCentrePage() {
     { id: '80c', label: '80C Tracker' },
     { id: 'advance', label: 'Advance Tax' },
     { id: 'hra', label: 'HRA Calculator' },
+    { id: 'cg', label: 'Capital Gains' },
+    { id: 'os', label: 'Other Sources' },
+    { id: 'hp', label: 'House Property' },
+    { id: 'itr2', label: 'ITR-2 Overview' },
   ] as const;
 
   return (
@@ -444,6 +452,38 @@ export default function TaxCentrePage() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Capital Gains Tab */}
+      {activeTab === 'cg' && (
+        <div className="rounded-lg border bg-card p-6">
+          <h2 className="font-semibold mb-4">Schedule CG — Capital Gains</h2>
+          <ScheduleCG fy={selectedFY} />
+        </div>
+      )}
+
+      {/* Other Sources Tab */}
+      {activeTab === 'os' && (
+        <div className="rounded-lg border bg-card p-6">
+          <h2 className="font-semibold mb-4">Schedule OS — Income from Other Sources</h2>
+          <ScheduleOS fy={selectedFY} />
+        </div>
+      )}
+
+      {/* House Property Tab */}
+      {activeTab === 'hp' && (
+        <div className="rounded-lg border bg-card p-6">
+          <h2 className="font-semibold mb-4">Schedule HP — House Property</h2>
+          <ScheduleHP fy={selectedFY} />
+        </div>
+      )}
+
+      {/* ITR-2 Overview Tab */}
+      {activeTab === 'itr2' && (
+        <div className="rounded-lg border bg-card p-6">
+          <h2 className="font-semibold mb-4">ITR-2 Schedule Overview</h2>
+          <ITR2Summary fy={selectedFY} />
         </div>
       )}
     </div>

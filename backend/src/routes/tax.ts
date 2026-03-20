@@ -5,6 +5,9 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess } from '../utils/response';
 import { getCurrentFY } from '../utils/financialYear';
 import * as svc from '../services/taxService';
+import * as cgSvc from '../services/capitalGainsService';
+import * as osSvc from '../services/otherIncomeService';
+import * as hpSvc from '../services/housePropertyService';
 
 /** Validate and return a safe FY string; falls back to current FY on bad input */
 function parseFY(raw: unknown): string {
@@ -72,6 +75,154 @@ router.get('/hra-calculator', asyncHandler(async (req, res) => {
 
   const exempt = svc.calcHRAExemption(basicSalary, hraReceived, rentPaid * 12, city === 'METRO');
   sendSuccess(res, { exempt, taxable: hraReceived - exempt });
+}));
+
+// ─── Schedule CG: Capital Gains ───────────────────────────────────────────────
+
+const cgEntrySchema = z.object({
+  fyYear: z.string().regex(/^\d{4}-\d{2}$/),
+  assetName: z.string().min(1),
+  assetType: z.enum(['EQUITY_LISTED', 'EQUITY_MUTUAL_FUND', 'DEBT_MUTUAL_FUND', 'PROPERTY', 'BONDS', 'GOLD', 'OTHER']),
+  purchaseDate: z.string().datetime(),
+  saleDate: z.string().datetime(),
+  purchasePrice: z.number().positive(),
+  salePrice: z.number().positive(),
+  indexedCost: z.number().positive().optional(),
+  isListed: z.boolean().optional(),
+  isSection112AEligible: z.boolean().optional(),
+  isPreApril2023Purchase: z.boolean().optional(),
+  investmentId: z.string().optional(),
+  notes: z.string().optional(),
+});
+
+router.get('/capital-gains', asyncHandler(async (req, res) => {
+  const fy = parseFY(req.query.fy);
+  const entries = await cgSvc.listCapitalGains(req.user!.userId, fy);
+  sendSuccess(res, entries);
+}));
+
+router.get('/capital-gains/summary', asyncHandler(async (req, res) => {
+  const fy = parseFY(req.query.fy);
+  const summary = await cgSvc.calcCapitalGainsSummary(req.user!.userId, fy);
+  sendSuccess(res, summary);
+}));
+
+router.post('/capital-gains', asyncHandler(async (req, res) => {
+  const data = cgEntrySchema.parse(req.body);
+  const entry = await cgSvc.createCapitalGain(req.user!.userId, data as any);
+  sendSuccess(res, entry, 201);
+}));
+
+router.put('/capital-gains/:id', asyncHandler(async (req, res) => {
+  const data = cgEntrySchema.partial().parse(req.body);
+  const entry = await cgSvc.updateCapitalGain(req.user!.userId, req.params.id, data as any);
+  if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  sendSuccess(res, entry);
+}));
+
+router.delete('/capital-gains/:id', asyncHandler(async (req, res) => {
+  const entry = await cgSvc.deleteCapitalGain(req.user!.userId, req.params.id);
+  if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  sendSuccess(res, { deleted: true });
+}));
+
+// ─── Schedule OS: Other Sources ───────────────────────────────────────────────
+
+const osEntrySchema = z.object({
+  fyYear: z.string().regex(/^\d{4}-\d{2}$/),
+  sourceType: z.enum(['FD_INTEREST', 'RD_INTEREST', 'SAVINGS_INTEREST', 'DIVIDEND', 'GIFT', 'OTHER']),
+  description: z.string().min(1),
+  amount: z.number().positive(),
+  tdsDeducted: z.number().min(0).optional(),
+  notes: z.string().optional(),
+});
+
+router.get('/other-income', asyncHandler(async (req, res) => {
+  const fy = parseFY(req.query.fy);
+  const entries = await osSvc.listOtherIncome(req.user!.userId, fy);
+  sendSuccess(res, entries);
+}));
+
+router.get('/other-income/summary', asyncHandler(async (req, res) => {
+  const fy = parseFY(req.query.fy);
+  const profile = await svc.getTaxProfile(req.user!.userId, fy);
+  const regime = (profile?.regime ?? 'OLD') as 'OLD' | 'NEW';
+  const summary = await osSvc.calcOtherIncomeSummary(req.user!.userId, fy, regime);
+  sendSuccess(res, summary);
+}));
+
+router.post('/other-income', asyncHandler(async (req, res) => {
+  const data = osEntrySchema.parse(req.body);
+  const entry = await osSvc.createOtherIncome(req.user!.userId, data as any);
+  sendSuccess(res, entry, 201);
+}));
+
+router.put('/other-income/:id', asyncHandler(async (req, res) => {
+  const data = osEntrySchema.partial().parse(req.body);
+  const entry = await osSvc.updateOtherIncome(req.user!.userId, req.params.id, data as any);
+  if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  sendSuccess(res, entry);
+}));
+
+router.delete('/other-income/:id', asyncHandler(async (req, res) => {
+  const entry = await osSvc.deleteOtherIncome(req.user!.userId, req.params.id);
+  if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  sendSuccess(res, { deleted: true });
+}));
+
+// ─── Schedule HP: House Property ──────────────────────────────────────────────
+
+const hpEntrySchema = z.object({
+  fyYear: z.string().regex(/^\d{4}-\d{2}$/),
+  propertyName: z.string().min(1),
+  usage: z.enum(['SELF_OCCUPIED', 'LET_OUT', 'DEEMED_LET_OUT']),
+  grossAnnualRent: z.number().min(0).optional(),
+  municipalTaxesPaid: z.number().min(0).optional(),
+  homeLoanInterest: z.number().min(0).optional(),
+  isPreConstruction: z.boolean().optional(),
+  realEstateId: z.string().optional(),
+  notes: z.string().optional(),
+});
+
+router.get('/house-property', asyncHandler(async (req, res) => {
+  const fy = parseFY(req.query.fy);
+  const entries = await hpSvc.listHouseProperties(req.user!.userId, fy);
+  sendSuccess(res, entries);
+}));
+
+router.get('/house-property/summary', asyncHandler(async (req, res) => {
+  const fy = parseFY(req.query.fy);
+  const profile = await svc.getTaxProfile(req.user!.userId, fy);
+  const regime = (profile?.regime ?? 'OLD') as 'OLD' | 'NEW';
+  const summary = await hpSvc.calcHousePropertyIncome(req.user!.userId, fy, regime);
+  sendSuccess(res, summary);
+}));
+
+router.post('/house-property', asyncHandler(async (req, res) => {
+  const data = hpEntrySchema.parse(req.body);
+  const entry = await hpSvc.createHouseProperty(req.user!.userId, data as any);
+  sendSuccess(res, entry, 201);
+}));
+
+router.put('/house-property/:id', asyncHandler(async (req, res) => {
+  const data = hpEntrySchema.partial().parse(req.body);
+  const entry = await hpSvc.updateHouseProperty(req.user!.userId, req.params.id, data as any);
+  if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  sendSuccess(res, entry);
+}));
+
+router.delete('/house-property/:id', asyncHandler(async (req, res) => {
+  const entry = await hpSvc.deleteHouseProperty(req.user!.userId, req.params.id);
+  if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  sendSuccess(res, { deleted: true });
+}));
+
+// ─── ITR-2 Summary ────────────────────────────────────────────────────────────
+
+router.get('/itr2-summary', asyncHandler(async (req, res) => {
+  const fy = parseFY(req.query.fy);
+  const summary = await svc.getITR2Summary(req.user!.userId, fy);
+  sendSuccess(res, summary);
 }));
 
 export default router;

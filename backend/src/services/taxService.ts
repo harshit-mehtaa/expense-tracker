@@ -2,6 +2,9 @@ import { prisma } from '../config/prisma';
 import { getFYRange, getCurrentFY } from '../utils/financialYear';
 import { buildAmortizationSchedule } from './loanService';
 import type { Prisma } from '@prisma/client';
+import { calcCapitalGainsSummary } from './capitalGainsService';
+import { calcOtherIncomeSummary } from './otherIncomeService';
+import { calcHousePropertyIncome } from './housePropertyService';
 
 // ─── Indian Tax Slabs (FY 2024-25) ───────────────────────────────────────────
 // TODO: Make FY-parameterised when multi-FY support is needed.
@@ -176,6 +179,43 @@ export async function getTaxSummary(userId: string, fy: string) {
     electedRegime: (profile?.regime ?? 'OLD') as 'OLD' | 'NEW',
     recommendedRegime: oldTax <= newTax ? 'OLD' : 'NEW',
     savings: Math.abs(oldTax - newTax),
+  };
+}
+
+// ─── ITR-2 Summary ────────────────────────────────────────────────────────────
+
+export async function getITR2Summary(userId: string, fy: string) {
+  const profile = await prisma.taxProfile.findUnique({ where: { userId_fyYear: { userId, fyYear: fy } } });
+  const regime = (profile?.regime ?? 'OLD') as 'OLD' | 'NEW';
+
+  const [cg, os, hp] = await Promise.all([
+    calcCapitalGainsSummary(userId, fy),
+    calcOtherIncomeSummary(userId, fy, regime),
+    calcHousePropertyIncome(userId, fy, regime),
+  ]);
+
+  return {
+    fy,
+    regime,
+    scheduleCG: {
+      stcg: cg.stcg,
+      ltcg: cg.ltcg,
+      totalTaxableGain: cg.totalTaxableGain,
+      entryCount: cg.entries.length,
+    },
+    scheduleOS: {
+      breakdown: os.breakdown,
+      grossTotal: os.grossTotal,
+      deduction80TTA: os.deduction80TTA,
+      taxableTotal: os.taxableTotal,
+      totalTdsDeducted: os.totalTdsDeducted,
+    },
+    scheduleHP: {
+      properties: hp.properties,
+      totalHPIncome: hp.totalHPIncome,
+      hpLossSetOff: hp.hpLossSetOff,
+      taxableHPIncome: hp.taxableHPIncome,
+    },
   };
 }
 

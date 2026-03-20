@@ -4,7 +4,8 @@
 // Soft deletes via deletedAt on mutable financial entities
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
@@ -188,6 +189,31 @@ enum CategoryType {
   EXPENSE
 }
 
+enum CapitalGainAssetType {
+  EQUITY_LISTED
+  EQUITY_MUTUAL_FUND
+  DEBT_MUTUAL_FUND
+  PROPERTY
+  BONDS
+  GOLD
+  OTHER
+}
+
+enum OtherSourceType {
+  FD_INTEREST
+  RD_INTEREST
+  SAVINGS_INTEREST
+  DIVIDEND
+  GIFT
+  OTHER
+}
+
+enum HousePropertyUsage {
+  SELF_OCCUPIED
+  LET_OUT
+  DEEMED_LET_OUT
+}
+
 // ─── Core Models ──────────────────────────────────────────────────────────────
 
 model User {
@@ -225,6 +251,9 @@ model User {
   documents        Document[]
   bankImports      BankStatementImport[]
   categories       Category[]
+  capitalGains     CapitalGainEntry[]
+  otherIncomes     OtherSourceIncome[]
+  houseProperties  HousePropertyDetail[]
 
   @@index([email])
   @@index([deletedAt])
@@ -375,6 +404,7 @@ model Investment {
   user            User             @relation(fields: [userId], references: [id])
   sipTransactions SIPTransaction[]
   sip             SIP?
+  capitalGains    CapitalGainEntry[]
 
   @@index([userId])
   @@index([type])
@@ -475,9 +505,10 @@ model RealEstate {
   createdAt            DateTime     @default(now())
   updatedAt            DateTime     @updatedAt
 
-  user      User       @relation(fields: [userId], references: [id])
-  loan      Loan?      @relation(fields: [loanId], references: [id])
-  documents Document[]
+  user             User                  @relation(fields: [userId], references: [id])
+  loan             Loan?                 @relation(fields: [loanId], references: [id])
+  documents        Document[]
+  houseProperties  HousePropertyDetail[]
 
   @@index([userId])
 }
@@ -794,4 +825,77 @@ model AuditLog {
   @@index([performedByUserId])
   @@index([entityType, entityId])
   @@index([createdAt])
+}
+
+// ─── ITR-2 Schedules ──────────────────────────────────────────────────────────
+
+model CapitalGainEntry {
+  id                    String               @id @default(cuid())
+  userId                String
+  fyYear                String
+  investmentId          String?
+  assetName             String
+  assetType             CapitalGainAssetType
+  purchaseDate          DateTime
+  saleDate              DateTime
+  purchasePrice         Decimal              @db.Decimal(15, 2)
+  salePrice             Decimal              @db.Decimal(15, 2)
+  indexedCost           Decimal?             @db.Decimal(15, 2)
+  isListed              Boolean              @default(true)
+  isSection112AEligible Boolean              @default(false) // LTCG on listed equity/equity MF (10% tax, ₹1L aggregate exemption)
+  isPreApril2023Purchase Boolean             @default(false) // DEBT_MF purchased before Apr 2023 → old LTCG rules
+  notes                 String?
+  deletedAt             DateTime?
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id])
+  investment Investment? @relation(fields: [investmentId], references: [id])
+
+  @@index([userId, fyYear])
+  @@index([assetType])
+  @@index([deletedAt])
+}
+
+model OtherSourceIncome {
+  id          String          @id @default(cuid())
+  userId      String
+  fyYear      String
+  sourceType  OtherSourceType
+  description String
+  amount      Decimal         @db.Decimal(15, 2)
+  tdsDeducted Decimal?        @db.Decimal(15, 2)
+  notes       String?
+  deletedAt   DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, fyYear])
+  @@index([sourceType])
+  @@index([deletedAt])
+}
+
+model HousePropertyDetail {
+  id                 String             @id @default(cuid())
+  userId             String
+  fyYear             String
+  realEstateId       String?
+  propertyName       String
+  usage              HousePropertyUsage
+  grossAnnualRent    Decimal?           @db.Decimal(15, 2) // null for self-occupied
+  municipalTaxesPaid Decimal?           @db.Decimal(15, 2)
+  homeLoanInterest   Decimal?           @db.Decimal(15, 2) // Sec 24(b) interest
+  isPreConstruction  Boolean            @default(false)    // Pre-construction interest: 1/5th of total over 5 years
+  notes              String?
+  deletedAt          DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id])
+  realEstate RealEstate? @relation(fields: [realEstateId], references: [id])
+
+  @@index([userId, fyYear])
+  @@index([deletedAt])
 }
