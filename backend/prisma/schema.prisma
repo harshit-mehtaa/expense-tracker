@@ -1,0 +1,797 @@
+// Family Finance Tracker — Prisma Schema
+// Indian FY (Apr 1 – Mar 31), INR, IST timezone
+// All monetary amounts: Decimal(15,2) for INR, Decimal(15,4) for rates/NAV/unit prices
+// Soft deletes via deletedAt on mutable financial entities
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+enum AccountType {
+  SAVINGS
+  CURRENT
+  SALARY
+  NRE
+  NRO
+  PPF
+  EPF
+  DEMAT
+}
+
+enum InvestmentType {
+  STOCKS_INDIA
+  STOCKS_FOREIGN
+  MUTUAL_FUND
+  ELSS
+  PPF
+  NPS
+  EPF
+  SGB
+  GOLD_ETF
+  BONDS
+  CRYPTO
+  OTHER
+}
+
+enum Exchange {
+  NSE
+  BSE
+  NYSE
+  NASDAQ
+  LSE
+  SGX
+  OTHER
+}
+
+enum SIPTransactionType {
+  BUY
+  SELL
+  DIVIDEND
+}
+
+enum InsurancePolicyType {
+  TERM_LIFE
+  ENDOWMENT
+  ULIP
+  WHOLE_LIFE
+  HEALTH
+  SUPER_TOP_UP
+  CRITICAL_ILLNESS
+  PERSONAL_ACCIDENT
+  VEHICLE
+  HOME
+  TRAVEL
+}
+
+enum PremiumFrequency {
+  MONTHLY
+  QUARTERLY
+  HALF_YEARLY
+  ANNUALLY
+  SINGLE
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  TRANSFER
+}
+
+enum PaymentMode {
+  UPI
+  NEFT
+  RTGS
+  IMPS
+  CASH
+  CHEQUE
+  CARD
+  EMI
+  AUTO_DEBIT
+}
+
+enum RecurringFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum BudgetPeriod {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+  FY
+}
+
+enum LoanType {
+  HOME
+  AUTO
+  PERSONAL
+  EDUCATION
+  GOLD
+  LAP
+  BUSINESS
+  OTHER
+}
+
+enum FDInterestPayoutType {
+  CUMULATIVE
+  MONTHLY
+  QUARTERLY
+}
+
+enum FDStatus {
+  ACTIVE
+  MATURED
+  BROKEN
+}
+
+enum RDStatus {
+  ACTIVE
+  MATURED
+  CLOSED
+}
+
+enum SIPStatus {
+  ACTIVE
+  PAUSED
+  STOPPED
+}
+
+enum GoldType {
+  PHYSICAL
+  SGB
+  GOLD_ETF
+  DIGITAL
+}
+
+enum PropertyType {
+  RESIDENTIAL
+  COMMERCIAL
+  LAND
+  PLOT
+}
+
+enum TaxSection {
+  S80C
+  S80D
+  S80E
+  S80G
+  S80CCD1B
+  SECTION_24B
+  HRA
+  STANDARD_DEDUCTION
+  ADVANCE_TAX
+  OTHER
+}
+
+enum TaxRegime {
+  OLD
+  NEW
+}
+
+enum CategoryType {
+  INCOME
+  EXPENSE
+}
+
+// ─── Core Models ──────────────────────────────────────────────────────────────
+
+model User {
+  id              String    @id @default(cuid())
+  name            String
+  email           String    @unique
+  passwordHash    String
+  role            Role      @default(MEMBER)
+  avatarUrl       String?
+  colorTag        String?   // Hex color for UI color-coding
+  panNumberMasked String?   // Stored as "ABCDE****F" — never full PAN
+  isActive        Boolean   @default(true)
+  mustChangePassword Boolean @default(false)
+  lastLoginAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  // Relations
+  accounts         BankAccount[]
+  transactions     Transaction[]
+  investments      Investment[]
+  sips             SIP[]
+  insurancePolicies InsurancePolicy[]
+  loans            Loan[]
+  goldHoldings     GoldHolding[]
+  realEstate       RealEstate[]
+  budgets          Budget[]
+  taxEntries       TaxEntry[]
+  taxProfiles      TaxProfile[]
+  fixedDeposits    FixedDeposit[]
+  recurringDeposits RecurringDeposit[]
+  refreshTokens    RefreshToken[]
+  auditLogs        AuditLog[]
+  documents        Document[]
+  bankImports      BankStatementImport[]
+  categories       Category[]
+
+  @@index([email])
+  @@index([deletedAt])
+}
+
+model Family {
+  id            String   @id @default(cuid())
+  name          String
+  currency      String   @default("INR")
+  locale        String   @default("en-IN")
+  timezone      String   @default("Asia/Kolkata")
+  fyStartMonth  Int      @default(4) // April = 4
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+// ─── Bank Accounts ────────────────────────────────────────────────────────────
+
+model BankAccount {
+  id                 String      @id @default(cuid())
+  userId             String
+  bankName           String
+  ifscPrefix         String?     // First 4 chars of IFSC (bank identifier)
+  accountNumberLast4 String?     // Only last 4 digits stored
+  accountType        AccountType
+  currentBalance     Decimal     @default(0) @db.Decimal(15, 2)
+  currency           String      @default("INR")
+  interestRate       Decimal?    @db.Decimal(5, 2)
+  maturityDate       DateTime?   // For FD/RD type accounts
+  upiId              String?
+  isActive           Boolean     @default(true)
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  user              User          @relation(fields: [userId], references: [id])
+  transactions      Transaction[]
+  fixedDeposits     FixedDeposit[]
+  recurringDeposits RecurringDeposit[]
+  sips              SIP[]
+  loans             Loan[]
+
+  @@index([userId])
+}
+
+// ─── Fixed Deposits ───────────────────────────────────────────────────────────
+
+model FixedDeposit {
+  id                  String               @id @default(cuid())
+  userId              String
+  bankAccountId       String?
+  bankName            String
+  principalAmount     Decimal              @db.Decimal(15, 2)
+  interestRate        Decimal              @db.Decimal(5, 2)
+  tenureMonths        Int
+  startDate           DateTime
+  maturityDate        DateTime
+  maturityAmount      Decimal              @db.Decimal(15, 2)
+  interestPayoutType  FDInterestPayoutType @default(CUMULATIVE)
+  isTaxSaver          Boolean              @default(false)   // 80C eligible
+  tdsApplicable       Boolean              @default(true)
+  status              FDStatus             @default(ACTIVE)
+  notes               String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id])
+  bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
+  documents   Document[]
+
+  @@index([userId])
+  @@index([maturityDate])
+  @@index([status])
+}
+
+// ─── Recurring Deposits ───────────────────────────────────────────────────────
+
+model RecurringDeposit {
+  id                  String   @id @default(cuid())
+  userId              String
+  bankAccountId       String?
+  bankName            String
+  monthlyInstallment  Decimal  @db.Decimal(15, 2)
+  interestRate        Decimal  @db.Decimal(5, 2)
+  tenureMonths        Int
+  startDate           DateTime
+  maturityDate        DateTime
+  maturityAmount      Decimal  @db.Decimal(15, 2)
+  totalDeposited      Decimal  @default(0) @db.Decimal(15, 2)
+  installmentsPaid    Int      @default(0)
+  status              RDStatus @default(ACTIVE)
+  notes               String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id])
+  bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
+
+  @@index([userId])
+  @@index([maturityDate])
+}
+
+// ─── Investments ──────────────────────────────────────────────────────────────
+
+model Investment {
+  id                   String         @id @default(cuid())
+  userId               String
+  type                 InvestmentType
+  name                 String
+  folioNumber          String?
+  isin                 String?
+  tickerSymbolNSE      String?
+  tickerSymbolBSE      String?
+  tickerSymbolForeign  String?        // For foreign stocks (e.g., AAPL, TSLA)
+  exchange             Exchange?      // NSE/BSE for Indian; NYSE/NASDAQ/LSE for foreign
+  currency             String         @default("INR")  // INR for domestic; USD/GBP/EUR for foreign
+  // Purchase details
+  unitsOrQuantity      Decimal        @db.Decimal(15, 4)
+  purchasePricePerUnit Decimal        @db.Decimal(15, 4)  // In investment's own currency
+  purchaseDate         DateTime
+  purchaseNav          Decimal?       @db.Decimal(15, 4)
+  purchaseExchangeRate Decimal?       @db.Decimal(15, 4)  // INR per 1 unit of foreign currency at purchase
+  // Current values (user-updated)
+  currentPricePerUnit  Decimal        @db.Decimal(15, 4)  // In investment's own currency
+  currentNav           Decimal?       @db.Decimal(15, 4)
+  // Tax
+  isTaxSaving          Boolean        @default(false)    // 80C eligible (ELSS, PPF, NPS, etc.)
+  lockInEndDate        DateTime?
+  // Computed fields (stored for performance, recalculated on update)
+  xirr                 Decimal?       @db.Decimal(8, 4)
+  absoluteReturnPct    Decimal?       @db.Decimal(8, 4)
+  notes                String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  user            User             @relation(fields: [userId], references: [id])
+  sipTransactions SIPTransaction[]
+  sip             SIP?
+
+  @@index([userId])
+  @@index([type])
+  @@index([isin])
+}
+
+// SIP details (linked to a mutual fund Investment record)
+model SIP {
+  id              String    @id @default(cuid())
+  userId          String
+  investmentId    String    @unique  // Each SIP links to one fund (Investment)
+  fundName        String
+  folioNumber     String?
+  monthlyAmount   Decimal   @db.Decimal(15, 2)
+  sipDate         Int       // Day of month: 1-28
+  startDate       DateTime
+  endDate         DateTime?
+  status          SIPStatus @default(ACTIVE)
+  bankAccountId   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user        User        @relation(fields: [userId], references: [id])
+  investment  Investment  @relation(fields: [investmentId], references: [id])
+  bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([sipDate])
+}
+
+// Individual SIP transaction (unit allocation per installment)
+// Required for XIRR cash flow series
+model SIPTransaction {
+  id           String             @id @default(cuid())
+  investmentId String
+  date         DateTime
+  units        Decimal            @db.Decimal(15, 4)
+  nav          Decimal            @db.Decimal(15, 4)
+  amount       Decimal            @db.Decimal(15, 2)
+  type         SIPTransactionType @default(BUY)
+  createdAt    DateTime           @default(now())
+
+  investment Investment @relation(fields: [investmentId], references: [id])
+
+  @@index([investmentId])
+  @@index([date])
+}
+
+// Exchange rates (user-managed; used for foreign equity valuation)
+model ExchangeRate {
+  id           String   @id @default(cuid())
+  fromCurrency String   // e.g., "USD", "GBP", "EUR"
+  toCurrency   String   @default("INR")
+  rate         Decimal  @db.Decimal(15, 4)  // How many INR per 1 unit of fromCurrency
+  updatedAt    DateTime @updatedAt
+  updatedBy    String?  // userId of who last updated
+
+  @@unique([fromCurrency, toCurrency])
+  @@index([fromCurrency])
+}
+
+// ─── Gold Holdings ────────────────────────────────────────────────────────────
+
+model GoldHolding {
+  id                  String   @id @default(cuid())
+  userId              String
+  type                GoldType
+  description         String?
+  quantityGrams       Decimal  @db.Decimal(10, 3)
+  purchasePricePerGram Decimal @db.Decimal(15, 2)
+  currentPricePerGram Decimal  @db.Decimal(15, 2)  // User-updated in Settings
+  purchaseDate        DateTime
+  notes               String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user      User       @relation(fields: [userId], references: [id])
+  documents Document[]
+
+  @@index([userId])
+}
+
+// ─── Real Estate ──────────────────────────────────────────────────────────────
+
+model RealEstate {
+  id                   String       @id @default(cuid())
+  userId               String
+  propertyType         PropertyType
+  propertyName         String
+  location             String
+  purchasePrice        Decimal      @db.Decimal(15, 2)
+  currentValue         Decimal      @db.Decimal(15, 2)
+  purchaseDate         DateTime
+  loanId               String?      // Linked home loan
+  rentalIncomeMonthly  Decimal?     @db.Decimal(15, 2)
+  notes                String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  user      User       @relation(fields: [userId], references: [id])
+  loan      Loan?      @relation(fields: [loanId], references: [id])
+  documents Document[]
+
+  @@index([userId])
+}
+
+// ─── Insurance ────────────────────────────────────────────────────────────────
+
+model InsurancePolicy {
+  id               String              @id @default(cuid())
+  userId           String
+  policyType       InsurancePolicyType
+  providerName     String
+  policyNumber     String
+  policyName       String
+  sumAssured       Decimal             @db.Decimal(15, 2)
+  premiumAmount    Decimal             @db.Decimal(15, 2)
+  premiumFrequency PremiumFrequency
+  premiumDueDate   Int?                // Day of month
+  startDate        DateTime
+  endDate          DateTime?
+  maturityDate     DateTime?
+  nomineeName      String?
+  agentName        String?
+  agentContact     String?
+  is80cEligible    Boolean             @default(false)
+  is80dEligible    Boolean             @default(false)
+  isForParents     Boolean             @default(false) // 80D: true = parents sub-limit (₹25K), false = self+family
+  notes            String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  user      User       @relation(fields: [userId], references: [id])
+  documents Document[]
+
+  @@index([userId])
+  @@index([endDate])
+  @@index([policyType])
+}
+
+// ─── Categories ───────────────────────────────────────────────────────────────
+
+model Category {
+  id        String       @id @default(cuid())
+  userId    String?      // null = system default; set = user custom
+  name      String
+  type      CategoryType
+  icon      String?      // Emoji or icon name
+  color     String?      // Hex color
+  isDefault Boolean      @default(false)
+  createdAt DateTime     @default(now())
+
+  user         User?         @relation(fields: [userId], references: [id])
+  transactions Transaction[]
+  budgets      Budget[]
+
+  @@unique([userId, name, type])
+  @@index([type])
+  @@index([isDefault])
+}
+
+// ─── Transactions ─────────────────────────────────────────────────────────────
+
+model Transaction {
+  id            String          @id @default(cuid())
+  userId        String
+  bankAccountId String?
+  categoryId    String?
+  amount        Decimal         @db.Decimal(15, 2)
+  type          TransactionType
+  paymentMode   PaymentMode?
+  upiIdUsed     String?
+  description   String
+  date          DateTime
+  tags          String[]        @default([])
+  receiptUrl    String?
+  isRecurring   Boolean         @default(false)
+  gstAmount     Decimal?        @db.Decimal(15, 2)
+  importHash    String?         // SHA-256(date+amount+description+accountId) — null for manual
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  deletedAt     DateTime?       // Soft delete
+
+  user         User            @relation(fields: [userId], references: [id])
+  bankAccount  BankAccount?    @relation(fields: [bankAccountId], references: [id])
+  category     Category?       @relation(fields: [categoryId], references: [id])
+  recurringRule RecurringRule?
+  documents    Document[]
+
+  @@unique([importHash])  // Prisma enforces unique only when non-null; null values don't conflict
+  @@index([userId])
+  @@index([date])
+  @@index([type])
+  @@index([bankAccountId])
+  @@index([categoryId])
+  @@index([deletedAt])
+  @@index([importHash])
+}
+
+model RecurringRule {
+  id                  String             @id @default(cuid())
+  userId              String
+  templateTransactionId String           @unique
+  frequency           RecurringFrequency
+  nextRunDate         DateTime
+  isActive            Boolean            @default(true)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  templateTransaction Transaction @relation(fields: [templateTransactionId], references: [id])
+
+  @@index([userId])
+  @@index([nextRunDate])
+  @@index([isActive])
+}
+
+// ─── Budgets ──────────────────────────────────────────────────────────────────
+
+model Budget {
+  id         String       @id @default(cuid())
+  userId     String
+  categoryId String
+  amount     Decimal      @db.Decimal(15, 2)
+  period     BudgetPeriod
+  fyYear     String?      // e.g., "2024-25" — for FY-scoped budgets
+  startDate  DateTime?
+  endDate    DateTime?
+  createdAt  DateTime     @default(now())
+
+  user     User     @relation(fields: [userId], references: [id])
+  category Category @relation(fields: [categoryId], references: [id])
+
+  @@index([userId])
+  @@index([fyYear])
+  @@index([categoryId])
+}
+
+// ─── Loans ────────────────────────────────────────────────────────────────────
+
+model Loan {
+  id                    String   @id @default(cuid())
+  userId                String
+  bankAccountId         String?
+  lenderName            String
+  loanAccountNumber     String?
+  loanType              LoanType
+  principalAmount       Decimal  @db.Decimal(15, 2)
+  outstandingBalance    Decimal  @db.Decimal(15, 2)
+  interestRate          Decimal  @db.Decimal(5, 2)  // Annual % rate
+  emiAmount             Decimal  @db.Decimal(15, 2)
+  emiDate               Int      // Day of month: 1-28
+  tenureMonths          Int
+  disbursementDate      DateTime
+  endDate               DateTime
+  isTaxDeductible       Boolean  @default(false)
+  section24bEligible    Boolean  @default(false)  // Home loan interest up to ₹2L
+  prepaymentChargesPct  Decimal  @default(0) @db.Decimal(5, 2)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id])
+  bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
+  realEstate  RealEstate[]
+  prepayments LoanPrepayment[]
+
+  @@index([userId])
+  @@index([loanType])
+  @@index([emiDate])
+}
+
+model LoanPrepayment {
+  id             String   @id @default(cuid())
+  loanId         String
+  amount         Decimal  @db.Decimal(15, 2)
+  date           DateTime
+  notes          String?
+  reducedEmi     Decimal? @db.Decimal(15, 2)   // New EMI after prepayment (if reduce-EMI strategy)
+  tenureReduced  Int?     // Months saved (if reduce-tenure strategy)
+  createdAt      DateTime @default(now())
+
+  loan Loan @relation(fields: [loanId], references: [id])
+
+  @@index([loanId])
+}
+
+// ─── Tax ──────────────────────────────────────────────────────────────────────
+
+model TaxProfile {
+  id                       String    @id @default(cuid())
+  userId                   String
+  fyYear                   String    // e.g., "2024-25"
+  regime                   TaxRegime @default(OLD)
+  // Income
+  grossSalary              Decimal?  @db.Decimal(15, 2)
+  hraReceived              Decimal?  @db.Decimal(15, 2)
+  hraExempt                Decimal?  @db.Decimal(15, 2)  // Computed
+  rentPaidMonthly          Decimal?  @db.Decimal(15, 2)
+  cityType                 String?   // "METRO" or "NON_METRO" for HRA
+  standardDeduction        Decimal?  @db.Decimal(15, 2)
+  // Old regime deductions
+  deduction80C             Decimal?  @db.Decimal(15, 2)
+  deduction80D             Decimal?  @db.Decimal(15, 2)
+  deduction80E             Decimal?  @db.Decimal(15, 2)
+  deduction80G             Decimal?  @db.Decimal(15, 2)
+  deduction24B             Decimal?  @db.Decimal(15, 2)
+  nps80Ccd1B               Decimal?  @db.Decimal(15, 2)
+  otherDeductions          Decimal?  @db.Decimal(15, 2)
+  // Tax paid
+  taxPaidAdvance           Decimal?  @db.Decimal(15, 2)
+  taxPaidTds               Decimal?  @db.Decimal(15, 2)
+  taxPaidSelfAssessment    Decimal?  @db.Decimal(15, 2)
+  estimatedTaxLiability    Decimal?  @db.Decimal(15, 2)
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, fyYear])
+  @@index([userId])
+  @@index([fyYear])
+}
+
+// Individual tax deduction/payment entries (manual entries + auto-aggregated)
+model TaxEntry {
+  id            String     @id @default(cuid())
+  userId        String
+  fyYear        String     // e.g., "2024-25"
+  regime        TaxRegime  @default(OLD)
+  section       TaxSection
+  amount        Decimal    @db.Decimal(15, 2)
+  description   String?
+  proofUploaded Boolean    @default(false)
+  entityType    String?    // "InsurancePolicy", "Investment", etc. — auto-linked entries
+  entityId      String?    // ID of the linked entity
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([fyYear])
+  @@index([section])
+}
+
+// Advance Tax Calendar (seeded for current + next FY)
+model AdvanceTaxEvent {
+  id                String   @id @default(cuid())
+  fyYear            String
+  dueDate           DateTime
+  percentageDue     Int      // Cumulative % due by this date (15, 45, 75, 100)
+  description       String
+  isSystemGenerated Boolean  @default(true)
+
+  @@index([fyYear])
+  @@index([dueDate])
+}
+
+// ─── Documents ────────────────────────────────────────────────────────────────
+
+model Document {
+  id                String   @id @default(cuid())
+  userId            String
+  relatedEntityType String   // "Transaction", "Insurance", "FixedDeposit", etc.
+  relatedEntityId   String
+  fileName          String
+  filePath          String   // Path relative to /app/uploads/
+  fileSize          Int      // Bytes
+  mimeType          String
+  createdAt         DateTime @default(now())
+
+  user              User              @relation(fields: [userId], references: [id])
+  transaction       Transaction?      @relation(fields: [relatedEntityId], references: [id], map: "doc_transaction")
+  insurancePolicy   InsurancePolicy?  @relation(fields: [relatedEntityId], references: [id], map: "doc_insurance")
+  fixedDeposit      FixedDeposit?     @relation(fields: [relatedEntityId], references: [id], map: "doc_fd")
+  goldHolding       GoldHolding?      @relation(fields: [relatedEntityId], references: [id], map: "doc_gold")
+  realEstate        RealEstate?       @relation(fields: [relatedEntityId], references: [id], map: "doc_realestate")
+
+  @@index([userId])
+  @@index([relatedEntityType, relatedEntityId])
+}
+
+// ─── Bank Statement Import ────────────────────────────────────────────────────
+
+model BankStatementImport {
+  id               String   @id @default(cuid())
+  userId           String
+  bankAccountId    String?
+  bankName         String
+  importedAt       DateTime @default(now())
+  rowCount         Int
+  importedCount    Int
+  duplicatesSkipped Int
+  errorsCount      Int      @default(0)
+  filename         String
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([importedAt])
+}
+
+// ─── Audit Log ────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id                  String   @id @default(cuid())
+  performedByUserId   String
+  action              String   // "CREATE", "UPDATE", "DELETE"
+  entityType          String   // "User", "Transaction", "BankAccount", etc.
+  entityId            String
+  oldValueJson        Json?
+  newValueJson        Json?
+  createdAt           DateTime @default(now())
+
+  performedBy User @relation(fields: [performedByUserId], references: [id])
+
+  @@index([performedByUserId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
