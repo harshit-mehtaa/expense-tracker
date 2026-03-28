@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../config/prisma';
-import { getFYRange, getCurrentFY, getPreviousFY } from '../utils/financialYear';
+import { getFYRange, getCurrentFY, getPreviousFY, getMonthStart } from '../utils/financialYear';
 import { generateDueRecurringTransactions } from './recurringService';
 
 export async function getDashboardSummary(userId: string, requesterRole: string, fy?: string) {
@@ -222,6 +222,90 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string) {
     });
   }
 
+  // Budget overspend alerts — always scoped to individual user (budgets are per-user, not family-wide)
+  if (requesterRole !== 'ADMIN') {
+    const budgets = await prisma.budget.findMany({
+      where: { userId },
+      include: { category: { select: { name: true } } },
+    });
+
+    if (budgets.length > 0) {
+      // Compute date ranges per period type and group budgets by range bucket
+      const fyRange = getFYRange(getCurrentFY());
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+      // Current quarter within FY (Apr–Jun, Jul–Sep, Oct–Dec, Jan–Mar)
+      const fyStartYear = parseInt(getCurrentFY().split('-')[0]);
+      const currentMonth0 = now.getMonth(); // 0-indexed
+      let qStart: Date, qEnd: Date;
+      if (currentMonth0 >= 3 && currentMonth0 <= 5) {
+        qStart = new Date(fyStartYear, 3, 1); qEnd = new Date(fyStartYear, 5, 30, 23, 59, 59, 999);
+      } else if (currentMonth0 >= 6 && currentMonth0 <= 8) {
+        qStart = new Date(fyStartYear, 6, 1); qEnd = new Date(fyStartYear, 8, 30, 23, 59, 59, 999);
+      } else if (currentMonth0 >= 9 && currentMonth0 <= 11) {
+        qStart = new Date(fyStartYear, 9, 1); qEnd = new Date(fyStartYear, 11, 31, 23, 59, 59, 999);
+      } else {
+        // Jan–Mar: last quarter of the current FY (fyStartYear+1)
+        qStart = new Date(fyStartYear + 1, 0, 1); qEnd = new Date(fyStartYear + 1, 2, 31, 23, 59, 59, 999);
+      }
+
+      const rangeFor = (period: string): { start: Date; end: Date } => {
+        if (period === 'MONTHLY') return { start: monthStart, end: monthEnd };
+        if (period === 'QUARTERLY') return { start: qStart, end: qEnd };
+        if (period === 'FY' || period === 'YEARLY') return { start: fyRange.start, end: fyRange.end };
+        throw new Error(`Unhandled BudgetPeriod in rangeFor: ${period}`);
+      };
+
+      // Group budget category IDs by period bucket, run one aggregate per bucket
+      const buckets: Record<string, { start: Date; end: Date; categoryIds: string[] }> = {};
+      for (const b of budgets) {
+        if (!b.categoryId) continue;
+        const key = b.period;
+        if (!buckets[key]) buckets[key] = { ...rangeFor(b.period), categoryIds: [] };
+        buckets[key].categoryIds.push(b.categoryId);
+      }
+
+      const actualsMap: Record<string, number> = {};
+      await Promise.all(
+        Object.values(buckets).map(async (bucket) => {
+          const rows = await prisma.transaction.groupBy({
+            by: ['categoryId'],
+            where: {
+              userId,
+              deletedAt: null,
+              type: 'EXPENSE',
+              categoryId: { in: bucket.categoryIds },
+              date: { gte: bucket.start, lte: bucket.end },
+            },
+            _sum: { amount: true },
+          });
+          rows.forEach((r) => {
+            if (r.categoryId) actualsMap[r.categoryId] = (actualsMap[r.categoryId] ?? 0) + Number(r._sum.amount ?? 0);
+          });
+        }),
+      );
+
+      for (const budget of budgets) {
+        if (!budget.categoryId) continue;
+        const actual = actualsMap[budget.categoryId] ?? 0;
+        const limit = Number(budget.amount);
+        if (limit <= 0) continue;
+        const pctUsed = (actual / limit) * 100;
+        if (pctUsed >= 80) {
+          alerts.push({
+            type: 'BUDGET_ALERT' as const,
+            title: `${budget.category?.name ?? 'Budget'} at ${pctUsed.toFixed(0)}% of ${budget.period.toLowerCase()} budget`,
+            amount: limit,
+            dueDate: now.toISOString(),
+            daysUntilDue: 0,
+            entityId: budget.id,
+            utilized: actual,
+          });
+        }
+      }
+    }
+  }
+
   return alerts.sort((a, b) => a.daysUntilDue - b.daysUntilDue);
 }
 
@@ -329,4 +413,59 @@ async function getNetWorth(userId?: string): Promise<number> {
   const assets = await computeNetWorthAssets(userId);
   const liabilities = await computeTotalLiabilities(userId);
   return assets - liabilities;
+}
+
+export async function upsertNetWorthSnapshot(userId: string) {
+  const snapshotDate = getMonthStart(); // First of current month in IST — key for @@unique
+  const statement = await computeNetWorthStatement(userId);
+  return prisma.netWorthSnapshot.upsert({
+    where: { userId_snapshotDate: { userId, snapshotDate } },
+    update: {
+      totalAssets: statement.totalAssets,
+      totalLiabilities: statement.totalLiabilities,
+      netWorth: statement.netWorth,
+      bankBalances: statement.assets.bankBalances,
+      fixedDeposits: statement.assets.fixedDeposits,
+      recurringDeposits: statement.assets.recurringDeposits,
+      investments: statement.assets.investments,
+      gold: statement.assets.gold,
+      realEstate: statement.assets.realEstate,
+      loans: statement.liabilities.loans,
+    },
+    create: {
+      userId,
+      snapshotDate,
+      totalAssets: statement.totalAssets,
+      totalLiabilities: statement.totalLiabilities,
+      netWorth: statement.netWorth,
+      bankBalances: statement.assets.bankBalances,
+      fixedDeposits: statement.assets.fixedDeposits,
+      recurringDeposits: statement.assets.recurringDeposits,
+      investments: statement.assets.investments,
+      gold: statement.assets.gold,
+      realEstate: statement.assets.realEstate,
+      loans: statement.liabilities.loans,
+    },
+  });
+}
+
+export async function getNetWorthHistory(userId: string) {
+  return prisma.netWorthSnapshot.findMany({
+    where: { userId },
+    orderBy: { snapshotDate: 'asc' },
+    take: 24,
+    select: {
+      snapshotDate: true,
+      totalAssets: true,
+      totalLiabilities: true,
+      netWorth: true,
+      bankBalances: true,
+      fixedDeposits: true,
+      recurringDeposits: true,
+      investments: true,
+      gold: true,
+      realEstate: true,
+      loans: true,
+    },
+  });
 }

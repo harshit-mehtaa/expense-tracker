@@ -7,7 +7,7 @@ import { useFY } from '@/contexts/FYContext';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
-import { Receipt, Upload, Plus, X, CheckCircle, AlertCircle } from 'lucide-react';
+import { Receipt, Upload, Plus, X, CheckCircle, AlertCircle, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -294,10 +294,34 @@ function AddTransactionModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+async function downloadTransactionsCsv(fy: string) {
+  const res = await fetch(`/api/transactions/export?fy=${encodeURIComponent(fy)}`, { credentials: 'include' });
+  if (!res.ok) throw new Error('Export failed');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `transactions-${fy}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export default function TransactionsPage() {
   const { selectedFY } = useFY();
   const [showImport, setShowImport] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      await downloadTransactionsCsv(selectedFY);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const { data, isLoading } = useQuery({
     queryKey: ['transactions', selectedFY],
@@ -316,6 +340,9 @@ export default function TransactionsPage() {
           <p className="text-muted-foreground">FY {selectedFY} · {data?.pagination.total ?? 0} transactions</p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" onClick={handleExport} disabled={exporting}>
+            <Download className="h-4 w-4 mr-2" /> {exporting ? 'Exporting…' : 'Export CSV'}
+          </Button>
           <Button variant="outline" onClick={() => setShowImport(true)}>
             <Upload className="h-4 w-4 mr-2" /> Import CSV
           </Button>

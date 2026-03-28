@@ -113,3 +113,21 @@ export function formatFYLabel(fy: string): string {
   const startYear = parseInt(startYearStr, 10);
   return `FY ${fy} (Apr ${startYear} – Mar ${startYear + 1})`;
 }
+
+/**
+ * Validates and normalises a FY string (e.g. "2024-25").
+ * Returns the input if valid, otherwise falls back to the current FY.
+ */
+export function validateFY(fy: unknown): string {
+  const s = typeof fy === 'string' ? fy : getCurrentFY();
+  if (!/^\d{4}-\d{2}$/.test(s)) return getCurrentFY();
+  return s;
+}
+
+/**
+ * Returns the first day of the current month at midnight IST as a UTC Date.
+ * Used for idempotent monthly snapshot upserts.
+ */
+export function getMonthStart(): Date {
+  return dayjs().tz(IST).startOf('month').toDate();
+}

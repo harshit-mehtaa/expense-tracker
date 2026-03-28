@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendNoContent, sendPaginated } from '../utils/response';
 import { requireAuth } from '../middleware/auth';
+import { validateFY, getCurrentFY } from '../utils/financialYear';
 import * as transactionService from '../services/transactionService';
 
 const router = Router();
@@ -50,6 +51,29 @@ router.get(
       },
     );
     sendPaginated(res, items, meta);
+  }),
+);
+
+// GET /export must be declared before GET /:id — "export" is not a valid CUID cursor value
+router.get(
+  '/export',
+  asyncHandler(async (req: Request, res: Response) => {
+    const fy = validateFY(req.query.fy);
+    const rows = await transactionService.getAllTransactionsForExport(
+      req.user!.userId,
+      req.user!.role,
+      {
+        fy: req.query.fy ? fy : undefined,
+        startDate: req.query.startDate as string | undefined,
+        endDate: req.query.endDate as string | undefined,
+        type: req.query.type as string | undefined,
+        categoryId: req.query.categoryId as string | undefined,
+        bankAccountId: req.query.bankAccountId as string | undefined,
+      },
+    );
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="transactions-${fy}.csv"`);
+    res.send(transactionService.buildCsv(rows));
   }),
 );
 

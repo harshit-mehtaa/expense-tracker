@@ -13,14 +13,7 @@ import { requireAuth } from './middleware/auth';
 import { errorHandler } from './middleware/errorHandler';
 import { asyncHandler } from './utils/asyncHandler';
 import { sendCreated, sendSuccess } from './utils/response';
-import { getFYRange, getCurrentFY } from './utils/financialYear';
-
-/** Validate FY string format: "YYYY-YY" e.g. "2024-25" */
-function validateFY(fy: unknown): string {
-  const s = typeof fy === 'string' ? fy : getCurrentFY();
-  if (!/^\d{4}-\d{2}$/.test(s)) return getCurrentFY();
-  return s;
-}
+import { getFYRange, getCurrentFY, validateFY } from './utils/financialYear';
 
 /** Sanitize filename for storage — strip HTML tags and control chars, limit length */
 function sanitizeFilename(name: string): string {
@@ -41,6 +34,7 @@ import adminRouter from './routes/admin';
 import categoriesRouter from './routes/categories';
 import budgetsRouter from './routes/budgets';
 import recurringRouter from './routes/recurring';
+import snapshotsRouter from './routes/snapshots';
 
 // Import service
 import { parseCSV, makeImportHash } from './services/importService';
@@ -109,6 +103,7 @@ app.use('/api/admin', adminRouter);
 app.use('/api/categories', categoriesRouter);
 app.use('/api/budgets', budgetsRouter);
 app.use('/api/recurring', recurringRouter);
+app.use('/api/snapshots/net-worth', snapshotsRouter);
 
 // ── Bank Statement Import ─────────────────────────────────────────────────────
 app.post(

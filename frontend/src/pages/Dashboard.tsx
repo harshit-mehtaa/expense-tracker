@@ -1,7 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart,
   Bar,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -14,7 +17,7 @@ import {
 } from 'recharts';
 import { TrendingUp, TrendingDown, ArrowUpRight, Bell, Target } from 'lucide-react';
 import { useFY } from '@/contexts/FYContext';
-import { fetchDashboardSummary, fetchCashflow, fetchUpcomingAlerts } from '@/api/dashboard';
+import { fetchDashboardSummary, fetchCashflow, fetchUpcomingAlerts, fetchNetWorthHistory, upsertNetWorthSnapshot } from '@/api/dashboard';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
 import { formatINRShort } from '@/lib/indianFormat';
@@ -48,6 +51,32 @@ export default function DashboardPage() {
   });
 
   const { data: budgetActuals } = useBudgetsVsActuals(selectedFY);
+
+  const queryClient = useQueryClient();
+  const { data: netWorthHistory } = useQuery({
+    queryKey: ['net-worth-history'],
+    queryFn: fetchNetWorthHistory,
+  });
+  // Fire upsert only if the current month snapshot is absent — avoids write-on-read on every load
+  const { mutate: triggerSnapshot } = useMutation({
+    mutationFn: upsertNetWorthSnapshot,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['net-worth-history'] }),
+  });
+  const currentMonthKey = new Date().toISOString().slice(0, 7); // "YYYY-MM"
+  const hasCurrentMonthSnapshot = netWorthHistory?.some(
+    (s) => s.snapshotDate.slice(0, 7) === currentMonthKey,
+  );
+  // Fire upsert in an effect (not render body) to avoid React side-effect violations
+  useEffect(() => {
+    if (netWorthHistory !== undefined && !hasCurrentMonthSnapshot) {
+      triggerSnapshot();
+    }
+  }, [netWorthHistory, hasCurrentMonthSnapshot]); // triggerSnapshot is stable from useMutation
+
+  const netWorthChartData = (netWorthHistory ?? []).slice(-12).map((s) => ({
+    month: new Date(s.snapshotDate).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }),
+    netWorth: Number(s.netWorth ?? 0),
+  }));
 
   if (summaryLoading) return <PageLoader />;
 
@@ -258,6 +287,25 @@ export default function DashboardPage() {
         );
         })()}
       </div>
+
+      {/* Net Worth Trend */}
+      {netWorthChartData.length > 0 && (
+        <div className="rounded-xl border border-border bg-card p-4">
+          <div className="mb-3">
+            <h2 className="text-base font-semibold">Net Worth Trend</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Monthly snapshots — based on data at time of capture</p>
+          </div>
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={netWorthChartData}>
+              <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+              <XAxis dataKey="month" tick={{ fontSize: 11 }} className="text-muted-foreground" />
+              <YAxis tickFormatter={(v) => formatINRShort(v)} tick={{ fontSize: 11 }} className="text-muted-foreground" width={70} />
+              <Tooltip formatter={(v: number) => [formatINRShort(v), 'Net Worth']} />
+              <Line type="monotone" dataKey="netWorth" stroke={CHART_COLORS.net} dot={{ r: 3 }} strokeWidth={2} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 }

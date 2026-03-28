@@ -266,6 +266,7 @@ model User {
   houseProperties        HousePropertyDetail[]
   foreignAssetDisclosures ForeignAssetDisclosure[]
   recurringRules         RecurringRule[]
+  netWorthSnapshots      NetWorthSnapshot[]
 
   @@index([email])
   @@index([deletedAt])
@@ -598,6 +599,7 @@ model Transaction {
   isRecurring   Boolean         @default(false)
   gstAmount     Decimal?        @db.Decimal(15, 2)
   importHash    String?         // SHA-256(date+amount+description+accountId) — null for manual
+  transferPairId String?        // Links both legs of a double-entry TRANSFER for cascade delete
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
   deletedAt     DateTime?       // Soft delete
@@ -616,6 +618,7 @@ model Transaction {
   @@index([categoryId])
   @@index([deletedAt])
   @@index([importHash])
+  @@index([transferPairId])
 }
 
 model RecurringRule {
@@ -937,4 +940,27 @@ model ForeignAssetDisclosure {
 
   @@index([userId, fyYear])
   @@index([deletedAt])
+}
+
+model NetWorthSnapshot {
+  id                String   @id @default(cuid())
+  userId            String
+  snapshotDate      DateTime // Truncated to first-of-month for idempotent upserts
+  totalAssets       Decimal? @db.Decimal(15, 2)
+  totalLiabilities  Decimal? @db.Decimal(15, 2)
+  netWorth          Decimal? @db.Decimal(15, 2)
+  bankBalances      Decimal? @db.Decimal(15, 2)
+  fixedDeposits     Decimal? @db.Decimal(15, 2)
+  recurringDeposits Decimal? @db.Decimal(15, 2)
+  investments       Decimal? @db.Decimal(15, 2)
+  gold              Decimal? @db.Decimal(15, 2)
+  realEstate        Decimal? @db.Decimal(15, 2)
+  loans             Decimal? @db.Decimal(15, 2)
+  createdAt         DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, snapshotDate])
+  @@index([userId])
+  @@index([snapshotDate])
 }

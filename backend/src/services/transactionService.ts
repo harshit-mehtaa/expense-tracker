@@ -140,6 +140,8 @@ export async function createTransaction(
       const destAccount = await tx.bankAccount.findFirst({ where: { id: data.transferToAccountId, userId } });
       if (!destAccount) throw AppError.notFound('Destination bank account');
 
+      const pairId = crypto.randomUUID();
+
       // Debit leg (source account)
       const debitTx = await tx.transaction.create({
         data: {
@@ -154,6 +156,7 @@ export async function createTransaction(
           tags: data.tags ?? [],
           isRecurring: data.isRecurring ?? false,
           gstAmount: data.gstAmount,
+          transferPairId: pairId,
         },
       });
 
@@ -169,6 +172,7 @@ export async function createTransaction(
           date: new Date(data.date),
           tags: data.tags ?? [],
           isRecurring: false,
+          transferPairId: pairId,
         },
       });
 
@@ -184,7 +188,6 @@ export async function createTransaction(
         data: { currentBalance: { increment: data.amount } },
       });
 
-      // TODO(v2): Link the two legs via a transferPairId field so deleting one can cascade to the other
       return debitTx;
     }
 
@@ -308,6 +311,23 @@ export async function softDeleteTransaction(
       });
     }
 
+    // Cascade to paired TRANSFER leg (atomically in the same $transaction)
+    if (original.transferPairId) {
+      const paired = await ptx.transaction.findFirst({
+        where: { transferPairId: original.transferPairId, id: { not: transactionId }, deletedAt: null },
+      });
+      if (paired) {
+        await ptx.transaction.update({ where: { id: paired.id }, data: { deletedAt: new Date() } });
+        if (paired.bankAccountId) {
+          const pairedReversal = -balanceDelta(paired.type, Number(paired.amount));
+          await ptx.bankAccount.update({
+            where: { id: paired.bankAccountId },
+            data: { currentBalance: { increment: pairedReversal } },
+          });
+        }
+      }
+    }
+
     return deleted;
   });
 }
@@ -366,4 +386,67 @@ export async function bulkImportTransactions(
     duplicatesSkipped: skipped,
     errorsCount: 0,
   };
+}
+
+export interface ExportFilters {
+  fy?: string;
+  startDate?: string;
+  endDate?: string;
+  type?: string;
+  categoryId?: string;
+  bankAccountId?: string;
+}
+
+export async function getAllTransactionsForExport(
+  requesterId: string,
+  requesterRole: string,
+  filters: ExportFilters,
+) {
+  const userId = requesterRole === 'ADMIN' ? undefined : requesterId;
+  const where: Prisma.TransactionWhereInput = {
+    ...(userId ? { userId } : {}),
+    deletedAt: null,
+  };
+
+  if (filters.bankAccountId) where.bankAccountId = filters.bankAccountId;
+  if (filters.categoryId) where.categoryId = filters.categoryId;
+  if (filters.type) where.type = filters.type as Prisma.EnumTransactionTypeFilter['equals'];
+
+  if (filters.fy) {
+    const { start, end } = getFYRange(filters.fy);
+    where.date = { gte: start, lte: end };
+  } else if (filters.startDate || filters.endDate) {
+    where.date = {};
+    if (filters.startDate) (where.date as Prisma.DateTimeFilter).gte = new Date(filters.startDate);
+    if (filters.endDate) (where.date as Prisma.DateTimeFilter).lte = new Date(filters.endDate);
+  }
+
+  return prisma.transaction.findMany({
+    where,
+    orderBy: { date: 'desc' },
+    take: 10_000, // safety cap
+    include: {
+      category: { select: { name: true } },
+      bankAccount: { select: { bankName: true, accountNumberLast4: true } },
+    },
+  });
+}
+
+export function buildCsv(rows: Awaited<ReturnType<typeof getAllTransactionsForExport>>): string {
+  const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
+  const headers = ['Date', 'Description', 'Type', 'Amount', 'Category', 'Account', 'PaymentMode', 'Tags'];
+  const lines: string[] = [headers.join(',')];
+  for (const r of rows) {
+    lines.push([
+      r.date.toISOString().slice(0, 10),
+      escape(r.description),
+      r.type,
+      Number(r.amount).toFixed(2),
+      escape(r.category?.name ?? ''),
+      escape(r.bankAccount ? `${r.bankAccount.bankName} ····${r.bankAccount.accountNumberLast4 ?? ''}` : ''),
+      escape(r.paymentMode ?? ''),
+      escape(r.tags.join(';')),
+    ].join(','));
+  }
+  return lines.join('\r\n');
 }
