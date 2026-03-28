@@ -265,6 +265,7 @@ model User {
   otherIncomes           OtherSourceIncome[]
   houseProperties        HousePropertyDetail[]
   foreignAssetDisclosures ForeignAssetDisclosure[]
+  recurringRules         RecurringRule[]
 
   @@index([email])
   @@index([deletedAt])
@@ -628,6 +629,7 @@ model RecurringRule {
   updatedAt           DateTime           @updatedAt
 
   templateTransaction Transaction @relation(fields: [templateTransactionId], references: [id])
+  user                User        @relation(fields: [userId], references: [id])
 
   @@index([userId])
   @@index([nextRunDate])

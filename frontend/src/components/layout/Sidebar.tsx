@@ -12,6 +12,7 @@ import {
   Settings,
   Gem,
   IndianRupee,
+  Repeat,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -19,6 +20,7 @@ import { useAuth } from '@/contexts/AuthContext';
 const NAV_ITEMS = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', exact: true },
   { to: '/transactions', icon: Receipt, label: 'Transactions' },
+  { to: '/recurring', icon: Repeat, label: 'Recurring' },
   { to: '/accounts', icon: Building2, label: 'Accounts & Deposits' },
   { to: '/investments', icon: TrendingUp, label: 'Investments' },
   { to: '/gold-realestate', icon: Gem, label: 'Gold & Real Estate' },

@@ -6,8 +6,62 @@ import { calcCapitalGainsSummary } from './capitalGainsService';
 import { calcOtherIncomeSummary } from './otherIncomeService';
 import { calcHousePropertyIncome } from './housePropertyService';
 
-// ─── Indian Tax Slabs (FY 2024-25) ───────────────────────────────────────────
-// TODO: Make FY-parameterised when multi-FY support is needed.
+// ─── Indian Tax Slabs (FY-parameterised) ─────────────────────────────────────
+// Old regime slabs are unchanged between FY 2024-25 and 2025-26 (Budget 2025).
+// New regime slabs changed significantly in FY 2025-26 (Budget 2025, Feb 2025):
+//   - Slab restructure: 0-4L:0%, 4-8L:5%, 8-12L:10%, 12-16L:15%, 16-20L:20%, 20-24L:25%, 24L+:30%
+//   - Sec 87A rebate raised from ₹7L to ₹12L, making effective tax ₹0 for income ≤ ₹12L
+//   - Standard deduction ₹75K unchanged
+
+interface NewRegimeSlab {
+  rebateThreshold: number; // 87A: 0 tax if taxableIncome <= this
+  stdDeduction: number;    // Standard deduction under new regime
+  calc: (income: number) => number;
+}
+
+const NEW_REGIME_SLABS: Record<string, NewRegimeSlab> = {
+  '2024-25': {
+    rebateThreshold: 700000,
+    stdDeduction: 75000,
+    calc: (income) => {
+      if (income <= 300000) return 0;
+      if (income <= 700000) return (income - 300000) * 0.05;
+      if (income <= 1000000) return 20000 + (income - 700000) * 0.10;
+      if (income <= 1200000) return 50000 + (income - 1000000) * 0.15;
+      if (income <= 1500000) return 80000 + (income - 1200000) * 0.20;
+      return 140000 + (income - 1500000) * 0.30;
+    },
+  },
+  '2025-26': {
+    rebateThreshold: 1200000,
+    stdDeduction: 75000,
+    calc: (income) => {
+      if (income <= 400000) return 0;
+      if (income <= 800000) return (income - 400000) * 0.05;
+      if (income <= 1200000) return 20000 + (income - 800000) * 0.10;
+      if (income <= 1600000) return 60000 + (income - 1200000) * 0.15;
+      if (income <= 2000000) return 120000 + (income - 1600000) * 0.20;
+      if (income <= 2400000) return 200000 + (income - 2000000) * 0.25;
+      return 300000 + (income - 2400000) * 0.30;
+    },
+  },
+};
+
+/** Returns the closest known FY at or before the requested FY. */
+function resolveNewRegimeSlab(fy: string): NewRegimeSlab {
+  if (NEW_REGIME_SLABS[fy]) return NEW_REGIME_SLABS[fy];
+  // Find the closest known FY that is <= the requested FY (sorted descending)
+  const knownFYs = Object.keys(NEW_REGIME_SLABS)
+    .filter((k) => k <= fy)
+    .sort()
+    .reverse();
+  // If no known FY is at or before the requested one, fall back to the oldest known FY
+  if (knownFYs.length === 0) {
+    const oldest = Object.keys(NEW_REGIME_SLABS).sort()[0];
+    return NEW_REGIME_SLABS[oldest];
+  }
+  return NEW_REGIME_SLABS[knownFYs[0]];
+}
 
 function calcOldRegimeTax(taxableIncome: number): number {
   let tax: number;
@@ -20,17 +74,11 @@ function calcOldRegimeTax(taxableIncome: number): number {
   return tax;
 }
 
-function calcNewRegimeTax(taxableIncome: number): number {
-  // FY 2024-25 new regime slabs
-  let tax: number;
-  if (taxableIncome <= 300000) tax = 0;
-  else if (taxableIncome <= 700000) tax = (taxableIncome - 300000) * 0.05;
-  else if (taxableIncome <= 1000000) tax = 20000 + (taxableIncome - 700000) * 0.10;
-  else if (taxableIncome <= 1200000) tax = 50000 + (taxableIncome - 1000000) * 0.15;
-  else if (taxableIncome <= 1500000) tax = 80000 + (taxableIncome - 1200000) * 0.20;
-  else tax = 140000 + (taxableIncome - 1500000) * 0.30;
-  // Sec 87A rebate: full rebate if taxable income ≤ ₹7L (new regime, FY 2023-24+)
-  if (taxableIncome <= 700000) tax = 0;
+function calcNewRegimeTax(taxableIncome: number, fy: string): number {
+  const slab = resolveNewRegimeSlab(fy);
+  const tax = slab.calc(taxableIncome);
+  // Sec 87A: full rebate if taxable income ≤ rebateThreshold
+  if (taxableIncome <= slab.rebateThreshold) return 0;
   return tax;
 }
 
@@ -142,10 +190,10 @@ export async function getTaxSummary(userId: string, fy: string) {
   );
   const oldTax = addSurchargeAndCess(calcOldRegimeTax(oldTaxableIncome), oldTaxableIncome, 'OLD');
 
-  // New Regime (fewer deductions; standard deduction ₹75K for FY24-25)
-  const newStdDeduction = 75000;
-  const newTaxableIncome = Math.max(grossSalary - newStdDeduction, 0);
-  const newTax = addSurchargeAndCess(calcNewRegimeTax(newTaxableIncome), newTaxableIncome, 'NEW');
+  // New Regime — standard deduction and slabs are FY-specific
+  const newRegimeSlab = resolveNewRegimeSlab(fy);
+  const newTaxableIncome = Math.max(grossSalary - newRegimeSlab.stdDeduction, 0);
+  const newTax = addSurchargeAndCess(calcNewRegimeTax(newTaxableIncome, fy), newTaxableIncome, 'NEW');
 
   const taxPaid = Number(profile?.taxPaidAdvance ?? 0) + Number(profile?.taxPaidTds ?? 0) + Number(profile?.taxPaidSelfAssessment ?? 0);
 

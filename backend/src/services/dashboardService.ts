@@ -1,8 +1,18 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../config/prisma';
 import { getFYRange, getCurrentFY, getPreviousFY } from '../utils/financialYear';
+import { generateDueRecurringTransactions } from './recurringService';
 
 export async function getDashboardSummary(userId: string, requesterRole: string, fy?: string) {
+  // Lazy trigger: generate any due recurring transactions before computing the summary.
+  // Non-fatal — a generation failure must never break the dashboard.
+  // Skip for ADMIN role (admin dashboard is family-wide; generation is per-member).
+  if (requesterRole !== 'ADMIN') {
+    await generateDueRecurringTransactions(userId).catch((err) => {
+      console.warn('[dashboard] Recurring generation failed for user', userId, err instanceof Error ? err.message : err);
+    });
+  }
+
   const currentFY = fy ?? getCurrentFY();
   const previousFY = getPreviousFY(currentFY);
 
@@ -54,12 +64,12 @@ export async function getCashflow(userId: string, requesterRole: string, fy?: st
       EXTRACT(YEAR FROM date AT TIME ZONE 'Asia/Kolkata')::int AS year,
       SUM(CASE WHEN type = 'INCOME' THEN amount ELSE 0 END)::float AS income,
       SUM(CASE WHEN type = 'EXPENSE' THEN amount ELSE 0 END)::float AS expense
-    FROM transactions
+    FROM "Transaction"
     WHERE
       date >= ${start}
       AND date <= ${end}
-      AND deleted_at IS NULL
-      ${requesterRole !== 'ADMIN' ? Prisma.sql`AND user_id = ${userId}` : Prisma.empty}
+      AND "deletedAt" IS NULL
+      ${requesterRole !== 'ADMIN' ? Prisma.sql`AND "userId" = ${userId}` : Prisma.empty}
     GROUP BY month, year
     ORDER BY year, month
   `;

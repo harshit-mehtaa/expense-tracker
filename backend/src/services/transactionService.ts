@@ -90,6 +90,23 @@ export async function getTransactions(
   return processPaginationResult(items, limit, total);
 }
 
+export async function getTransactionById(
+  transactionId: string,
+  requesterId: string,
+  requesterRole: string,
+) {
+  const tx = await prisma.transaction.findUnique({
+    where: { id: transactionId },
+    include: {
+      category: { select: { name: true, color: true, icon: true } },
+      bankAccount: { select: { bankName: true, accountNumberLast4: true } },
+    },
+  });
+  if (!tx || tx.deletedAt) throw AppError.notFound('Transaction');
+  if (requesterRole !== 'ADMIN' && tx.userId !== requesterId) throw AppError.forbidden();
+  return tx;
+}
+
 export async function createTransaction(
   userId: string,
   data: {

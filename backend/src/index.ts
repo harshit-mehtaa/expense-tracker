@@ -40,6 +40,7 @@ import taxRouter from './routes/tax';
 import adminRouter from './routes/admin';
 import categoriesRouter from './routes/categories';
 import budgetsRouter from './routes/budgets';
+import recurringRouter from './routes/recurring';
 
 // Import service
 import { parseCSV, makeImportHash } from './services/importService';
@@ -47,6 +48,9 @@ import { prisma } from './config/prisma';
 import { AppError } from './utils/AppError';
 
 const app = express();
+
+// Trust the nginx reverse proxy (required for express-rate-limit + X-Forwarded-For)
+app.set('trust proxy', 1);
 
 // ── Security middleware ────────────────────────────────────────────────────────
 app.use(helmet());
@@ -103,6 +107,7 @@ app.use('/api/tax', taxRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/categories', categoriesRouter);
 app.use('/api/budgets', budgetsRouter);
+app.use('/api/recurring', recurringRouter);
 
 // ── Bank Statement Import ─────────────────────────────────────────────────────
 app.post(

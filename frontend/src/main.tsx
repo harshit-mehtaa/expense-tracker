@@ -6,17 +6,20 @@ import App from './App';
 import { queryClient } from './lib/queryClient';
 import { AuthProvider } from './contexts/AuthContext';
 import { FYProvider } from './contexts/FYContext';
+import { ToastProvider } from './contexts/ToastContext';
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <AuthProvider>
-          <FYProvider>
-            <App />
-          </FYProvider>
-        </AuthProvider>
+        <ToastProvider>
+          <AuthProvider>
+            <FYProvider>
+              <App />
+            </FYProvider>
+          </AuthProvider>
+        </ToastProvider>
       </BrowserRouter>
     </QueryClientProvider>
   </React.StrictMode>,

@@ -12,13 +12,15 @@ import {
   Cell,
   Legend,
 } from 'recharts';
-import { TrendingUp, TrendingDown, ArrowUpRight, Bell } from 'lucide-react';
+import { TrendingUp, TrendingDown, ArrowUpRight, Bell, Target } from 'lucide-react';
 import { useFY } from '@/contexts/FYContext';
 import { fetchDashboardSummary, fetchCashflow, fetchUpcomingAlerts } from '@/api/dashboard';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
 import { formatINRShort } from '@/lib/indianFormat';
 import { cn } from '@/lib/utils';
+import { useBudgetsVsActuals } from '@/hooks/useBudgetsVsActuals';
+import { Link } from 'react-router-dom';
 
 // Indian-palette chart colors (saffron/green/navy)
 const CHART_COLORS = {
@@ -44,6 +46,8 @@ export default function DashboardPage() {
     queryKey: ['dashboard', 'alerts'],
     queryFn: fetchUpcomingAlerts,
   });
+
+  const { data: budgetActuals } = useBudgetsVsActuals(selectedFY);
 
   if (summaryLoading) return <PageLoader />;
 
@@ -190,6 +194,70 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
+      {/* Budget Health */}
+      <div className="rounded-xl border border-border bg-card p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Target className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-base font-semibold">Budget Health</h2>
+          </div>
+          <Link to="/budgets" className="text-xs text-muted-foreground hover:underline flex items-center gap-1">
+            View all <ArrowUpRight className="h-3 w-3" />
+          </Link>
+        </div>
+
+        {/* Only show FY-period budgets — MONTHLY/QUARTERLY budgets vs FY actuals would give misleading percentages */}
+        {(() => {
+          const fyBudgets = (budgetActuals ?? []).filter((b) => b.period === 'FY');
+          return fyBudgets.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No FY budgets configured.{' '}
+            <Link to="/budgets" className="underline hover:text-foreground">
+              Set up FY budgets
+            </Link>{' '}
+            to track annual spending here.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {fyBudgets.slice(0, 6).map((b) => {
+              const pct = Math.min(b.pctUsed, 100);
+              const barColor =
+                b.pctUsed >= 100
+                  ? 'bg-red-500'
+                  : b.pctUsed >= 75
+                  ? 'bg-yellow-500'
+                  : 'bg-green-500';
+              return (
+                <div key={b.id}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium">{b.category.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      <INRDisplay amount={b.actual} short className="inline" /> /{' '}
+                      <INRDisplay amount={Number(b.amount)} short className="inline" />
+                      <span
+                        className={cn(
+                          'ml-1 font-semibold',
+                          b.pctUsed >= 100 ? 'text-red-600' : b.pctUsed >= 75 ? 'text-yellow-600' : 'text-green-600',
+                        )}
+                      >
+                        ({b.pctUsed.toFixed(0)}%)
+                      </span>
+                    </span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                    <div
+                      className={cn('h-2 rounded-full transition-all', barColor)}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+        })()}
+      </div>
     </div>
   );
 }

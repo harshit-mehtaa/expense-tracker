@@ -52,7 +52,10 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
 
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    // Never retry the refresh endpoint itself — avoids post-login token wipe
+    const isRefreshEndpoint = originalRequest.url?.endsWith('/auth/refresh');
+
+    if (error.response?.status === 401 && !originalRequest._retry && !isRefreshEndpoint) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject });
@@ -81,6 +84,14 @@ api.interceptors.response.use(
       } finally {
         isRefreshing = false;
       }
+    }
+
+    // For all non-401 errors (and 401s that are not retried), dispatch a toast event.
+    // Skip network errors that have no response (handled by queryClient onError).
+    if (error.response) {
+      const data = error.response.data as { message?: string } | undefined;
+      const message = data?.message ?? `Request failed (${error.response.status})`;
+      window.dispatchEvent(new CustomEvent('api:error', { detail: { message } }));
     }
 
     return Promise.reject(error);

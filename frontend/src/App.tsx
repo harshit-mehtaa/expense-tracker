@@ -15,6 +15,7 @@ import FamilyMembersPage from '@/pages/admin/FamilyMembers';
 import ReportsPage from '@/pages/admin/Reports';
 import SettingsPage from '@/pages/Settings';
 import GoldRealEstatePage from '@/pages/investments/GoldRealEstate';
+import RecurringRulesPage from '@/pages/transactions/RecurringRules';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -46,6 +47,7 @@ export default function App() {
       >
         <Route index element={<DashboardPage />} />
         <Route path="transactions" element={<TransactionsPage />} />
+        <Route path="recurring" element={<RecurringRulesPage />} />
         <Route path="accounts/*" element={<AccountsPage />} />
         <Route path="investments/*" element={<InvestmentsPage />} />
         <Route path="gold-realestate" element={<GoldRealEstatePage />} />

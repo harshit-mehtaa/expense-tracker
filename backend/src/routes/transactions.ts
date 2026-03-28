@@ -52,12 +52,12 @@ router.get(
 router.get(
   '/:id',
   asyncHandler(async (req: Request, res: Response) => {
-    const tx = await transactionService.getTransactions(req.user!.userId, req.user!.role, {
-      cursor: undefined,
-      limit: 1,
-    });
-    // Simplified — individual fetch handled inline
-    sendSuccess(res, tx.items[0] ?? null);
+    const tx = await transactionService.getTransactionById(
+      req.params.id,
+      req.user!.userId,
+      req.user!.role,
+    );
+    sendSuccess(res, tx);
   }),
 );
 
