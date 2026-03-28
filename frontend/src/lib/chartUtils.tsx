@@ -1,4 +1,4 @@
-import React, { useId } from 'react';
+import React, { useId, useMemo } from 'react';
 import type { TooltipProps } from 'recharts';
 
 // ── Color palette ─────────────────────────────────────────────────────────────
@@ -44,26 +44,35 @@ export function useChartGradients(): { gradIds: GradientIds; GradDefs: () => Rea
     net:     `grad-net-${uid}`,
   };
 
-  function GradDefs() {
-    return (
-      <defs>
-        <linearGradient id={gradIds.income} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="5%"  stopColor={CHART_PALETTE.income}  stopOpacity={0.35} />
-          <stop offset="95%" stopColor={CHART_PALETTE.income}  stopOpacity={0.02} />
-        </linearGradient>
-        <linearGradient id={gradIds.expense} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="5%"  stopColor={CHART_PALETTE.expense} stopOpacity={0.3} />
-          <stop offset="95%" stopColor={CHART_PALETTE.expense} stopOpacity={0.02} />
-        </linearGradient>
-        <linearGradient id={gradIds.net} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="5%"  stopColor={CHART_PALETTE.net}     stopOpacity={0.3} />
-          <stop offset="95%" stopColor={CHART_PALETTE.net}     stopOpacity={0.02} />
-        </linearGradient>
-      </defs>
-    );
-  }
+  // useMemo gives React a stable component reference across renders so it never
+  // unmounts/remounts the <defs> subtree (which would cause gradient fill to flash).
+  // gradIds values come from useId() and are stable for the component's lifetime.
+  const GradDefs = useMemo(() => () => <ChartGradDefs ids={gradIds} />, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { gradIds, GradDefs };
+}
+
+/**
+ * Module-level SVG gradient definitions component. Stable reference ensures React
+ * never unmounts/remounts the <defs> subtree between renders, preventing gradient flash.
+ */
+export function ChartGradDefs({ ids }: { ids: GradientIds }): React.ReactElement {
+  return (
+    <defs>
+      <linearGradient id={ids.income} x1="0" y1="0" x2="0" y2="1">
+        <stop offset="5%"  stopColor={CHART_PALETTE.income}  stopOpacity={0.50} />
+        <stop offset="95%" stopColor={CHART_PALETTE.income}  stopOpacity={0.05} />
+      </linearGradient>
+      <linearGradient id={ids.expense} x1="0" y1="0" x2="0" y2="1">
+        <stop offset="5%"  stopColor={CHART_PALETTE.expense} stopOpacity={0.50} />
+        <stop offset="95%" stopColor={CHART_PALETTE.expense} stopOpacity={0.05} />
+      </linearGradient>
+      <linearGradient id={ids.net} x1="0" y1="0" x2="0" y2="1">
+        <stop offset="5%"  stopColor={CHART_PALETTE.net}     stopOpacity={0.50} />
+        <stop offset="95%" stopColor={CHART_PALETTE.net}     stopOpacity={0.05} />
+      </linearGradient>
+    </defs>
+  );
 }
 
 // ── Custom tooltip ─────────────────────────────────────────────────────────────
@@ -78,8 +87,13 @@ export function CustomTooltip({ active, payload, label, formatter }: CustomToolt
   const fmt = formatter ?? ((v: number) => v.toLocaleString('en-IN'));
 
   return (
-    <div className="bg-card text-card-foreground border border-border rounded-lg shadow-lg px-3 py-2 text-sm min-w-[140px]">
-      {label && <p className="font-semibold text-foreground mb-1.5">{label}</p>}
+    <div className="bg-card text-card-foreground border border-border rounded-xl shadow-xl px-3.5 py-2.5 text-sm min-w-[160px]">
+      {label && (
+        <>
+          <p className="font-semibold text-foreground mb-1">{label}</p>
+          <div className="border-t border-border mb-1.5" />
+        </>
+      )}
       <div className="space-y-1">
         {payload.map((entry, i) => (
           <div key={i} className="flex items-center justify-between gap-4">

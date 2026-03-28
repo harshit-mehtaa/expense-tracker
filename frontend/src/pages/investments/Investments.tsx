@@ -233,8 +233,15 @@ export default function InvestmentsPage() {
                 </div>
                 <div className="h-2 bg-muted rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-green-500 rounded-full"
-                    style={{ width: `${Math.min(tracker80C.pctUtilized, 100)}%` }}
+                    className="h-full rounded-full"
+                    style={{
+                      width: `${Math.min(tracker80C.pctUtilized, 100)}%`,
+                      background: tracker80C.pctUtilized >= 100
+                        ? 'linear-gradient(90deg, #f43f5e, #fb7185)'
+                        : tracker80C.pctUtilized >= 80
+                        ? 'linear-gradient(90deg, #f59e0b, #fcd34d)'
+                        : 'linear-gradient(90deg, #10b981, #6ee7b7)',
+                    }}
                   />
                 </div>
                 {tracker80C.remaining > 0 && (
@@ -258,7 +265,7 @@ export default function InvestmentsPage() {
                       cx="50%"
                       cy="50%"
                       innerRadius={44}
-                      outerRadius={80}
+                      outerRadius={88}
                       paddingAngle={2}
                       strokeWidth={0}
                       label={false}
@@ -346,8 +353,11 @@ export default function InvestmentsPage() {
               </div>
               <div className="h-1.5 bg-muted rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-blue-500 rounded-full"
-                  style={{ width: `${Math.min((rd.installmentsPaid / rd.tenureMonths) * 100, 100)}%` }}
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${Math.min((rd.installmentsPaid / rd.tenureMonths) * 100, 100)}%`,
+                    background: 'linear-gradient(90deg, #6366f1, #a78bfa)',
+                  }}
                 />
               </div>
               <p className="text-xs text-muted-foreground">{rd.installmentsPaid}/{rd.tenureMonths} installments · Matures {new Date(rd.maturityDate).toLocaleDateString('en-IN')}</p>

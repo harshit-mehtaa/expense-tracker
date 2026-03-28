@@ -3,8 +3,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   AreaChart,
   Area,
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -98,27 +96,41 @@ export default function DashboardPage() {
           value={summary?.netWorth ?? 0}
           change={summary?.netWorthChangePct}
           subtitle="vs last FY"
+          accentColor={CHART_PALETTE.net}
         />
         {/* Income */}
         <StatCard
           title="Total Income"
           value={summary?.totalIncome ?? 0}
           positive
+          accentColor={CHART_PALETTE.income}
         />
         {/* Expense */}
         <StatCard
           title="Total Expense"
           value={summary?.totalExpense ?? 0}
           negative
+          accentColor={CHART_PALETTE.expense}
         />
         {/* Savings Rate */}
-        <div className="rounded-xl border border-border bg-card p-4">
-          <p className="text-sm font-medium text-muted-foreground">Savings Rate</p>
-          <p className={cn('mt-1 text-2xl font-bold', savingsRateClass)}>
-            {(summary?.savingsRate ?? 0).toFixed(1)}%
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">This FY</p>
-        </div>
+        {(() => {
+          const accentHex =
+            (summary?.savingsRate ?? 0) > 30 ? '#10b981'
+            : (summary?.savingsRate ?? 0) > 10 ? '#f59e0b'
+            : '#f43f5e';
+          return (
+            <div
+              className="rounded-xl border border-border border-l-4 bg-card p-4"
+              style={{ borderLeftColor: accentHex }}
+            >
+              <p className="text-sm font-medium text-muted-foreground">Savings Rate</p>
+              <p className={cn('mt-1 text-2xl font-bold', savingsRateClass)}>
+                {(summary?.savingsRate ?? 0).toFixed(1)}%
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">This FY</p>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Charts row */}
@@ -155,24 +167,24 @@ export default function DashboardPage() {
                 />
                 <Tooltip content={<CustomTooltip formatter={formatINRShort} />} />
                 <Area
-                  type="monotone"
+                  type="natural"
                   dataKey="income"
                   name="Income"
                   stroke={CHART_PALETTE.income}
                   fill={`url(#${gradIds.income})`}
                   strokeWidth={2}
                   dot={false}
-                  activeDot={{ r: 4, strokeWidth: 0 }}
+                  activeDot={{ r: 5, strokeWidth: 2, stroke: 'rgba(255,255,255,0.7)' }}
                 />
                 <Area
-                  type="monotone"
+                  type="natural"
                   dataKey="expense"
                   name="Expense"
                   stroke={CHART_PALETTE.expense}
                   fill={`url(#${gradIds.expense})`}
                   strokeWidth={2}
                   dot={false}
-                  activeDot={{ r: 4, strokeWidth: 0 }}
+                  activeDot={{ r: 5, strokeWidth: 2, stroke: 'rgba(255,255,255,0.7)' }}
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -192,7 +204,7 @@ export default function DashboardPage() {
                 cx="50%"
                 cy="50%"
                 innerRadius={52}
-                outerRadius={80}
+                outerRadius={88}
                 dataKey="value"
                 paddingAngle={2}
                 strokeWidth={0}
@@ -269,12 +281,12 @@ export default function DashboardPage() {
           <div className="space-y-3">
             {fyBudgets.slice(0, 6).map((b) => {
               const pct = Math.min(b.pctUsed, 100);
-              const barColor =
+              const barGradient =
                 b.pctUsed >= 100
-                  ? 'bg-red-500'
+                  ? 'linear-gradient(90deg, #f43f5e, #fb7185)'
                   : b.pctUsed >= 75
-                  ? 'bg-yellow-500'
-                  : 'bg-green-500';
+                  ? 'linear-gradient(90deg, #f59e0b, #fcd34d)'
+                  : 'linear-gradient(90deg, #10b981, #6ee7b7)';
               return (
                 <div key={b.id}>
                   <div className="flex items-center justify-between mb-1">
@@ -294,8 +306,8 @@ export default function DashboardPage() {
                   </div>
                   <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
                     <div
-                      className={cn('h-2 rounded-full transition-all', barColor)}
-                      style={{ width: `${pct}%` }}
+                      className="h-2 rounded-full transition-all"
+                      style={{ width: `${pct}%`, background: barGradient }}
                     />
                   </div>
                 </div>
@@ -314,21 +326,23 @@ export default function DashboardPage() {
             <p className="text-xs text-muted-foreground mt-0.5">Monthly snapshots — based on data at time of capture</p>
           </div>
           <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={netWorthChartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+            <AreaChart data={netWorthChartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+              <GradDefs />
               <CartesianGrid {...GRID_STYLE} />
               <XAxis dataKey="month" {...AXIS_STYLE} />
               <YAxis tickFormatter={(v) => formatINRShort(v)} width={70} {...AXIS_STYLE} />
               <Tooltip content={<CustomTooltip formatter={(v) => formatINRShort(v)} />} />
-              <Line
-                type="monotone"
+              <Area
+                type="natural"
                 dataKey="netWorth"
                 name="Net Worth"
                 stroke={CHART_PALETTE.net}
+                fill={`url(#${gradIds.net})`}
                 strokeWidth={2.5}
-                dot={{ r: 3, fill: CHART_PALETTE.net, strokeWidth: 0 }}
-                activeDot={{ r: 5, strokeWidth: 0 }}
+                dot={false}
+                activeDot={{ r: 5, strokeWidth: 2, stroke: 'rgba(255,255,255,0.7)' }}
               />
-            </LineChart>
+            </AreaChart>
           </ResponsiveContainer>
         </div>
       )}
@@ -345,6 +359,7 @@ function StatCard({
   subtitle,
   positive,
   negative,
+  accentColor,
 }: {
   title: string;
   value: number;
@@ -352,11 +367,15 @@ function StatCard({
   subtitle?: string;
   positive?: boolean;
   negative?: boolean;
+  accentColor?: string;
 }) {
   const isPositive = change !== undefined && change >= 0;
 
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
+    <div
+      className={cn('rounded-xl border border-border bg-card p-4', accentColor && 'border-l-4')}
+      style={accentColor ? { borderLeftColor: accentColor } : undefined}
+    >
       <p className="text-sm font-medium text-muted-foreground">{title}</p>
       <INRDisplay
         amount={value}

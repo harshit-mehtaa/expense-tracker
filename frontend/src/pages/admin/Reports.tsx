@@ -109,7 +109,15 @@ export default function ReportsPage() {
                     {...AXIS_STYLE}
                   />
                   <Tooltip content={<CustomTooltip formatter={fmt} />} />
-                  <Bar dataKey="amount" name="Spent" fill={CHART_PALETTE.expense} radius={[0, 4, 4, 0]} />
+                  <Bar
+                    dataKey="amount"
+                    name="Spent"
+                    fill={CHART_PALETTE.expense}
+                    radius={[0, 4, 4, 0]}
+                    animationDuration={600}
+                    animationEasing="ease-out"
+                    activeBar={{ fill: '#fb7185', radius: [0, 4, 4, 0] }}
+                  />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -125,7 +133,7 @@ export default function ReportsPage() {
                     cx="50%"
                     cy="50%"
                     innerRadius={44}
-                    outerRadius={80}
+                    outerRadius={88}
                     paddingAngle={2}
                     strokeWidth={0}
                     label={false}
