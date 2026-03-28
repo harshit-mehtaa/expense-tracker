@@ -29,8 +29,14 @@ export async function getDashboardSummary(userId: string, requesterRole: string,
     getExpenseForPeriod(userFilter, previousRange),
   ]);
 
-  const netWorth = await getNetWorth(requesterRole === 'ADMIN' ? undefined : userId);
-  const prevNetWorth = await getNetWorth(requesterRole === 'ADMIN' ? undefined : userId, previousRange.end);
+  const scopedUserId = requesterRole === 'ADMIN' ? undefined : userId;
+  const [totalAssets, totalLiabilities] = await Promise.all([
+    computeNetWorthAssets(scopedUserId),
+    computeTotalLiabilities(scopedUserId),
+  ]);
+  const netWorth = totalAssets - totalLiabilities;
+  // prevNetWorth: approximate via prior-FY income/expense delta since we don't snapshot balances historically
+  const prevNetWorth = netWorth - ((currentIncome - currentExpense) - (prevIncome - prevExpense));
 
   const savingsRate =
     currentIncome > 0 ? ((currentIncome - currentExpense) / currentIncome) * 100 : 0;
@@ -43,8 +49,8 @@ export async function getDashboardSummary(userId: string, requesterRole: string,
     totalIncome: currentIncome,
     totalExpense: currentExpense,
     savingsRate: Math.round(savingsRate * 100) / 100,
-    totalAssets: await getTotalAssets(requesterRole === 'ADMIN' ? undefined : userId),
-    totalLiabilities: await getTotalLiabilities(requesterRole === 'ADMIN' ? undefined : userId),
+    totalAssets,
+    totalLiabilities,
   };
 }
 
@@ -115,7 +121,8 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string) {
         where: { ...userFilter, status: 'ACTIVE' },
         select: { id: true, fundName: true, monthlyAmount: true, sipDate: true },
       }),
-      // Insurance premiums due in 30 days
+      // Insurance premiums due in the next 30 days
+      // premiumDueDate is stored as Int (day of month 1–31), not a DateTime — filter in app code
       prisma.insurancePolicy.findMany({
         where: {
           ...userFilter,
@@ -136,7 +143,7 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string) {
         where: { ...userFilter, endDate: { gte: now } },
         select: { id: true, lenderName: true, emiAmount: true, emiDate: true, loanType: true },
       }),
-      // Advance tax due dates
+      // Advance tax due dates (scoped to user where applicable)
       prisma.advanceTaxEvent.findMany({
         where: { dueDate: { gte: now, lte: thirtyDaysOut } },
         orderBy: { dueDate: 'asc' },
@@ -167,6 +174,25 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string) {
       dueDate: new Date(now.getFullYear(), now.getMonth(), sip.sipDate).toISOString(),
       daysUntilDue: daysUntil,
       entityId: sip.id,
+    });
+  }
+
+  for (const policy of insurancePremiumsDue) {
+    if (!policy.premiumDueDate) continue;
+    const dayOfMonth = Number(policy.premiumDueDate);
+    if (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) continue;
+    // Compute next occurrence of this day-of-month (if today's date is past it, use next month)
+    const nextOccurrence = new Date(now.getFullYear(), now.getMonth(), dayOfMonth);
+    if (nextOccurrence < now) nextOccurrence.setMonth(nextOccurrence.getMonth() + 1);
+    if (nextOccurrence > thirtyDaysOut) continue;
+    const daysUntil = Math.ceil((nextOccurrence.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    alerts.push({
+      type: 'INSURANCE_PREMIUM' as const,
+      title: `${policy.policyName} premium due`,
+      amount: Number(policy.premiumAmount),
+      dueDate: nextOccurrence.toISOString(),
+      daysUntilDue: daysUntil,
+      entityId: policy.id,
     });
   }
 
@@ -233,32 +259,64 @@ async function getExpenseForPeriod(
   return Number(result._sum.amount ?? 0);
 }
 
-async function getTotalAssets(userId?: string): Promise<number> {
+async function fetchAssetBreakdown(userId?: string) {
   const where = userId ? { userId } : {};
 
-  const [bankBalances, fdTotal, investmentTotal] = await Promise.all([
-    prisma.bankAccount.aggregate({
-      where: { ...where, isActive: true },
-      _sum: { currentBalance: true },
-    }),
-    prisma.fixedDeposit.aggregate({
-      where: { ...where, status: 'ACTIVE' },
-      _sum: { principalAmount: true },
-    }),
-    // Simplified — full investment calculation done in investment service
-    prisma.investment.aggregate({
-      where,
-      _sum: { currentPricePerUnit: true }, // Approximation only
-    }),
+  const [accounts, fds, rds, investments, gold, realestate] = await Promise.all([
+    prisma.bankAccount.findMany({ where: { ...where, isActive: true }, select: { currentBalance: true } }),
+    prisma.fixedDeposit.findMany({ where: { ...where, status: 'ACTIVE' }, select: { maturityAmount: true } }),
+    prisma.recurringDeposit.findMany({ where: { ...where, status: 'ACTIVE' }, select: { totalDeposited: true } }),
+    prisma.investment.findMany({ where, select: { unitsOrQuantity: true, currentPricePerUnit: true, currency: true } }),
+    prisma.goldHolding.findMany({ where, select: { quantityGrams: true, currentPricePerGram: true } }),
+    prisma.realEstate.findMany({ where, select: { currentValue: true } }),
   ]);
 
-  return (
-    Number(bankBalances._sum.currentBalance ?? 0) +
-    Number(fdTotal._sum.principalAmount ?? 0)
-  );
+  const exchangeRates = await prisma.exchangeRate.findMany({ where: { toCurrency: 'INR' } });
+  const rateMap: Record<string, number> = {};
+  exchangeRates.forEach((r) => { rateMap[r.fromCurrency] = Number(r.rate); });
+
+  const bankBalances = accounts.reduce((s, a) => s + Number(a.currentBalance), 0);
+  const fixedDeposits = fds.reduce((s, f) => s + Number(f.maturityAmount), 0);
+  const recurringDeposits = rds.reduce((s, r) => s + Number(r.totalDeposited), 0);
+  const investments_ = investments.reduce((s, i) => {
+    const fx = i.currency === 'INR' ? 1 : (rateMap[i.currency] ?? 1);
+    return s + Number(i.unitsOrQuantity) * Number(i.currentPricePerUnit) * fx;
+  }, 0);
+  const gold_ = gold.reduce((s, g) => s + Number(g.quantityGrams) * Number(g.currentPricePerGram), 0);
+  const realEstate = realestate.reduce((s, p) => s + Number(p.currentValue), 0);
+
+  return {
+    bankBalances,
+    fixedDeposits,
+    recurringDeposits,
+    investments: investments_,
+    gold: gold_,
+    realEstate,
+    total: bankBalances + fixedDeposits + recurringDeposits + investments_ + gold_ + realEstate,
+  };
 }
 
-async function getTotalLiabilities(userId?: string): Promise<number> {
+export async function computeNetWorthAssets(userId?: string): Promise<number> {
+  const breakdown = await fetchAssetBreakdown(userId);
+  return breakdown.total;
+}
+
+export async function computeNetWorthStatement(userId?: string) {
+  const [assetBreakdown, loans] = await Promise.all([
+    fetchAssetBreakdown(userId),
+    computeTotalLiabilities(userId),
+  ]);
+  const { total: totalAssets, ...assets } = assetBreakdown;
+  return {
+    assets,
+    liabilities: { loans },
+    totalAssets,
+    totalLiabilities: loans,
+    netWorth: totalAssets - loans,
+  };
+}
+
+export async function computeTotalLiabilities(userId?: string): Promise<number> {
   const where = userId ? { userId } : {};
   const result = await prisma.loan.aggregate({
     where: { ...where, endDate: { gte: new Date() } },
@@ -267,8 +325,8 @@ async function getTotalLiabilities(userId?: string): Promise<number> {
   return Number(result._sum.outstandingBalance ?? 0);
 }
 
-async function getNetWorth(userId?: string, asOf?: Date): Promise<number> {
-  const assets = await getTotalAssets(userId);
-  const liabilities = await getTotalLiabilities(userId);
+async function getNetWorth(userId?: string): Promise<number> {
+  const assets = await computeNetWorthAssets(userId);
+  const liabilities = await computeTotalLiabilities(userId);
   return assets - liabilities;
 }

@@ -46,6 +46,7 @@ import recurringRouter from './routes/recurring';
 import { parseCSV, makeImportHash } from './services/importService';
 import { prisma } from './config/prisma';
 import { AppError } from './utils/AppError';
+import { computeNetWorthStatement } from './services/dashboardService';
 
 const app = express();
 
@@ -160,7 +161,7 @@ app.post(
     const toCreate = txsWithHash.filter((t) => !t.hash || !existingHashes.has(t.hash));
     const duplicates = txsWithHash.length - toCreate.length;
 
-    // Atomic batch insert — all succeed or all fail
+    // Atomic batch insert + balance sync — all succeed or all fail
     let imported = 0;
     const errors: string[] = [];
     try {
@@ -179,6 +180,16 @@ app.post(
             },
           });
           imported++;
+        }
+        // Sync account balance atomically with the inserts
+        if (accountId && toCreate.length > 0) {
+          const netDelta = toCreate.reduce((sum, t) => sum + (t.type === 'INCOME' ? t.amount : -t.amount), 0);
+          if (netDelta !== 0) {
+            await tx.bankAccount.update({
+              where: { id: accountId },
+              data: { currentBalance: { increment: netDelta } },
+            });
+          }
         }
       });
     } catch (err) {
@@ -239,40 +250,8 @@ app.get('/api/reports/spending-by-category', requireAuth, asyncHandler(async (re
 
 app.get('/api/reports/net-worth-statement', requireAuth, asyncHandler(async (req, res) => {
   const userId = req.user!.userId;
-  const [accounts, fds, rds, investments, gold, realestate, loans] = await Promise.all([
-    prisma.bankAccount.findMany({ where: { userId, isActive: true } }),
-    prisma.fixedDeposit.findMany({ where: { userId, status: 'ACTIVE' } }),
-    prisma.recurringDeposit.findMany({ where: { userId, status: 'ACTIVE' } }),
-    prisma.investment.findMany({ where: { userId } }),
-    prisma.goldHolding.findMany({ where: { userId } }),
-    prisma.realEstate.findMany({ where: { userId } }),
-    prisma.loan.findMany({ where: { userId } }),
-  ]);
-
-  const exchangeRates = await prisma.exchangeRate.findMany({ where: { toCurrency: 'INR' } });
-  const rateMap: Record<string, number> = {};
-  exchangeRates.forEach((r) => { rateMap[r.fromCurrency] = Number(r.rate); });
-
-  const assets = {
-    bankBalances: accounts.reduce((s, a) => s + Number(a.currentBalance), 0),
-    fixedDeposits: fds.reduce((s, f) => s + Number(f.maturityAmount), 0),
-    recurringDeposits: rds.reduce((s, r) => s + Number(r.totalDeposited), 0),
-    investments: investments.reduce((s, i) => {
-      const fx = i.currency === 'INR' ? 1 : (rateMap[i.currency] ?? 1);
-      return s + Number(i.unitsOrQuantity) * Number(i.currentPricePerUnit) * fx;
-    }, 0),
-    gold: gold.reduce((s, g) => s + Number(g.quantityGrams) * Number(g.currentPricePerGram), 0),
-    realEstate: realestate.reduce((s, p) => s + Number(p.currentValue), 0),
-  };
-
-  const liabilities = {
-    loans: loans.reduce((s, l) => s + Number(l.outstandingBalance), 0),
-  };
-
-  const totalAssets = Object.values(assets).reduce((s, v) => s + v, 0);
-  const totalLiabilities = Object.values(liabilities).reduce((s, v) => s + v, 0);
-
-  sendSuccess(res, { assets, liabilities, totalAssets, totalLiabilities, netWorth: totalAssets - totalLiabilities });
+  const statement = await computeNetWorthStatement(userId);
+  sendSuccess(res, statement);
 }));
 
 // ── Error handler (must be last) ──────────────────────────────────────────────

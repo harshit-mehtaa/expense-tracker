@@ -121,36 +121,112 @@ export async function createTransaction(
     tags?: string[];
     isRecurring?: boolean;
     gstAmount?: number;
+    transferToAccountId?: string; // Double-entry: destination account for TRANSFER type
   },
 ) {
-  if (data.bankAccountId) {
-    const account = await prisma.bankAccount.findFirst({
-      where: { id: data.bankAccountId, userId },
-    });
-    if (!account) throw AppError.notFound('Bank account');
+  if (data.type === 'TRANSFER' && !data.transferToAccountId) {
+    throw AppError.badRequest('transferToAccountId is required for TRANSFER transactions');
   }
 
-  return prisma.transaction.create({
-    data: {
-      userId,
-      bankAccountId: data.bankAccountId,
-      categoryId: data.categoryId,
-      amount: data.amount,
-      type: data.type as Prisma.EnumTransactionTypeFilter['equals'],
-      paymentMode: data.paymentMode as Prisma.EnumPaymentModeFilter['equals'] | undefined,
-      upiIdUsed: data.upiIdUsed,
-      description: data.description,
-      date: new Date(data.date),
-      tags: data.tags ?? [],
-      isRecurring: data.isRecurring ?? false,
-      gstAmount: data.gstAmount,
-      // importHash is null for manual transactions
-    },
-    include: {
-      category: { select: { name: true, color: true } },
-      bankAccount: { select: { bankName: true } },
-    },
+  return prisma.$transaction(async (tx) => {
+    // Validate source account ownership
+    if (data.bankAccountId) {
+      const account = await tx.bankAccount.findFirst({ where: { id: data.bankAccountId, userId } });
+      if (!account) throw AppError.notFound('Bank account');
+    }
+
+    // TRANSFER double-entry: create debit on source + credit on destination
+    if (data.type === 'TRANSFER' && data.transferToAccountId) {
+      const destAccount = await tx.bankAccount.findFirst({ where: { id: data.transferToAccountId, userId } });
+      if (!destAccount) throw AppError.notFound('Destination bank account');
+
+      // Debit leg (source account)
+      const debitTx = await tx.transaction.create({
+        data: {
+          userId,
+          bankAccountId: data.bankAccountId,
+          categoryId: data.categoryId,
+          amount: data.amount,
+          type: 'EXPENSE',
+          paymentMode: data.paymentMode as Prisma.EnumPaymentModeFilter['equals'] | undefined,
+          description: data.description,
+          date: new Date(data.date),
+          tags: data.tags ?? [],
+          isRecurring: data.isRecurring ?? false,
+          gstAmount: data.gstAmount,
+        },
+      });
+
+      // Credit leg (destination account)
+      await tx.transaction.create({
+        data: {
+          userId,
+          bankAccountId: data.transferToAccountId,
+          categoryId: data.categoryId,
+          amount: data.amount,
+          type: 'INCOME',
+          description: data.description,
+          date: new Date(data.date),
+          tags: data.tags ?? [],
+          isRecurring: false,
+        },
+      });
+
+      // Update balances atomically
+      if (data.bankAccountId) {
+        await tx.bankAccount.update({
+          where: { id: data.bankAccountId },
+          data: { currentBalance: { decrement: data.amount } },
+        });
+      }
+      await tx.bankAccount.update({
+        where: { id: data.transferToAccountId },
+        data: { currentBalance: { increment: data.amount } },
+      });
+
+      // TODO(v2): Link the two legs via a transferPairId field so deleting one can cascade to the other
+      return debitTx;
+    }
+
+    // Single-leg transaction (INCOME or EXPENSE)
+    const created = await tx.transaction.create({
+      data: {
+        userId,
+        bankAccountId: data.bankAccountId,
+        categoryId: data.categoryId,
+        amount: data.amount,
+        type: data.type as Prisma.EnumTransactionTypeFilter['equals'],
+        paymentMode: data.paymentMode as Prisma.EnumPaymentModeFilter['equals'] | undefined,
+        upiIdUsed: data.upiIdUsed,
+        description: data.description,
+        date: new Date(data.date),
+        tags: data.tags ?? [],
+        isRecurring: data.isRecurring ?? false,
+        gstAmount: data.gstAmount,
+        // importHash is null for manual transactions
+      },
+      include: {
+        category: { select: { name: true, color: true } },
+        bankAccount: { select: { bankName: true } },
+      },
+    });
+
+    // Update source account balance (INCOME → +, EXPENSE/TRANSFER → -)
+    if (data.bankAccountId) {
+      const delta = data.type === 'INCOME' ? data.amount : -data.amount;
+      await tx.bankAccount.update({
+        where: { id: data.bankAccountId },
+        data: { currentBalance: { increment: delta } },
+      });
+    }
+
+    return created;
   });
+}
+
+/** Returns the balance delta for a transaction type. INCOME → positive, EXPENSE/TRANSFER → negative. */
+function balanceDelta(type: string, amount: number): number {
+  return type === 'INCOME' ? amount : -amount;
 }
 
 export async function updateTransaction(
@@ -168,18 +244,43 @@ export async function updateTransaction(
     gstAmount: number;
   }>,
 ) {
-  const tx = await prisma.transaction.findUnique({ where: { id: transactionId } });
-  if (!tx || tx.deletedAt) throw AppError.notFound('Transaction');
-  if (requesterRole !== 'ADMIN' && tx.userId !== userId) throw AppError.forbidden();
+  return prisma.$transaction(async (ptx) => {
+    const original = await ptx.transaction.findUnique({ where: { id: transactionId } });
+    if (!original || original.deletedAt) throw AppError.notFound('Transaction');
+    if (requesterRole !== 'ADMIN' && original.userId !== userId) throw AppError.forbidden();
 
-  return prisma.transaction.update({
-    where: { id: transactionId },
-    data: {
-      ...data,
-      type: data.type as Prisma.EnumTransactionTypeFilter['equals'] | undefined,
-      date: data.date ? new Date(data.date) : undefined,
-      updatedAt: new Date(),
-    },
+    const updated = await ptx.transaction.update({
+      where: { id: transactionId },
+      data: {
+        ...data,
+        type: data.type as Prisma.EnumTransactionTypeFilter['equals'] | undefined,
+        date: data.date ? new Date(data.date) : undefined,
+        updatedAt: new Date(),
+      },
+    });
+
+    // Recalculate balance impact if account or financial fields changed
+    const amountChanged = data.amount !== undefined && data.amount !== Number(original.amount);
+    const typeChanged = data.type !== undefined && data.type !== original.type;
+    const accountChanged = false; // updateTransaction does not support changing bankAccountId
+
+    if ((amountChanged || typeChanged) && original.bankAccountId) {
+      // Reverse the original delta, apply the new delta
+      const oldDelta = balanceDelta(original.type, Number(original.amount));
+      const newType = data.type ?? original.type;
+      const newAmount = data.amount ?? Number(original.amount);
+      const newDelta = balanceDelta(newType, newAmount);
+      const netChange = newDelta - oldDelta;
+
+      if (netChange !== 0) {
+        await ptx.bankAccount.update({
+          where: { id: original.bankAccountId },
+          data: { currentBalance: { increment: netChange } },
+        });
+      }
+    }
+
+    return updated;
   });
 }
 
@@ -188,13 +289,26 @@ export async function softDeleteTransaction(
   userId: string,
   requesterRole: string,
 ) {
-  const tx = await prisma.transaction.findUnique({ where: { id: transactionId } });
-  if (!tx || tx.deletedAt) throw AppError.notFound('Transaction');
-  if (requesterRole !== 'ADMIN' && tx.userId !== userId) throw AppError.forbidden();
+  return prisma.$transaction(async (ptx) => {
+    const original = await ptx.transaction.findUnique({ where: { id: transactionId } });
+    if (!original || original.deletedAt) throw AppError.notFound('Transaction');
+    if (requesterRole !== 'ADMIN' && original.userId !== userId) throw AppError.forbidden();
 
-  return prisma.transaction.update({
-    where: { id: transactionId },
-    data: { deletedAt: new Date() },
+    const deleted = await ptx.transaction.update({
+      where: { id: transactionId },
+      data: { deletedAt: new Date() },
+    });
+
+    // Reverse the balance impact of this transaction
+    if (original.bankAccountId) {
+      const reversal = -balanceDelta(original.type, Number(original.amount));
+      await ptx.bankAccount.update({
+        where: { id: original.bankAccountId },
+        data: { currentBalance: { increment: reversal } },
+      });
+    }
+
+    return deleted;
   });
 }
 

@@ -56,6 +56,7 @@ const txSchema = z.object({
   paymentMode: z.string().optional(),
   categoryId: z.string().optional(),
   bankAccountId: z.string().optional(),
+  transferToAccountId: z.string().optional(),
   tags: z.string().optional(),
 });
 
@@ -205,6 +206,7 @@ function AddTransactionModal({ onClose }: { onClose: () => void }) {
   });
 
   const amount = watch('amount');
+  const selectedType = watch('type');
 
   const createMutation = useMutation({
     mutationFn: (data: TxForm) => api.post('/transactions', {
@@ -262,12 +264,21 @@ function AddTransactionModal({ onClose }: { onClose: () => void }) {
               </select>
             </div>
             <div className="col-span-2 space-y-1">
-              <Label>Bank Account</Label>
+              <Label>{selectedType === 'TRANSFER' ? 'From Account' : 'Bank Account'}</Label>
               <select {...register('bankAccountId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                 <option value="">— None —</option>
                 {accounts.map((a: any) => <option key={a.id} value={a.id}>{a.bankName} ····{a.accountNumberLast4 ?? ''}</option>)}
               </select>
             </div>
+            {selectedType === 'TRANSFER' && (
+              <div className="col-span-2 space-y-1">
+                <Label>To Account</Label>
+                <select {...register('transferToAccountId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                  <option value="">— Select destination —</option>
+                  {accounts.map((a: any) => <option key={a.id} value={a.id}>{a.bankName} ····{a.accountNumberLast4 ?? ''}</option>)}
+                </select>
+              </div>
+            )}
             <div className="col-span-2 space-y-1">
               <Label>Tags (comma-separated)</Label>
               <Input {...register('tags')} placeholder="food, work, travel" />

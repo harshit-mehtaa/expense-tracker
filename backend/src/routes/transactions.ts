@@ -20,7 +20,11 @@ const createTransactionSchema = z.object({
   tags: z.array(z.string()).default([]),
   isRecurring: z.boolean().default(false),
   gstAmount: z.number().nonnegative().optional(),
-});
+  transferToAccountId: z.string().cuid().optional(), // Double-entry destination for TRANSFER type
+}).refine(
+  (d) => d.type !== 'TRANSFER' || !!d.transferToAccountId,
+  { message: 'transferToAccountId is required for TRANSFER transactions', path: ['transferToAccountId'] },
+);
 
 router.get(
   '/',
