@@ -105,7 +105,7 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string) {
   const thirtyDaysOut = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
   const userFilter = requesterRole === 'ADMIN' ? {} : { userId };
 
-  const [fdsMaturingSoon, sipdueThisMonth, insurancePremiumsDue, loansWithEmi, advanceTax] =
+  const [fdsMaturingSoon, sipdueThisMonth, insurancePremiumsDue, loansWithEmi, advanceTax, rdsMaturing] =
     await Promise.all([
       // FDs maturing in 30 days
       prisma.fixedDeposit.findMany({
@@ -148,6 +148,15 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string) {
         where: { dueDate: { gte: now, lte: thirtyDaysOut } },
         orderBy: { dueDate: 'asc' },
       }),
+      // RDs maturing in 30 days
+      prisma.recurringDeposit.findMany({
+        where: {
+          ...userFilter,
+          status: 'ACTIVE',
+          maturityDate: { gte: now, lte: thirtyDaysOut },
+        },
+        select: { id: true, bankName: true, maturityDate: true, maturityAmount: true },
+      }),
     ]);
 
   const alerts = [];
@@ -164,17 +173,31 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string) {
     });
   }
 
+  for (const rd of rdsMaturing) {
+    const daysUntil = Math.ceil((rd.maturityDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    alerts.push({
+      type: 'RD_MATURITY' as const,
+      title: `RD with ${rd.bankName} matures`,
+      amount: Number(rd.maturityAmount),
+      dueDate: rd.maturityDate.toISOString(),
+      daysUntilDue: daysUntil,
+      entityId: rd.id,
+    });
+  }
+
   for (const sip of sipdueThisMonth) {
     const today = now.getDate();
     const daysUntil = sip.sipDate >= today ? sip.sipDate - today : 30 - today + sip.sipDate;
-    alerts.push({
-      type: 'SIP' as const,
-      title: `SIP: ${sip.fundName}`,
-      amount: Number(sip.monthlyAmount),
-      dueDate: new Date(now.getFullYear(), now.getMonth(), sip.sipDate).toISOString(),
-      daysUntilDue: daysUntil,
-      entityId: sip.id,
-    });
+    if (daysUntil <= 7) {
+      alerts.push({
+        type: 'SIP' as const,
+        title: `SIP: ${sip.fundName}`,
+        amount: Number(sip.monthlyAmount),
+        dueDate: new Date(now.getFullYear(), now.getMonth(), sip.sipDate).toISOString(),
+        daysUntilDue: daysUntil,
+        entityId: sip.id,
+      });
+    }
   }
 
   for (const policy of insurancePremiumsDue) {

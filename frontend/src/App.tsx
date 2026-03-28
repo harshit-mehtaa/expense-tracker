@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
 import { AppShell } from '@/components/layout/AppShell';
@@ -16,11 +16,16 @@ import ReportsPage from '@/pages/admin/Reports';
 import SettingsPage from '@/pages/Settings';
 import GoldRealEstatePage from '@/pages/investments/GoldRealEstate';
 import RecurringRulesPage from '@/pages/transactions/RecurringRules';
+import ChangePasswordPage from '@/pages/ChangePassword';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
+  const location = useLocation();
   if (isLoading) return <PageLoader />;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (user?.mustChangePassword && location.pathname !== '/change-password') {
+    return <Navigate to="/change-password" replace />;
+  }
   return <>{children}</>;
 }
 
@@ -36,6 +41,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/change-password" element={<ChangePasswordPage />} />
 
       <Route
         path="/"

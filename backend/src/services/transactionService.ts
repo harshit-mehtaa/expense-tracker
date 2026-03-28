@@ -122,6 +122,7 @@ export async function createTransaction(
     isRecurring?: boolean;
     gstAmount?: number;
     transferToAccountId?: string; // Double-entry: destination account for TRANSFER type
+    loanId?: string; // Linked loan — decrements outstandingBalance when type=EXPENSE
   },
 ) {
   if (data.type === 'TRANSFER' && !data.transferToAccountId) {
@@ -191,6 +192,18 @@ export async function createTransaction(
       return debitTx;
     }
 
+    // loanId linkage is only valid for EXPENSE transactions
+    const effectiveLoanId = data.loanId && data.type === 'EXPENSE' ? data.loanId : undefined;
+
+    // Validate loan ownership and balance if loanId provided
+    if (effectiveLoanId) {
+      const loan = await tx.loan.findFirst({ where: { id: effectiveLoanId, userId } });
+      if (!loan) throw AppError.notFound('Loan');
+      if (data.amount > Number(loan.outstandingBalance)) {
+        throw AppError.badRequest('Payment amount exceeds outstanding loan balance');
+      }
+    }
+
     // Single-leg transaction (INCOME or EXPENSE)
     const created = await tx.transaction.create({
       data: {
@@ -206,6 +219,7 @@ export async function createTransaction(
         tags: data.tags ?? [],
         isRecurring: data.isRecurring ?? false,
         gstAmount: data.gstAmount,
+        loanId: effectiveLoanId,
         // importHash is null for manual transactions
       },
       include: {
@@ -220,6 +234,14 @@ export async function createTransaction(
       await tx.bankAccount.update({
         where: { id: data.bankAccountId },
         data: { currentBalance: { increment: delta } },
+      });
+    }
+
+    // Decrement loan outstanding balance for linked EXPENSE transactions
+    if (effectiveLoanId) {
+      await tx.loan.update({
+        where: { id: effectiveLoanId },
+        data: { outstandingBalance: { decrement: data.amount } },
       });
     }
 
@@ -280,6 +302,28 @@ export async function updateTransaction(
           where: { id: original.bankAccountId },
           data: { currentBalance: { increment: netChange } },
         });
+      }
+    }
+
+    // Recalculate loan outstanding balance if a loan-linked EXPENSE has its amount changed
+    if ((amountChanged || typeChanged) && original.loanId) {
+      const newType = data.type ?? original.type;
+      const newAmount = data.amount ?? Number(original.amount);
+      const wasLoanExpense = original.type === 'EXPENSE';
+      const isLoanExpense = newType === 'EXPENSE';
+
+      if (wasLoanExpense || isLoanExpense) {
+        // Reverse old loan impact, apply new
+        const oldLoanDecrement = wasLoanExpense ? Number(original.amount) : 0;
+        const newLoanDecrement = isLoanExpense ? newAmount : 0;
+        const loanNetChange = oldLoanDecrement - newLoanDecrement; // positive = restore, negative = more decrement
+
+        if (loanNetChange !== 0) {
+          await ptx.loan.update({
+            where: { id: original.loanId },
+            data: { outstandingBalance: { increment: loanNetChange } },
+          });
+        }
       }
     }
 

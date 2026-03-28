@@ -76,6 +76,42 @@ export async function updateAccount(
   });
 }
 
+export async function reconcileAccount(
+  accountId: string,
+  requesterId: string,
+  requesterRole: string,
+  actualBalance: number,
+  note?: string,
+) {
+  const account = await getAccountById(accountId, requesterId, requesterRole);
+
+  return prisma.$transaction(async (tx) => {
+    const currentBalance = Number(account.currentBalance);
+    const delta = actualBalance - currentBalance;
+
+    // Create a correction transaction only if there's a discrepancy
+    if (delta !== 0) {
+      await tx.transaction.create({
+        data: {
+          userId: account.userId,
+          bankAccountId: accountId,
+          amount: Math.abs(delta),
+          type: delta > 0 ? 'INCOME' : 'EXPENSE',
+          description: note ?? 'Balance Reconciliation',
+          date: new Date(),
+          tags: ['reconciliation'],
+        },
+      });
+    }
+
+    // Set balance directly to the confirmed actual value
+    return tx.bankAccount.update({
+      where: { id: accountId },
+      data: { currentBalance: actualBalance },
+    });
+  });
+}
+
 export async function deleteAccount(accountId: string, requesterId: string, requesterRole: string) {
   await getAccountById(accountId, requesterId, requesterRole);
 

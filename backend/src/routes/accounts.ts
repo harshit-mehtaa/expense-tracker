@@ -67,4 +67,24 @@ router.delete(
   }),
 );
 
+const reconcileSchema = z.object({
+  actualBalance: z.number().min(0, 'Balance cannot be negative'),
+  note: z.string().optional(),
+});
+
+router.post(
+  '/:id/reconcile',
+  asyncHandler(async (req: Request, res: Response) => {
+    const { actualBalance, note } = reconcileSchema.parse(req.body);
+    const account = await accountService.reconcileAccount(
+      req.params.id,
+      req.user!.userId,
+      req.user!.role,
+      actualBalance,
+      note,
+    );
+    sendSuccess(res, account, 'Account reconciled');
+  }),
+);
+
 export default router;

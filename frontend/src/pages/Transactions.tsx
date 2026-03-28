@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import api from '@/lib/api';
+import { loansApi } from '@/api/loans';
 import { cn } from '@/lib/utils';
 
 interface Transaction {
@@ -57,6 +58,7 @@ const txSchema = z.object({
   categoryId: z.string().optional(),
   bankAccountId: z.string().optional(),
   transferToAccountId: z.string().optional(),
+  loanId: z.string().optional(),
   tags: z.string().optional(),
 });
 
@@ -73,6 +75,13 @@ function useAccounts() {
   return useQuery({
     queryKey: ['accounts'],
     queryFn: () => api.get<{ data: any[] }>('/accounts').then((r) => r.data.data),
+  });
+}
+
+function useLoans() {
+  return useQuery({
+    queryKey: ['loans'],
+    queryFn: () => loansApi.getAll(),
   });
 }
 
@@ -199,6 +208,7 @@ function AddTransactionModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const { data: categories = [] } = useCategories();
   const { data: accounts = [] } = useAccounts();
+  const { data: loans = [] } = useLoans();
 
   const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<TxForm>({
     resolver: zodResolver(txSchema),
@@ -212,8 +222,14 @@ function AddTransactionModal({ onClose }: { onClose: () => void }) {
     mutationFn: (data: TxForm) => api.post('/transactions', {
       ...data,
       tags: data.tags ? data.tags.split(',').map((t) => t.trim()) : [],
+      loanId: data.loanId || undefined,
     }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['transactions'] }); onClose(); reset(); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+      qc.invalidateQueries({ queryKey: ['loans'] });
+      onClose();
+      reset();
+    },
   });
 
   return (
@@ -276,6 +292,19 @@ function AddTransactionModal({ onClose }: { onClose: () => void }) {
                 <select {...register('transferToAccountId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                   <option value="">— Select destination —</option>
                   {accounts.map((a: any) => <option key={a.id} value={a.id}>{a.bankName} ····{a.accountNumberLast4 ?? ''}</option>)}
+                </select>
+              </div>
+            )}
+            {selectedType === 'EXPENSE' && loans.length > 0 && (
+              <div className="col-span-2 space-y-1">
+                <Label>Link to Loan (optional)</Label>
+                <select {...register('loanId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                  <option value="">— None —</option>
+                  {loans.map((l: any) => (
+                    <option key={l.id} value={l.id}>
+                      {l.lenderName} ({l.loanType}) — ₹{Number(l.outstandingBalance).toLocaleString('en-IN')} outstanding
+                    </option>
+                  ))}
                 </select>
               </div>
             )}

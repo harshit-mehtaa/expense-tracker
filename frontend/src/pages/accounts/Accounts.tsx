@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Building2, Plus, Trash2, Edit2, Eye } from 'lucide-react';
+import { Building2, Plus, Trash2, Edit2, Eye, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -49,6 +49,9 @@ export default function AccountsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [maskedBalances, setMaskedBalances] = useState(true);
+  const [reconciling, setReconciling] = useState<any>(null);
+  const [reconcileBalance, setReconcileBalance] = useState('');
+  const [reconcileNote, setReconcileNote] = useState('');
 
   const { data: accounts = [], isLoading } = useAccounts();
 
@@ -70,6 +73,18 @@ export default function AccountsPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/accounts/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['accounts'] }),
+  });
+
+  const reconcileMutation = useMutation({
+    mutationFn: ({ id, actualBalance, note }: { id: string; actualBalance: number; note?: string }) =>
+      api.post(`/accounts/${id}/reconcile`, { actualBalance, note }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['accounts'] });
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+      setReconciling(null);
+      setReconcileBalance('');
+      setReconcileNote('');
+    },
   });
 
   function startEdit(account: any) {
@@ -136,6 +151,7 @@ export default function AccountsPage() {
                   )}
                 </div>
                 <div className="flex gap-1">
+                  <Button variant="ghost" size="icon" title="Reconcile balance" onClick={() => { setReconciling(account); setReconcileBalance(String(Number(account.currentBalance))); setReconcileNote(''); }}><RefreshCw className="h-4 w-4" /></Button>
                   <Button variant="ghost" size="icon" onClick={() => startEdit(account)}><Edit2 className="h-4 w-4" /></Button>
                   <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(account.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
                 </div>
@@ -154,6 +170,59 @@ export default function AccountsPage() {
               {account.interestRate && <p className="text-xs text-muted-foreground">Interest: {account.interestRate}% p.a.</p>}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Reconcile Modal */}
+      {reconciling && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-background rounded-lg border shadow-xl w-full max-w-sm p-6 space-y-4">
+            <h2 className="text-xl font-semibold">Reconcile Balance</h2>
+            <p className="text-sm text-muted-foreground">
+              {reconciling.bankName} ····{reconciling.accountNumberLast4 ?? ''}
+            </p>
+            <div className="space-y-1">
+              <Label>Actual Balance (₹)</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={reconcileBalance}
+                onChange={(e) => setReconcileBalance(e.target.value)}
+                placeholder="Enter your actual bank balance"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Note (optional)</Label>
+              <Input
+                value={reconcileNote}
+                onChange={(e) => setReconcileNote(e.target.value)}
+                placeholder="e.g. Monthly bank statement check"
+              />
+            </div>
+            {reconcileMutation.isError && (
+              <p className="text-sm text-destructive">
+                {(reconcileMutation.error as any)?.response?.data?.message ?? 'Reconciliation failed'}
+              </p>
+            )}
+            <div className="flex justify-end gap-3 pt-2">
+              <Button
+                variant="outline"
+                onClick={() => { setReconciling(null); setReconcileBalance(''); setReconcileNote(''); }}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => reconcileMutation.mutate({
+                  id: reconciling.id,
+                  actualBalance: parseFloat(reconcileBalance),
+                  note: reconcileNote || undefined,
+                })}
+                disabled={reconcileMutation.isPending || !reconcileBalance || isNaN(parseFloat(reconcileBalance))}
+              >
+                {reconcileMutation.isPending ? 'Reconciling…' : 'Reconcile'}
+              </Button>
+            </div>
+          </div>
         </div>
       )}
 

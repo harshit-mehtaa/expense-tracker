@@ -22,6 +22,7 @@ const createTransactionSchema = z.object({
   isRecurring: z.boolean().default(false),
   gstAmount: z.number().nonnegative().optional(),
   transferToAccountId: z.string().cuid().optional(), // Double-entry destination for TRANSFER type
+  loanId: z.string().cuid().optional(), // Linked loan for EMI/payment tracking
 }).refine(
   (d) => d.type !== 'TRANSFER' || !!d.transferToAccountId,
   { message: 'transferToAccountId is required for TRANSFER transactions', path: ['transferToAccountId'] },

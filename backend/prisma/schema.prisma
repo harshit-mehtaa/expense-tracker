@@ -600,6 +600,7 @@ model Transaction {
   gstAmount     Decimal?        @db.Decimal(15, 2)
   importHash    String?         // SHA-256(date+amount+description+accountId) — null for manual
   transferPairId String?        // Links both legs of a double-entry TRANSFER for cascade delete
+  loanId        String?         // Linked loan for EMI/payment tracking
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
   deletedAt     DateTime?       // Soft delete
@@ -607,6 +608,7 @@ model Transaction {
   user         User            @relation(fields: [userId], references: [id])
   bankAccount  BankAccount?    @relation(fields: [bankAccountId], references: [id])
   category     Category?       @relation(fields: [categoryId], references: [id])
+  loan         Loan?           @relation(fields: [loanId], references: [id], onDelete: SetNull)
   recurringRule RecurringRule?
   documents    Document[]
 
@@ -619,6 +621,7 @@ model Transaction {
   @@index([deletedAt])
   @@index([importHash])
   @@index([transferPairId])
+  @@index([loanId])
 }
 
 model RecurringRule {
@@ -683,10 +686,11 @@ model Loan {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
-  user        User         @relation(fields: [userId], references: [id])
-  bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
-  realEstate  RealEstate[]
-  prepayments LoanPrepayment[]
+  user         User            @relation(fields: [userId], references: [id])
+  bankAccount  BankAccount?    @relation(fields: [bankAccountId], references: [id])
+  realEstate   RealEstate[]
+  prepayments  LoanPrepayment[]
+  transactions Transaction[]
 
   @@index([userId])
   @@index([loanType])
