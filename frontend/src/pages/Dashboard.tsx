@@ -1,8 +1,8 @@
 import { useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  BarChart,
-  Bar,
+  AreaChart,
+  Area,
   LineChart,
   Line,
   XAxis,
@@ -13,8 +13,8 @@ import {
   PieChart,
   Pie,
   Cell,
-  Legend,
 } from 'recharts';
+import { CHART_PALETTE, useChartGradients, CustomTooltip, AXIS_STYLE, GRID_STYLE } from '@/lib/chartUtils';
 import { TrendingUp, TrendingDown, ArrowUpRight, Bell, Target } from 'lucide-react';
 import { useFY } from '@/contexts/FYContext';
 import { fetchDashboardSummary, fetchCashflow, fetchUpcomingAlerts, fetchNetWorthHistory, upsertNetWorthSnapshot } from '@/api/dashboard';
@@ -25,15 +25,10 @@ import { cn } from '@/lib/utils';
 import { useBudgetsVsActuals } from '@/hooks/useBudgetsVsActuals';
 import { Link } from 'react-router-dom';
 
-// Indian-palette chart colors (saffron/green/navy)
-const CHART_COLORS = {
-  income: '#138808',  // India green
-  expense: '#FF9933', // Saffron
-  net: '#000080',     // Navy
-};
 
 export default function DashboardPage() {
   const { selectedFY } = useFY();
+  const { gradIds, GradDefs } = useChartGradients();
 
   const { data: summary, isLoading: summaryLoading } = useQuery({
     queryKey: ['dashboard', 'summary', selectedFY],
@@ -130,34 +125,56 @@ export default function DashboardPage() {
       <div className="grid gap-4 lg:grid-cols-3">
         {/* Cash Flow chart (spans 2 cols) */}
         <div className="lg:col-span-2 rounded-xl border border-border bg-card p-4">
-          <h2 className="mb-4 text-base font-semibold">Cash Flow — FY {selectedFY}</h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-base font-semibold">Cash Flow — FY {selectedFY}</h2>
+            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: CHART_PALETTE.income }} />
+                Income
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: CHART_PALETTE.expense }} />
+                Expense
+              </span>
+            </div>
+          </div>
           {cashflowLoading ? (
             <div className="h-64 flex items-center justify-center">
               <div className="animate-pulse text-muted-foreground">Loading chart...</div>
             </div>
           ) : (
             <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={cashflow} barCategoryGap="30%">
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                <XAxis
-                  dataKey="month"
-                  tick={{ fontSize: 12 }}
-                  className="text-muted-foreground"
-                />
+              <AreaChart data={cashflow} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                <GradDefs />
+                <CartesianGrid {...GRID_STYLE} />
+                <XAxis dataKey="month" {...AXIS_STYLE} />
                 <YAxis
                   tickFormatter={(v) => formatINRShort(v)}
-                  tick={{ fontSize: 11 }}
-                  className="text-muted-foreground"
                   width={70}
+                  {...AXIS_STYLE}
                 />
-                <Tooltip
-                  formatter={(value: number) => formatINRShort(value)}
-                  labelStyle={{ fontWeight: 600 }}
+                <Tooltip content={<CustomTooltip formatter={formatINRShort} />} />
+                <Area
+                  type="monotone"
+                  dataKey="income"
+                  name="Income"
+                  stroke={CHART_PALETTE.income}
+                  fill={`url(#${gradIds.income})`}
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={{ r: 4, strokeWidth: 0 }}
                 />
-                <Bar dataKey="income" name="Income" fill={CHART_COLORS.income} radius={[3, 3, 0, 0]} />
-                <Bar dataKey="expense" name="Expense" fill={CHART_COLORS.expense} radius={[3, 3, 0, 0]} />
-                <Legend />
-              </BarChart>
+                <Area
+                  type="monotone"
+                  dataKey="expense"
+                  name="Expense"
+                  stroke={CHART_PALETTE.expense}
+                  fill={`url(#${gradIds.expense})`}
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={{ r: 4, strokeWidth: 0 }}
+                />
+              </AreaChart>
             </ResponsiveContainer>
           )}
         </div>
@@ -174,15 +191,16 @@ export default function DashboardPage() {
                 ]}
                 cx="50%"
                 cy="50%"
-                innerRadius={50}
+                innerRadius={52}
                 outerRadius={80}
                 dataKey="value"
+                paddingAngle={2}
+                strokeWidth={0}
               >
-                <Cell fill={CHART_COLORS.income} />
-                <Cell fill={CHART_COLORS.expense} />
+                <Cell fill={CHART_PALETTE.income} />
+                <Cell fill={CHART_PALETTE.expense} />
               </Pie>
-              <Tooltip formatter={(v: number) => formatINRShort(v)} />
-              <Legend />
+              <Tooltip content={<CustomTooltip formatter={formatINRShort} />} />
             </PieChart>
           </ResponsiveContainer>
           <div className="mt-2 text-center">
@@ -296,12 +314,20 @@ export default function DashboardPage() {
             <p className="text-xs text-muted-foreground mt-0.5">Monthly snapshots — based on data at time of capture</p>
           </div>
           <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={netWorthChartData}>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-              <XAxis dataKey="month" tick={{ fontSize: 11 }} className="text-muted-foreground" />
-              <YAxis tickFormatter={(v) => formatINRShort(v)} tick={{ fontSize: 11 }} className="text-muted-foreground" width={70} />
-              <Tooltip formatter={(v: number) => [formatINRShort(v), 'Net Worth']} />
-              <Line type="monotone" dataKey="netWorth" stroke={CHART_COLORS.net} dot={{ r: 3 }} strokeWidth={2} />
+            <LineChart data={netWorthChartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+              <CartesianGrid {...GRID_STYLE} />
+              <XAxis dataKey="month" {...AXIS_STYLE} />
+              <YAxis tickFormatter={(v) => formatINRShort(v)} width={70} {...AXIS_STYLE} />
+              <Tooltip content={<CustomTooltip formatter={(v) => formatINRShort(v)} />} />
+              <Line
+                type="monotone"
+                dataKey="netWorth"
+                name="Net Worth"
+                stroke={CHART_PALETTE.net}
+                strokeWidth={2.5}
+                dot={{ r: 3, fill: CHART_PALETTE.net, strokeWidth: 0 }}
+                activeDot={{ r: 5, strokeWidth: 0 }}
+              />
             </LineChart>
           </ResponsiveContainer>
         </div>

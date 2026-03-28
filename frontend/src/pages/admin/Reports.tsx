@@ -3,8 +3,9 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useFY } from '@/contexts/FYContext';
 import api from '@/lib/api';
+import { CHART_PALETTE, CustomTooltip, AXIS_STYLE, GRID_STYLE } from '@/lib/chartUtils';
 
-const COLORS = ['#FF9933', '#138808', '#000080', '#9B2335', '#2E86C1', '#8E44AD', '#117A65', '#784212', '#D4AC0D'];
+const fmt = (v: number) => `₹${v.toLocaleString('en-IN')}`;
 
 export default function ReportsPage() {
   const { selectedFY } = useFY();
@@ -22,7 +23,7 @@ export default function ReportsPage() {
   const pieData = spendingByCat.slice(0, 9).map((item: any, i: number) => ({
     name: item.category?.name ?? 'Uncategorized',
     value: item.total,
-    color: COLORS[i % COLORS.length],
+    color: CHART_PALETTE.categorical[i % CHART_PALETTE.categorical.length],
   }));
 
   const barData = spendingByCat.slice(0, 15).map((item: any) => ({
@@ -94,12 +95,21 @@ export default function ReportsPage() {
             {/* Bar Chart */}
             <div className="rounded-lg border bg-card p-4">
               <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={barData} layout="vertical" margin={{ left: 80 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                  <XAxis type="number" tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
-                  <YAxis type="category" dataKey="name" width={75} tick={{ fontSize: 11 }} />
-                  <Tooltip formatter={(val: number) => [`₹${val.toLocaleString('en-IN')}`, 'Spent']} />
-                  <Bar dataKey="amount" fill="#FF9933" radius={[0, 3, 3, 0]} />
+                <BarChart data={barData} layout="vertical" margin={{ left: 80, top: 4, right: 8, bottom: 0 }}>
+                  <CartesianGrid {...GRID_STYLE} horizontal={false} />
+                  <XAxis
+                    type="number"
+                    tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`}
+                    {...AXIS_STYLE}
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    width={75}
+                    {...AXIS_STYLE}
+                  />
+                  <Tooltip content={<CustomTooltip formatter={fmt} />} />
+                  <Bar dataKey="amount" name="Spent" fill={CHART_PALETTE.expense} radius={[0, 4, 4, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -108,10 +118,21 @@ export default function ReportsPage() {
             <div className="space-y-4">
               <ResponsiveContainer width="100%" height={200}>
                 <PieChart>
-                  <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={false}>
+                  <Pie
+                    data={pieData}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={44}
+                    outerRadius={80}
+                    paddingAngle={2}
+                    strokeWidth={0}
+                    label={false}
+                  >
                     {pieData.map((entry: any, i: number) => <Cell key={i} fill={entry.color} />)}
                   </Pie>
-                  <Tooltip formatter={(val: number) => [`₹${val.toLocaleString('en-IN')}`, '']} />
+                  <Tooltip content={<CustomTooltip formatter={fmt} />} />
                 </PieChart>
               </ResponsiveContainer>
 
@@ -121,7 +142,7 @@ export default function ReportsPage() {
                     <div className="flex items-center gap-2">
                       <span
                         className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0"
-                        style={{ backgroundColor: COLORS[i % COLORS.length] }}
+                        style={{ backgroundColor: CHART_PALETTE.categorical[i % CHART_PALETTE.categorical.length] }}
                       />
                       <span>{item.category?.name ?? 'Uncategorized'}</span>
                     </div>

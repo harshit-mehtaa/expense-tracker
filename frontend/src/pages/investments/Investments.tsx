@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { TrendingUp, Plus, Trash2, Edit2, Layers } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
+import { CHART_PALETTE, CustomTooltip } from '@/lib/chartUtils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -19,11 +20,6 @@ const INV_TYPES: Record<string, string> = {
   BONDS: 'Bonds', CRYPTO: 'Crypto', OTHER: 'Other',
 };
 
-const TYPE_COLORS: Record<string, string> = {
-  STOCKS_INDIA: '#FF9933', STOCKS_FOREIGN: '#1E90FF', MUTUAL_FUND: '#138808',
-  ELSS: '#006400', PPF: '#8B4513', NPS: '#4B0082', EPF: '#800000',
-  SGB: '#FFD700', GOLD_ETF: '#DAA520', BONDS: '#2F4F4F', CRYPTO: '#FF6347', OTHER: '#808080',
-};
 
 const fdSchema = z.object({
   bankName: z.string().min(1, 'Required'),
@@ -101,10 +97,10 @@ export default function InvestmentsPage() {
 
   // Asset allocation pie chart data
   const pieData = portfolio
-    ? Object.entries(portfolio.byType).map(([type, val]) => ({
+    ? Object.entries(portfolio.byType).map(([type, val], i) => ({
         name: INV_TYPES[type] ?? type,
         value: val.current,
-        color: TYPE_COLORS[type] ?? '#808080',
+        color: CHART_PALETTE.categorical[i % CHART_PALETTE.categorical.length],
       })).filter((d) => d.value > 0)
     : [];
 
@@ -255,10 +251,21 @@ export default function InvestmentsPage() {
               <>
                 <ResponsiveContainer width="100%" height={200}>
                   <PieChart>
-                    <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={false}>
+                    <Pie
+                      data={pieData}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={44}
+                      outerRadius={80}
+                      paddingAngle={2}
+                      strokeWidth={0}
+                      label={false}
+                    >
                       {pieData.map((entry, i) => <Cell key={i} fill={entry.color} />)}
                     </Pie>
-                    <Tooltip formatter={(val: number) => [`₹${(val / 100000).toFixed(1)}L`, '']} />
+                    <Tooltip content={<CustomTooltip formatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />} />
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="space-y-1 mt-2">
