@@ -99,14 +99,26 @@ router.post(
   }),
 );
 
+const updateTransactionSchema = z.object({
+  description: z.string().min(1).max(500).optional(),
+  amount: z.number().positive().optional(),
+  type: z.enum(['INCOME', 'EXPENSE']).optional(), // TRANSFER edits are not supported
+  date: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional(),
+  paymentMode: z.enum(['UPI', 'NEFT', 'RTGS', 'IMPS', 'CASH', 'CHEQUE', 'CARD', 'EMI', 'AUTO_DEBIT']).optional(),
+  categoryId: z.string().cuid().optional().nullable(),
+  tags: z.array(z.string()).optional(),
+  gstAmount: z.number().nonnegative().optional(),
+});
+
 router.put(
   '/:id',
   asyncHandler(async (req: Request, res: Response) => {
+    const body = updateTransactionSchema.parse(req.body);
     const tx = await transactionService.updateTransaction(
       req.params.id,
       req.user!.userId,
       req.user!.role,
-      req.body,
+      body,
     );
     sendSuccess(res, tx, 'Transaction updated');
   }),

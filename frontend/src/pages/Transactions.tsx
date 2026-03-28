@@ -7,13 +7,15 @@ import { useFY } from '@/contexts/FYContext';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
-import { Receipt, Upload, Plus, X, CheckCircle, AlertCircle, Download } from 'lucide-react';
+import { Receipt, Upload, Plus, X, CheckCircle, AlertCircle, Download, Pencil, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import api from '@/lib/api';
 import { loansApi } from '@/api/loans';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/contexts/AuthContext';
+import { useToast } from '@/contexts/ToastContext';
 
 interface Transaction {
   id: string;
@@ -23,7 +25,10 @@ interface Transaction {
   date: string;
   paymentMode?: string;
   categoryName?: string;
+  categoryId?: string;
   bankAccountName?: string;
+  userId: string;
+  transferPairId?: string | null;
 }
 
 interface TransactionsResponse {
@@ -64,6 +69,18 @@ const txSchema = z.object({
 
 type TxForm = z.infer<typeof txSchema>;
 
+// Edit schema: TRANSFER type not allowed, bankAccountId excluded, paymentMode empty→undefined
+const editTxSchema = z.object({
+  description: z.string().min(1, 'Required'),
+  amount: z.coerce.number().positive('Must be positive'),
+  type: z.enum(['INCOME', 'EXPENSE']),
+  date: z.string(),
+  paymentMode: z.string().transform((v) => v || undefined).optional(),
+  categoryId: z.string().optional(),
+});
+
+type EditTxForm = z.infer<typeof editTxSchema>;
+
 function useCategories() {
   return useQuery({
     queryKey: ['categories'],
@@ -83,6 +100,106 @@ function useLoans() {
     queryKey: ['loans'],
     queryFn: () => loansApi.getAll(),
   });
+}
+
+function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { data: categories = [] } = useCategories();
+
+  const { register, handleSubmit, formState: { errors } } = useForm<EditTxForm>({
+    resolver: zodResolver(editTxSchema),
+    defaultValues: {
+      description: tx.description,
+      amount: tx.amount,
+      type: tx.type === 'TRANSFER' ? 'EXPENSE' : tx.type,
+      date: tx.date.slice(0, 10),
+      paymentMode: tx.paymentMode ?? '',
+      categoryId: tx.categoryId ?? '',
+    },
+  });
+
+  const editMutation = useMutation({
+    mutationFn: (data: EditTxForm) =>
+      api.put(`/transactions/${tx.id}`, {
+        ...data,
+        paymentMode: data.paymentMode || undefined,
+        categoryId: data.categoryId || undefined,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+      qc.invalidateQueries({ queryKey: ['loans'] });
+      toast({ title: 'Transaction updated', variant: 'success' });
+      onClose();
+    },
+    onError: (err: any) => {
+      toast({
+        title: 'Update failed',
+        description: err?.response?.data?.message ?? 'Something went wrong',
+        variant: 'error',
+      });
+    },
+  });
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-background rounded-lg border shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold">Edit Transaction</h2>
+          <Button variant="ghost" size="icon" onClick={onClose}><X className="h-4 w-4" /></Button>
+        </div>
+        <form onSubmit={handleSubmit((data) => editMutation.mutate(data))} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="col-span-2 space-y-1">
+              <Label>Description</Label>
+              <Input {...register('description')} />
+              {errors.description && <p className="text-xs text-destructive">{errors.description.message}</p>}
+            </div>
+            <div className="space-y-1">
+              <Label>Amount (₹)</Label>
+              <Input {...register('amount')} type="number" step="0.01" />
+              {errors.amount && <p className="text-xs text-destructive">{errors.amount.message}</p>}
+            </div>
+            <div className="space-y-1">
+              <Label>Type</Label>
+              <select {...register('type')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                <option value="EXPENSE">Expense</option>
+                <option value="INCOME">Income</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <Label>Date</Label>
+              <Input {...register('date')} type="date" />
+            </div>
+            <div className="space-y-1">
+              <Label>Payment Mode</Label>
+              <select {...register('paymentMode')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                <option value="">— Select —</option>
+                {['UPI', 'NEFT', 'RTGS', 'IMPS', 'CASH', 'CHEQUE', 'CARD', 'EMI', 'AUTO_DEBIT'].map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            </div>
+            <div className="col-span-2 space-y-1">
+              <Label>Category</Label>
+              <select {...register('categoryId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                <option value="">— Uncategorized —</option>
+                {categories.map((c: any) => (
+                  <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ` : ''}{c.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={editMutation.isPending}>
+              {editMutation.isPending ? 'Saving…' : 'Save Changes'}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
 }
 
 function ImportModal({ onClose }: { onClose: () => void }) {
@@ -204,8 +321,57 @@ function ImportModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+function DeleteConfirmModal({ tx, onClose }: { tx: Transaction; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+
+  const deleteMutation = useMutation({
+    mutationFn: () => api.delete(`/transactions/${tx.id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+      qc.invalidateQueries({ queryKey: ['loans'] });
+      toast({ title: 'Transaction deleted', variant: 'success' });
+      onClose();
+    },
+    onError: (err: any) => {
+      toast({
+        title: 'Delete failed',
+        description: err?.response?.data?.message ?? 'Something went wrong',
+        variant: 'error',
+      });
+    },
+  });
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-background rounded-lg border shadow-xl w-full max-w-sm p-6 space-y-4">
+        <h2 className="text-lg font-semibold">Delete Transaction</h2>
+        <p className="text-sm text-muted-foreground">
+          Delete <span className="font-medium text-foreground">"{tx.description}"</span>? This cannot be undone.
+        </p>
+        {deleteMutation.error && (
+          <p className="text-sm text-destructive">
+            {(deleteMutation.error as any)?.response?.data?.message ?? 'Delete failed'}
+          </p>
+        )}
+        <div className="flex justify-end gap-3">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            variant="destructive"
+            onClick={() => deleteMutation.mutate()}
+            disabled={deleteMutation.isPending}
+          >
+            {deleteMutation.isPending ? 'Deleting…' : 'Delete'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AddTransactionModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const { data: categories = [] } = useCategories();
   const { data: accounts = [] } = useAccounts();
   const { data: loans = [] } = useLoans();
@@ -227,6 +393,7 @@ function AddTransactionModal({ onClose }: { onClose: () => void }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['transactions'] });
       qc.invalidateQueries({ queryKey: ['loans'] });
+      toast({ title: 'Transaction added', variant: 'success' });
       onClose();
       reset();
     },
@@ -339,9 +506,15 @@ async function downloadTransactionsCsv(fy: string) {
 
 export default function TransactionsPage() {
   const { selectedFY } = useFY();
+  const { user } = useAuth();
   const [showImport, setShowImport] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [editingTx, setEditingTx] = useState<Transaction | null>(null);
+  const [deletingTx, setDeletingTx] = useState<Transaction | null>(null);
+
+  const canEdit = (tx: Transaction) =>
+    user?.role === 'ADMIN' || user?.id === tx.userId;
 
   async function handleExport() {
     setExporting(true);
@@ -399,6 +572,7 @@ export default function TransactionsPage() {
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Category</th>
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Mode</th>
                 <th className="px-4 py-3 text-right font-medium text-muted-foreground">Amount</th>
+                <th className="px-4 py-3 w-20"></th>
               </tr>
             </thead>
             <tbody>
@@ -422,6 +596,32 @@ export default function TransactionsPage() {
                       colorCode
                     />
                   </td>
+                  <td className="px-4 py-3">
+                    {canEdit(tx) && (
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setEditingTx(tx)}
+                          disabled={!!tx.transferPairId}
+                          title={tx.transferPairId ? 'Cannot edit transfers' : 'Edit transaction'}
+                          className="h-7 w-7"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setDeletingTx(tx)}
+                          disabled={!!tx.transferPairId}
+                          title={tx.transferPairId ? 'Cannot delete transfers' : 'Delete transaction'}
+                          className="h-7 w-7 text-destructive hover:text-destructive"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -431,6 +631,8 @@ export default function TransactionsPage() {
 
       {showImport && <ImportModal onClose={() => setShowImport(false)} />}
       {showAdd && <AddTransactionModal onClose={() => setShowAdd(false)} />}
+      {editingTx && <EditTransactionModal tx={editingTx} onClose={() => setEditingTx(null)} />}
+      {deletingTx && <DeleteConfirmModal tx={deletingTx} onClose={() => setDeletingTx(null)} />}
     </div>
   );
 }

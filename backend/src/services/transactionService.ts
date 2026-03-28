@@ -273,6 +273,9 @@ export async function updateTransaction(
     const original = await ptx.transaction.findUnique({ where: { id: transactionId } });
     if (!original || original.deletedAt) throw AppError.notFound('Transaction');
     if (requesterRole !== 'ADMIN' && original.userId !== userId) throw AppError.forbidden();
+    // TRANSFER transactions are paired double-entry records; editing one leg would desync
+    // the paired leg's balance. Delete and re-create transfers instead.
+    if (original.type === 'TRANSFER') throw AppError.badRequest('TRANSFER transactions cannot be edited. Delete and re-create them.');
 
     const updated = await ptx.transaction.update({
       where: { id: transactionId },
