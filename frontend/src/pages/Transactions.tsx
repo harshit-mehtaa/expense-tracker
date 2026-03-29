@@ -8,7 +8,7 @@ import { useSearchParams } from 'react-router-dom';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
-import { Receipt, Upload, Plus, X, CheckCircle, AlertCircle, Download, Pencil, Trash2 } from 'lucide-react';
+import { Receipt, Upload, Plus, X, CheckCircle, AlertCircle, Download, Pencil, Trash2, SlidersHorizontal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -37,9 +37,27 @@ interface TransactionsResponse {
   pagination: { total: number; hasMore: boolean; nextCursor?: string };
 }
 
-async function fetchTransactions(fy: string): Promise<TransactionsResponse> {
+interface TxFilters {
+  search: string;
+  type: string;
+  categoryId: string;
+  paymentMode: string;
+  startDate: string;
+  endDate: string;
+}
+
+async function fetchTransactions(fy: string, filters: TxFilters): Promise<TransactionsResponse> {
   const res = await api.get<{ data: Transaction[]; pagination: TransactionsResponse['pagination'] }>('/transactions', {
-    params: { fy, limit: 50 },
+    params: {
+      fy,
+      limit: 50,
+      search: filters.search || undefined,
+      type: filters.type || undefined,
+      categoryId: filters.categoryId || undefined,
+      paymentMode: filters.paymentMode || undefined,
+      startDate: filters.startDate || undefined,
+      endDate: filters.endDate || undefined,
+    },
   });
   return { data: res.data.data, pagination: res.data.pagination };
 }
@@ -514,6 +532,12 @@ export default function TransactionsPage() {
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [deletingTx, setDeletingTx] = useState<Transaction | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
+  const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState<TxFilters>({
+    search: '', type: '', categoryId: '', paymentMode: '', startDate: '', endDate: '',
+  });
+
+  const activeFilterCount = Object.values(filters).filter(Boolean).length;
 
   // Auto-open add modal when navigated from header quick-add button
   useEffect(() => {
@@ -535,9 +559,11 @@ export default function TransactionsPage() {
     }
   }
 
+  const { data: categories = [] } = useCategories();
+
   const { data, isLoading } = useQuery({
-    queryKey: ['transactions', selectedFY],
-    queryFn: () => fetchTransactions(selectedFY),
+    queryKey: ['transactions', selectedFY, filters],
+    queryFn: () => fetchTransactions(selectedFY, filters),
   });
 
   if (isLoading) return <PageLoader />;
@@ -552,6 +578,14 @@ export default function TransactionsPage() {
           <p className="text-muted-foreground">FY {selectedFY} · {data?.pagination.total ?? 0} transactions</p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setShowFilters((v) => !v)} className="relative">
+            <SlidersHorizontal className="h-4 w-4 mr-2" /> Filters
+            {activeFilterCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground font-bold">
+                {activeFilterCount}
+              </span>
+            )}
+          </Button>
           <Button variant="outline" onClick={handleExport} disabled={exporting}>
             <Download className="h-4 w-4 mr-2" /> {exporting ? 'Exporting…' : 'Export CSV'}
           </Button>
@@ -563,6 +597,78 @@ export default function TransactionsPage() {
           </Button>
         </div>
       </div>
+
+      {/* Filter bar */}
+      {showFilters && (
+        <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div className="lg:col-span-2">
+              <Input
+                placeholder="Search description…"
+                value={filters.search}
+                onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
+              />
+            </div>
+            <select
+              value={filters.type}
+              onChange={(e) => setFilters((f) => ({ ...f, type: e.target.value }))}
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="">All types</option>
+              <option value="INCOME">Income</option>
+              <option value="EXPENSE">Expense</option>
+              <option value="TRANSFER">Transfer</option>
+            </select>
+            <select
+              value={filters.categoryId}
+              onChange={(e) => setFilters((f) => ({ ...f, categoryId: e.target.value }))}
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="">All categories</option>
+              {categories.map((c: any) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            <select
+              value={filters.paymentMode}
+              onChange={(e) => setFilters((f) => ({ ...f, paymentMode: e.target.value }))}
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="">All modes</option>
+              {['UPI', 'NEFT', 'RTGS', 'IMPS', 'CASH', 'CHEQUE', 'CARD', 'EMI', 'AUTO_DEBIT'].map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+            <div className="flex gap-2 items-center">
+              <Input
+                type="date"
+                value={filters.startDate}
+                onChange={(e) => setFilters((f) => ({ ...f, startDate: e.target.value }))}
+                className="text-sm"
+                title="From date"
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <Input
+              type="date"
+              value={filters.endDate}
+              onChange={(e) => setFilters((f) => ({ ...f, endDate: e.target.value }))}
+              className="text-sm max-w-[180px]"
+              title="To date"
+            />
+            {activeFilterCount > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setFilters({ search: '', type: '', categoryId: '', paymentMode: '', startDate: '', endDate: '' })}
+              >
+                <X className="h-3.5 w-3.5 mr-1" /> Clear all
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
 
       {transactions.length === 0 ? (
         <EmptyState
