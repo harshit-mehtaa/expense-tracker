@@ -4,19 +4,29 @@ import { useFY } from '@/contexts/FYContext';
 import { formatFYLabel, listFYOptions } from '@/lib/financialYear';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 export function Header() {
   const { user, logout } = useAuth();
   const { selectedFY, setSelectedFY } = useFY();
-  const [isDark, setIsDark] = useState(false);
+  const [isDark, setIsDark] = useState(() => {
+    const stored = localStorage.getItem('theme');
+    if (stored) return stored === 'dark';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
   const navigate = useNavigate();
   const fyOptions = listFYOptions(5);
 
+  // Sync class on mount and whenever isDark changes
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', isDark);
+  }, [isDark]);
+
   const toggleDark = () => {
-    setIsDark(!isDark);
-    document.documentElement.classList.toggle('dark');
+    const next = !isDark;
+    setIsDark(next);
+    localStorage.setItem('theme', next ? 'dark' : 'light');
   };
 
   return (
