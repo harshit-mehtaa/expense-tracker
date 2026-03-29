@@ -727,9 +727,10 @@ export default function TransactionsPage() {
           <h1 className="text-2xl font-bold">Transactions</h1>
           <p className="text-muted-foreground">FY {selectedFY} · {total} transactions</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setShowFilters((v) => !v)} className="relative">
-            <SlidersHorizontal className="h-4 w-4 mr-2" /> Filters
+            <SlidersHorizontal className="h-4 w-4 sm:mr-2" />
+            <span className="hidden sm:inline">Filters</span>
             {activeFilterCount > 0 && (
               <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground font-bold">
                 {activeFilterCount}
@@ -737,13 +738,16 @@ export default function TransactionsPage() {
             )}
           </Button>
           <Button variant="outline" onClick={handleExport} disabled={exporting}>
-            <Download className="h-4 w-4 mr-2" /> {exporting ? 'Exporting…' : 'Export CSV'}
+            <Download className="h-4 w-4 sm:mr-2" />
+            <span className="hidden sm:inline">{exporting ? 'Exporting…' : 'Export CSV'}</span>
           </Button>
           <Button variant="outline" onClick={() => setShowImport(true)}>
-            <Upload className="h-4 w-4 mr-2" /> Import CSV
+            <Upload className="h-4 w-4 sm:mr-2" />
+            <span className="hidden sm:inline">Import CSV</span>
           </Button>
           <Button onClick={() => setShowAdd(true)}>
-            <Plus className="h-4 w-4 mr-2" /> Add Transaction
+            <Plus className="h-4 w-4 sm:mr-2" />
+            <span className="hidden sm:inline">Add Transaction</span>
           </Button>
         </div>
       </div>
@@ -752,7 +756,7 @@ export default function TransactionsPage() {
       {showFilters && (
         <div className="rounded-xl border border-border bg-card p-4 space-y-3">
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <div className="lg:col-span-2">
+            <div className="col-span-2 md:col-span-3 lg:col-span-1">
               <Input
                 placeholder="Search description…"
                 value={filters.search}
@@ -789,25 +793,23 @@ export default function TransactionsPage() {
                 <option key={m} value={m}>{m}</option>
               ))}
             </select>
-            <div className="flex gap-2 items-center">
-              <Input
-                type="date"
-                value={filters.startDate}
-                onChange={(e) => setFilters((f) => ({ ...f, startDate: e.target.value }))}
-                className="text-sm"
-                title="From date"
-              />
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
+            <Input
+              type="date"
+              value={filters.startDate}
+              onChange={(e) => setFilters((f) => ({ ...f, startDate: e.target.value }))}
+              className="text-sm"
+              title="From date"
+            />
             <Input
               type="date"
               value={filters.endDate}
               onChange={(e) => setFilters((f) => ({ ...f, endDate: e.target.value }))}
-              className="text-sm max-w-[180px]"
+              className="text-sm"
               title="To date"
             />
-            {activeFilterCount > 0 && (
+          </div>
+          {activeFilterCount > 0 && (
+            <div className="flex">
               <Button
                 variant="ghost"
                 size="sm"
@@ -815,8 +817,8 @@ export default function TransactionsPage() {
               >
                 <X className="h-3.5 w-3.5 mr-1" /> Clear all
               </Button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -829,7 +831,7 @@ export default function TransactionsPage() {
           onAction={() => setShowImport(true)}
         />
       ) : (
-        <div className="rounded-xl border border-border bg-card overflow-hidden">
+        <div className="hidden sm:block rounded-xl border border-border bg-card overflow-hidden">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/50">
@@ -892,6 +894,72 @@ export default function TransactionsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile card list — sm:hidden so it only shows below 640px */}
+        <div className="sm:hidden rounded-xl border border-border bg-card divide-y divide-border">
+          {transactions.map((tx) => {
+            const isTransfer = !!tx.transferPairId;
+            return (
+              <div key={tx.id} className="p-3 space-y-1.5">
+                {/* Row 1: description + date */}
+                <div className="flex items-start justify-between gap-2">
+                  <span className="font-medium text-sm truncate">{tx.description}</span>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">
+                    {new Date(tx.date).toLocaleDateString('en-IN')}
+                  </span>
+                </div>
+                {/* Row 2: badges */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {isTransfer && (
+                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                      Transfer
+                    </span>
+                  )}
+                  {tx.categoryName ? (
+                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground">
+                      {tx.categoryName}
+                    </span>
+                  ) : !isTransfer && (
+                    <span className="text-xs text-muted-foreground">—</span>
+                  )}
+                  {tx.paymentMode && (
+                    <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium', PAYMENT_MODE_COLORS[tx.paymentMode] ?? 'bg-gray-100 text-gray-700')}>
+                      {tx.paymentMode}
+                    </span>
+                  )}
+                </div>
+                {/* Row 3: amount + actions */}
+                <div className="flex items-center justify-between">
+                  {canEdit(tx) && !isTransfer ? (
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setEditingTx(tx)}
+                        title="Edit transaction"
+                        className="h-7 w-7"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setDeletingTx(tx)}
+                        title="Delete transaction"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <div />
+                  )}
+                  <INRDisplay amount={tx.type === 'EXPENSE' ? -tx.amount : tx.amount} colorCode />
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
