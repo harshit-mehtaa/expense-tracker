@@ -223,13 +223,27 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
   );
 }
 
+interface CategoryRule { keyword: string; categoryId: string; categoryName: string }
+const RULES_KEY = 'tx-category-rules';
+function loadRules(): CategoryRule[] {
+  try { return JSON.parse(localStorage.getItem(RULES_KEY) ?? '[]'); } catch { return []; }
+}
+function saveRules(rules: CategoryRule[]) { localStorage.setItem(RULES_KEY, JSON.stringify(rules)); }
+
 function ImportModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const { data: accounts = [] } = useAccounts();
+  const { data: categories = [] } = useCategories();
   const [file, setFile] = useState<File | null>(null);
   const [bankAccountId, setBankAccountId] = useState('');
   const [bank, setBank] = useState('');
   const [result, setResult] = useState<any>(null);
+  const [showRules, setShowRules] = useState(false);
+  const [rules, setRules] = useState<CategoryRule[]>(loadRules);
+  const [newKeyword, setNewKeyword] = useState('');
+  const [newCategoryId, setNewCategoryId] = useState('');
+  const [applying, setApplying] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const importMutation = useMutation({
@@ -248,6 +262,47 @@ function ImportModal({ onClose }: { onClose: () => void }) {
       qc.invalidateQueries({ queryKey: ['transactions'] });
     },
   });
+
+  function addRule() {
+    if (!newKeyword.trim() || !newCategoryId) return;
+    const cat = categories.find((c: any) => c.id === newCategoryId);
+    const updated = [...rules, { keyword: newKeyword.trim().toLowerCase(), categoryId: newCategoryId, categoryName: cat?.name ?? '' }];
+    setRules(updated);
+    saveRules(updated);
+    setNewKeyword('');
+    setNewCategoryId('');
+  }
+
+  function removeRule(i: number) {
+    const updated = rules.filter((_, idx) => idx !== i);
+    setRules(updated);
+    saveRules(updated);
+  }
+
+  async function applyRules() {
+    if (rules.length === 0) return;
+    setApplying(true);
+    try {
+      // Fetch uncategorized transactions — paginate up to 1000 to avoid silent truncation
+      const res = await api.get<{ data: any[]; pagination?: { total?: number } }>('/transactions', { params: { limit: 1000 } });
+      const uncategorized = res.data.data.filter((tx: any) => !tx.categoryId && tx.type !== 'TRANSFER');
+      const matches = uncategorized
+        .map((tx: any) => {
+          const desc = tx.description?.toLowerCase() ?? '';
+          const match = rules.find((r) => desc.includes(r.keyword));
+          return match ? { id: tx.id, categoryId: match.categoryId } : null;
+        })
+        .filter(Boolean) as { id: string; categoryId: string }[];
+
+      await Promise.all(matches.map((m) => api.put(`/transactions/${m.id}`, { categoryId: m.categoryId })));
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+      toast({ title: `Applied rules: ${matches.length} transaction${matches.length !== 1 ? 's' : ''} categorized`, variant: 'success' });
+    } catch {
+      toast({ title: 'Failed to apply rules', variant: 'error' });
+    } finally {
+      setApplying(false);
+    }
+  }
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -306,6 +361,49 @@ function ImportModal({ onClose }: { onClose: () => void }) {
             {importMutation.error && (
               <p className="text-sm text-destructive">{(importMutation.error as any)?.response?.data?.message ?? 'Import failed'}</p>
             )}
+            {/* Categorization rules */}
+            <div className="border rounded-lg overflow-hidden">
+              <button
+                type="button"
+                className="w-full flex items-center justify-between px-3 py-2 text-sm font-medium bg-muted/50 hover:bg-muted/80 transition-colors"
+                onClick={() => setShowRules((v) => !v)}
+              >
+                <span>Auto-categorization rules {rules.length > 0 && `(${rules.length})`}</span>
+                <span className="text-muted-foreground">{showRules ? '▲' : '▼'}</span>
+              </button>
+              {showRules && (
+                <div className="p-3 space-y-2">
+                  <p className="text-xs text-muted-foreground">Keyword → category mappings applied after import</p>
+                  {rules.map((r, i) => (
+                    <div key={i} className="flex items-center justify-between text-sm bg-muted/30 rounded px-2 py-1">
+                      <span><span className="font-mono text-xs">{r.keyword}</span> → {r.categoryName}</span>
+                      <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => removeRule(i)}>
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ))}
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="keyword (e.g. swiggy)"
+                      value={newKeyword}
+                      onChange={(e) => setNewKeyword(e.target.value)}
+                      className="text-sm h-8"
+                      onKeyDown={(e) => e.key === 'Enter' && addRule()}
+                    />
+                    <select
+                      value={newCategoryId}
+                      onChange={(e) => setNewCategoryId(e.target.value)}
+                      className="rounded-md border bg-background px-2 py-1 text-sm flex-1"
+                    >
+                      <option value="">Category</option>
+                      {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                    <Button size="sm" onClick={addRule} className="h-8">Add</Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="flex justify-end gap-3">
               <Button variant="outline" onClick={onClose}>Cancel</Button>
               <Button onClick={() => importMutation.mutate()} disabled={!file || importMutation.isPending}>
@@ -334,7 +432,14 @@ function ImportModal({ onClose }: { onClose: () => void }) {
                 </div>
               )}
             </div>
-            <Button className="w-full" onClick={onClose}>Done</Button>
+            <div className="flex gap-3">
+              {rules.length > 0 && (
+                <Button variant="outline" className="flex-1" onClick={applyRules} disabled={applying}>
+                  {applying ? 'Applying…' : `Apply ${rules.length} rule${rules.length !== 1 ? 's' : ''}`}
+                </Button>
+              )}
+              <Button className={rules.length > 0 ? 'flex-1' : 'w-full'} onClick={onClose}>Done</Button>
+            </div>
           </div>
         )}
       </div>
