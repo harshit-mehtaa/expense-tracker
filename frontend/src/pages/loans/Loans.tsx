@@ -1,14 +1,17 @@
-import { useState } from 'react';
+import { useState, useEffect, useId } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { CreditCard, Plus, Trash2, Edit2, ChevronDown, ChevronUp, Calculator } from 'lucide-react';
+import { CreditCard, Plus, Trash2, Edit2, Calculator, X } from 'lucide-react';
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
-import { loansApi, type Loan } from '@/api/loans';
+import { loansApi, type Loan, type AmortizationRow } from '@/api/loans';
+import { formatINRShort } from '@/lib/indianFormat';
+import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, CustomTooltip } from '@/lib/chartUtils';
 
 const LOAN_TYPES: Record<string, string> = {
   HOME: 'Home Loan', AUTO: 'Car Loan', PERSONAL: 'Personal Loan',
@@ -35,16 +38,163 @@ const loanSchema = z.object({
 
 type LoanForm = z.infer<typeof loanSchema>;
 
+interface AmortData {
+  schedule: AmortizationRow[];
+  summary: { totalInterest: number; remainingMonths: number };
+}
+
+function AmortizationModal({ loan, amortData, onClose }: { loan: Loan; amortData: AmortData; onClose: () => void }) {
+  const uid = useId().replace(/:/g, '');
+  const balanceGradId = `amort-balance-${uid}`;
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  const { schedule, summary } = amortData;
+  const totalEmiCost = schedule.reduce((s, r) => s + r.emi, 0);
+
+  // Yearly aggregates for stacked bar chart (max 30 bars for 30-year loan)
+  const yearlyData = schedule.reduce<{ year: number; principal: number; interest: number }[]>((acc, row) => {
+    const yr = Math.ceil(row.month / 12);
+    const existing = acc.find((y) => y.year === yr);
+    if (existing) {
+      existing.principal += row.principal;
+      existing.interest += row.interest;
+    } else {
+      acc.push({ year: yr, principal: row.principal, interest: row.interest });
+    }
+    return acc;
+  }, []);
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-background rounded-lg border shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto p-6 space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-semibold">{loan.lenderName} — Amortization Schedule</h2>
+            <p className="text-sm text-muted-foreground">{LOAN_TYPES[loan.loanType] ?? loan.loanType} · {loan.interestRate}% p.a.</p>
+          </div>
+          <Button variant="ghost" size="icon" onClick={onClose}><X className="h-4 w-4" /></Button>
+        </div>
+
+        {/* Summary stat cards */}
+        <div className="grid grid-cols-3 gap-4">
+          <div className="rounded-lg border bg-card p-4">
+            <p className="text-xs text-muted-foreground mb-1">Total Interest Payable</p>
+            <INRDisplay amount={summary.totalInterest} className="font-bold text-base text-red-500" />
+          </div>
+          <div className="rounded-lg border bg-card p-4">
+            <p className="text-xs text-muted-foreground mb-1">Months Remaining</p>
+            <p className="font-bold text-base">{summary.remainingMonths}</p>
+          </div>
+          <div className="rounded-lg border bg-card p-4">
+            <p className="text-xs text-muted-foreground mb-1">Total EMI Cost</p>
+            <INRDisplay amount={totalEmiCost} className="font-bold text-base" />
+          </div>
+        </div>
+
+        {/* Charts */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Balance decay */}
+          <div>
+            <p className="text-sm font-medium text-muted-foreground mb-2">Outstanding Balance</p>
+            <ResponsiveContainer width="100%" height={200}>
+              <AreaChart data={schedule} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id={balanceGradId} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={CHART_PALETTE.net} stopOpacity={0.5} />
+                    <stop offset="95%" stopColor={CHART_PALETTE.net} stopOpacity={0.05} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid {...GRID_STYLE} />
+                <XAxis
+                  dataKey="date"
+                  {...AXIS_STYLE}
+                  tickFormatter={(d) => new Date(d).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })}
+                  interval={Math.max(1, Math.floor(schedule.length / 6) - 1)}
+                />
+                <YAxis {...AXIS_STYLE} tickFormatter={formatINRShort} width={56} />
+                <Tooltip content={<CustomTooltip formatter={(v) => formatINRShort(Number(v))} />} />
+                <Area
+                  type="monotone"
+                  dataKey="closingBalance"
+                  name="Balance"
+                  stroke={CHART_PALETTE.net}
+                  fill={`url(#${balanceGradId})`}
+                  strokeWidth={2}
+                  dot={false}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Principal vs Interest yearly */}
+          <div>
+            <p className="text-sm font-medium text-muted-foreground mb-2">Principal vs Interest (by year)</p>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={yearlyData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                <CartesianGrid {...GRID_STYLE} />
+                <XAxis dataKey="year" {...AXIS_STYLE} tickFormatter={(y) => `Yr ${y}`} />
+                <YAxis {...AXIS_STYLE} tickFormatter={formatINRShort} width={56} />
+                <Tooltip content={<CustomTooltip formatter={(v) => formatINRShort(Number(v))} />} />
+                <Bar dataKey="principal" name="Principal" stackId="a" fill={CHART_PALETTE.income} radius={[0, 0, 0, 0]} />
+                <Bar dataKey="interest" name="Interest" stackId="a" fill={CHART_PALETTE.expense} radius={[2, 2, 0, 0]} />
+                <Legend wrapperStyle={{ fontSize: '11px' }} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Full table */}
+        <div>
+          <p className="text-sm font-medium text-muted-foreground mb-2">Full Schedule ({schedule.length} months)</p>
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-background z-10">
+                <tr className="text-muted-foreground border-b bg-muted/50">
+                  <th className="text-left px-3 py-2">Month</th>
+                  <th className="text-right px-3 py-2">EMI</th>
+                  <th className="text-right px-3 py-2">Principal</th>
+                  <th className="text-right px-3 py-2">Interest</th>
+                  <th className="text-right px-3 py-2">Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {schedule.map((row) => (
+                  <tr key={row.month} className="border-b border-muted last:border-0 hover:bg-muted/20">
+                    <td className="px-3 py-1.5">{new Date(row.date).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })}</td>
+                    <td className="text-right px-3 py-1.5"><INRDisplay amount={row.emi} /></td>
+                    <td className="text-right px-3 py-1.5 text-green-600"><INRDisplay amount={row.principal} /></td>
+                    <td className="text-right px-3 py-1.5 text-red-500"><INRDisplay amount={row.interest} /></td>
+                    <td className="text-right px-3 py-1.5"><INRDisplay amount={row.closingBalance} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoanCard({ loan, onEdit, onDelete }: { loan: Loan; onEdit: () => void; onDelete: () => void }) {
-  const [showSchedule, setShowSchedule] = useState(false);
+  const [showModal, setShowModal] = useState(false);
   const [prepayAmt, setPrepayAmt] = useState('');
   const [prepayMode, setPrepayMode] = useState<'reduce_tenure' | 'reduce_emi'>('reduce_tenure');
   const [prepayResult, setPrepayResult] = useState<any>(null);
 
-  const { data: amortData } = useQuery({
+  const { data: amortData, isLoading: amortLoading } = useQuery({
     queryKey: ['loan-amort', loan.id],
     queryFn: () => loansApi.getAmortization(loan.id),
-    enabled: showSchedule,
+    enabled: showModal,
   });
 
   const simulateMutation = useMutation({
@@ -138,41 +288,29 @@ function LoanCard({ loan, onEdit, onDelete }: { loan: Loan; onEdit: () => void; 
         )}
       </div>
 
-      <Button variant="ghost" size="sm" onClick={() => setShowSchedule(!showSchedule)} className="w-full">
-        {showSchedule ? <ChevronUp className="h-4 w-4 mr-1" /> : <ChevronDown className="h-4 w-4 mr-1" />}
-        {showSchedule ? 'Hide' : 'Show'} Amortization Schedule
+      <Button
+        variant="ghost"
+        size="sm"
+        className="w-full text-muted-foreground hover:text-foreground"
+        onClick={() => setShowModal(true)}
+      >
+        View Full Schedule →
       </Button>
 
-      {showSchedule && amortData && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-muted-foreground border-b">
-                <th className="text-left py-1">Month</th>
-                <th className="text-right py-1">EMI</th>
-                <th className="text-right py-1">Principal</th>
-                <th className="text-right py-1">Interest</th>
-                <th className="text-right py-1">Balance</th>
-              </tr>
-            </thead>
-            <tbody>
-              {amortData.schedule.slice(0, 12).map((row) => (
-                <tr key={row.month} className="border-b border-muted">
-                  <td className="py-1">{new Date(row.date).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })}</td>
-                  <td className="text-right py-1"><INRDisplay amount={row.emi} /></td>
-                  <td className="text-right py-1 text-green-600"><INRDisplay amount={row.principal} /></td>
-                  <td className="text-right py-1 text-red-500"><INRDisplay amount={row.interest} /></td>
-                  <td className="text-right py-1"><INRDisplay amount={row.closingBalance} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {amortData.schedule.length > 12 && (
-            <p className="text-xs text-muted-foreground text-center pt-2">
-              Showing 12 of {amortData.schedule.length} months · Total interest: <INRDisplay amount={amortData.summary.totalInterest} />
-            </p>
-          )}
-        </div>
+      {showModal && (
+        amortLoading
+          ? (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+              <div className="bg-background rounded-lg border p-8 text-sm text-muted-foreground">Loading schedule…</div>
+            </div>
+          )
+          : amortData && (
+            <AmortizationModal
+              loan={loan}
+              amortData={amortData}
+              onClose={() => setShowModal(false)}
+            />
+          )
       )}
     </div>
   );
