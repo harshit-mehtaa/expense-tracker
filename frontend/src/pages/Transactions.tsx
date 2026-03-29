@@ -17,6 +17,7 @@ import { loansApi } from '@/api/loans';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
+import { useBudgetsVsActuals, type BudgetActualItem } from '@/hooks/useBudgetsVsActuals';
 
 interface Transaction {
   id: string;
@@ -389,7 +390,7 @@ function DeleteConfirmModal({ tx, onClose }: { tx: Transaction; onClose: () => v
   );
 }
 
-function AddTransactionModal({ onClose }: { onClose: () => void }) {
+function AddTransactionModal({ onClose, budgetActuals }: { onClose: () => void; budgetActuals: BudgetActualItem[] }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { data: categories = [] } = useCategories();
@@ -403,6 +404,7 @@ function AddTransactionModal({ onClose }: { onClose: () => void }) {
 
   const amount = watch('amount');
   const selectedType = watch('type');
+  const selectedCategoryId = watch('categoryId');
 
   const createMutation = useMutation({
     mutationFn: (data: TxForm) => api.post('/transactions', {
@@ -410,10 +412,32 @@ function AddTransactionModal({ onClose }: { onClose: () => void }) {
       tags: data.tags ? data.tags.split(',').map((t) => t.trim()) : [],
       loanId: data.loanId || undefined,
     }),
-    onSuccess: () => {
+    onSuccess: (_, submittedData) => {
       qc.invalidateQueries({ queryKey: ['transactions'] });
       qc.invalidateQueries({ queryKey: ['loans'] });
+      qc.invalidateQueries({ queryKey: ['budgets'] });
       toast({ title: 'Transaction added', variant: 'success' });
+      // Check if this EXPENSE pushes a budget over 80% or 100%
+      if (submittedData.type === 'EXPENSE' && submittedData.categoryId) {
+        const budget = budgetActuals.find((b) => b.categoryId === submittedData.categoryId);
+        if (budget) {
+          const projectedActual = budget.actual + Number(submittedData.amount);
+          const projectedPct = (projectedActual / Number(budget.amount)) * 100;
+          if (projectedPct >= 100) {
+            toast({
+              title: `Budget exceeded: ${budget.category.name}`,
+              description: `₹${projectedActual.toLocaleString('en-IN')} spent of ₹${Number(budget.amount).toLocaleString('en-IN')} budget`,
+              variant: 'error',
+            });
+          } else if (projectedPct >= 80) {
+            toast({
+              title: `Budget warning: ${budget.category.name}`,
+              description: `${projectedPct.toFixed(0)}% used — ₹${(Number(budget.amount) - projectedActual).toLocaleString('en-IN')} remaining`,
+              variant: 'warning',
+            });
+          }
+        }
+      }
       onClose();
       reset();
     },
@@ -571,6 +595,7 @@ export default function TransactionsPage() {
   }
 
   const { data: categories = [] } = useCategories();
+  const { data: budgetActuals = [] } = useBudgetsVsActuals(selectedFY);
 
   const {
     data,
@@ -774,7 +799,7 @@ export default function TransactionsPage() {
       )}
 
       {showImport && <ImportModal onClose={() => setShowImport(false)} />}
-      {showAdd && <AddTransactionModal onClose={() => setShowAdd(false)} />}
+      {showAdd && <AddTransactionModal onClose={() => setShowAdd(false)} budgetActuals={budgetActuals} />}
       {editingTx && <EditTransactionModal tx={editingTx} onClose={() => setEditingTx(null)} />}
       {deletingTx && <DeleteConfirmModal tx={deletingTx} onClose={() => setDeletingTx(null)} />}
     </div>
