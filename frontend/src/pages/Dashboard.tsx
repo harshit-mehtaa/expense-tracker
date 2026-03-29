@@ -21,12 +21,13 @@ import { PageLoader } from '@/components/shared/LoadingSpinner';
 import { formatINRShort } from '@/lib/indianFormat';
 import { cn } from '@/lib/utils';
 import { useBudgetsVsActuals } from '@/hooks/useBudgetsVsActuals';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 
 export default function DashboardPage() {
   const { selectedFY } = useFY();
   const { gradIds, GradDefs } = useChartGradients();
+  const navigate = useNavigate();
 
   const { data: summary, isLoading: summaryLoading } = useQuery({
     queryKey: ['dashboard', 'summary', selectedFY],
@@ -138,7 +139,10 @@ export default function DashboardPage() {
         {/* Cash Flow chart (spans 2 cols) */}
         <div className="lg:col-span-2 rounded-xl border border-border bg-card p-4">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-base font-semibold">Cash Flow — FY {selectedFY}</h2>
+            <div>
+              <h2 className="text-base font-semibold">Cash Flow — FY {selectedFY}</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">Click any month to view transactions</p>
+            </div>
             <div className="flex items-center gap-4 text-xs text-muted-foreground">
               <span className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: CHART_PALETTE.income }} />
@@ -156,7 +160,24 @@ export default function DashboardPage() {
             </div>
           ) : (
             <ResponsiveContainer width="100%" height={260}>
-              <AreaChart data={cashflow} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+              <AreaChart
+                data={cashflow}
+                margin={{ top: 4, right: 4, left: 0, bottom: 0 }}
+                style={{ cursor: 'pointer' }}
+                onClick={(chartData) => {
+                  if (!chartData?.activePayload?.[0]) return;
+                  const monthLabel: string = chartData.activePayload[0].payload.month; // e.g. "Apr '24"
+                  // Parse "MMM 'YY" → derive startDate/endDate for that month
+                  const [mon, yr] = monthLabel.split(' ');
+                  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                  const monthIdx = months.indexOf(mon);
+                  const fullYear = 2000 + parseInt(yr.replace("'", ''), 10);
+                  const start = new Date(fullYear, monthIdx, 1);
+                  const end = new Date(fullYear, monthIdx + 1, 0);
+                  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+                  navigate(`/transactions?startDate=${fmt(start)}&endDate=${fmt(end)}`);
+                }}
+              >
                 <GradDefs />
                 <CartesianGrid {...GRID_STYLE} />
                 <XAxis dataKey="month" {...AXIS_STYLE} />

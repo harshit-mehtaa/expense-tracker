@@ -535,15 +535,25 @@ export default function TransactionsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState<TxFilters>({
-    search: '', type: '', categoryId: '', paymentMode: '', startDate: '', endDate: '',
+    search: '',
+    type: '',
+    categoryId: '',
+    paymentMode: '',
+    startDate: searchParams.get('startDate') ?? '',
+    endDate: searchParams.get('endDate') ?? '',
   });
 
   const activeFilterCount = Object.values(filters).filter(Boolean).length;
 
-  // Auto-open add modal when navigated from header quick-add button
+  // Auto-open add modal or filters from URL params
   useEffect(() => {
     if (searchParams.get('add') === '1') {
       setShowAdd(true);
+    }
+    if (searchParams.get('startDate') || searchParams.get('endDate')) {
+      setShowFilters(true);
+    }
+    if (searchParams.get('add') || searchParams.get('startDate') || searchParams.get('endDate')) {
       setSearchParams({}, { replace: true });
     }
   }, [searchParams, setSearchParams]);
