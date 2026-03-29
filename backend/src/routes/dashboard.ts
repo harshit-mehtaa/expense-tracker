@@ -3,6 +3,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess } from '../utils/response';
 import { requireAuth, requireAdmin } from '../middleware/auth';
 import * as dashboardService from '../services/dashboardService';
+import { getCurrentFY } from '../utils/financialYear';
 
 const router = Router();
 router.use(requireAuth);
@@ -45,9 +46,10 @@ router.get(
 router.get(
   '/family-overview',
   requireAdmin,
-  asyncHandler(async (_req: Request, res: Response) => {
-    // Returns per-member summary — admin only
-    sendSuccess(res, []); // Placeholder — populated in admin routes
+  asyncHandler(async (req: Request, res: Response) => {
+    const fy = (req.query.fy as string) || getCurrentFY();
+    const result = await dashboardService.getFamilyOverview(fy);
+    sendSuccess(res, result);
   }),
 );
 

@@ -89,12 +89,20 @@ export default function InvestmentsPage() {
 
   const createInvMutation = useMutation({
     mutationFn: (data: InvForm) => investmentsApi.create(data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['investments', 'portfolio'] }); setShowInvForm(false); invForm.reset(); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['investments'] });
+      qc.invalidateQueries({ queryKey: ['portfolio'] });
+      setShowInvForm(false);
+      invForm.reset();
+    },
   });
 
   const deleteInvMutation = useMutation({
     mutationFn: investmentsApi.delete,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['investments', 'portfolio'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['investments'] });
+      qc.invalidateQueries({ queryKey: ['portfolio'] });
+    },
   });
 
   const updateInvPriceMutation = useMutation({

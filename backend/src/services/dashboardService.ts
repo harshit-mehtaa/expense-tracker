@@ -472,6 +472,50 @@ export async function upsertNetWorthSnapshot(userId: string) {
   });
 }
 
+export async function getFamilyOverview(fy: string) {
+  const { start, end } = getFYRange(fy);
+
+  const [members, results] = await Promise.all([
+    prisma.user.findMany({
+      where: { isActive: true, deletedAt: null },
+      select: { id: true, name: true, colorTag: true },
+    }),
+    prisma.$queryRaw<Array<{ userId: string; month: number; year: number; expense: number }>>`
+      SELECT
+        "userId",
+        EXTRACT(MONTH FROM date AT TIME ZONE 'Asia/Kolkata')::int AS month,
+        EXTRACT(YEAR FROM date AT TIME ZONE 'Asia/Kolkata')::int AS year,
+        SUM(amount)::float AS expense
+      FROM "Transaction"
+      WHERE type = 'EXPENSE'
+        AND date >= ${start}
+        AND date <= ${end}
+        AND "deletedAt" IS NULL
+      GROUP BY "userId", month, year
+      ORDER BY year, month
+    `,
+  ]);
+
+  const monthNames = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
+  const startYear = parseInt(fy.split('-')[0]);
+
+  const chartData = monthNames.map((name, idx) => {
+    const month = idx < 9 ? idx + 4 : idx - 8;
+    const year = month >= 4 ? startYear : startYear + 1;
+    const row: Record<string, number | string> = { month: name };
+    for (const member of members) {
+      const data = results.find((r) => r.userId === member.id && r.month === month && r.year === year);
+      row[member.id] = data?.expense ?? 0;
+    }
+    return row;
+  });
+
+  return {
+    members: members.map((m) => ({ id: m.id, name: m.name, colorTag: m.colorTag ?? '#6366f1' })),
+    chartData,
+  };
+}
+
 export async function getNetWorthHistory(userId: string) {
   return prisma.netWorthSnapshot.findMany({
     where: { userId },

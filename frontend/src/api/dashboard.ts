@@ -64,3 +64,14 @@ export async function upsertNetWorthSnapshot(): Promise<NetWorthSnapshot> {
   const res = await api.post<{ data: NetWorthSnapshot }>('/snapshots/net-worth');
   return res.data.data;
 }
+
+export interface FamilyOverview {
+  members: { id: string; name: string; colorTag: string }[];
+  chartData: Record<string, number | string>[];
+}
+
+export async function fetchFamilyOverview(fy?: string): Promise<FamilyOverview> {
+  const params = fy ? { fy } : {};
+  const res = await api.get<{ data: FamilyOverview }>('/dashboard/family-overview', { params });
+  return res.data.data;
+}

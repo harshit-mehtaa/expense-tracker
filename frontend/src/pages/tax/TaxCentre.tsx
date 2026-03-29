@@ -491,8 +491,16 @@ export default function TaxCentrePage() {
 
       {/* ITR-2 Overview Tab */}
       {activeTab === 'itr2' && (
-        <div className="rounded-lg border bg-card p-6">
-          <h2 className="font-semibold mb-4">ITR-2 Schedule Overview</h2>
+        <div className="rounded-lg border bg-card p-6 print:border-0 print:p-0">
+          <div className="flex items-center justify-between mb-4 print:hidden">
+            <h2 className="font-semibold">ITR-2 Schedule Overview</h2>
+            <Button variant="outline" size="sm" onClick={() => window.print()}>
+              Print / Save PDF
+            </Button>
+          </div>
+          <h2 className="font-semibold mb-4 hidden print:block">
+            ITR-2 Schedule Overview — FY {selectedFY}
+          </h2>
           <ITR2Summary fy={selectedFY} />
         </div>
       )}

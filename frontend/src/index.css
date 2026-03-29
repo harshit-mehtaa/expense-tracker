@@ -64,3 +64,22 @@
     @apply w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring;
   }
 }
+
+@media print {
+  /* Hide app chrome — only print page content */
+  nav, aside, header, footer,
+  [data-sidebar], [data-header] {
+    display: none !important;
+  }
+  /* Remove scrollbars and page padding */
+  body {
+    overflow: visible !important;
+    background: white !important;
+    color: black !important;
+  }
+  /* Expand main content to full page */
+  main {
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+}

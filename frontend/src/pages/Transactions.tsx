@@ -244,6 +244,8 @@ function ImportModal({ onClose }: { onClose: () => void }) {
   const [newKeyword, setNewKeyword] = useState('');
   const [newCategoryId, setNewCategoryId] = useState('');
   const [applying, setApplying] = useState(false);
+  const [newBalance, setNewBalance] = useState('');
+  const [savingBalance, setSavingBalance] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const importMutation = useMutation({
@@ -432,6 +434,43 @@ function ImportModal({ onClose }: { onClose: () => void }) {
                 </div>
               )}
             </div>
+            {/* Balance update — only shown when an account was linked */}
+            {bankAccountId && (
+              <div className="space-y-1">
+                <Label>Update account balance (optional)</Label>
+                <p className="text-xs text-muted-foreground">Enter the current balance shown in your bank app to keep it in sync.</p>
+                <div className="flex gap-2">
+                  <Input
+                    type="number"
+                    step="0.01"
+                    placeholder="e.g. 45230.50"
+                    value={newBalance}
+                    onChange={(e) => setNewBalance(e.target.value)}
+                  />
+                  {newBalance && (
+                    <Button
+                      variant="outline"
+                      disabled={savingBalance}
+                      onClick={async () => {
+                        setSavingBalance(true);
+                        try {
+                          await api.put(`/accounts/${bankAccountId}`, { currentBalance: Number(newBalance) });
+                          qc.invalidateQueries({ queryKey: ['accounts'] });
+                          toast({ title: 'Account balance updated', variant: 'success' });
+                          setNewBalance('');
+                        } catch {
+                          toast({ title: 'Failed to update balance', variant: 'error' });
+                        } finally {
+                          setSavingBalance(false);
+                        }
+                      }}
+                    >
+                      {savingBalance ? 'Saving…' : 'Save'}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
             <div className="flex gap-3">
               {rules.length > 0 && (
                 <Button variant="outline" className="flex-1" onClick={applyRules} disabled={applying}>
@@ -656,11 +695,18 @@ async function downloadTransactionsCsv(fy: string) {
 export default function TransactionsPage() {
   const { selectedFY } = useFY();
   const { user } = useAuth();
+  const qc = useQueryClient();
+  const { toast } = useToast();
   const [showImport, setShowImport] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [deletingTx, setDeletingTx] = useState<Transaction | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkConfirmDelete, setBulkConfirmDelete] = useState(false);
+  const [bulkCategoryId, setBulkCategoryId] = useState('');
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [isBulkCategorizing, setIsBulkCategorizing] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState<TxFilters>({
@@ -673,6 +719,12 @@ export default function TransactionsPage() {
   });
 
   const activeFilterCount = Object.values(filters).filter(Boolean).length;
+
+  // Clear selection whenever the visible dataset changes
+  useEffect(() => {
+    setSelectedIds(new Set());
+    setBulkConfirmDelete(false);
+  }, [filters, selectedFY]);
 
   // Auto-open add modal or filters from URL params
   useEffect(() => {
@@ -689,6 +741,55 @@ export default function TransactionsPage() {
 
   const canEdit = (tx: Transaction) =>
     user?.role === 'ADMIN' || user?.id === tx.userId;
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleBulkDelete() {
+    setIsBulkDeleting(true);
+    try {
+      const ids = [...selectedIds];
+      const results = await Promise.allSettled(ids.map((id) => api.delete(`/transactions/${id}`)));
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      const succeeded = ids.length - failed;
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+      if (failed === 0) {
+        toast({ title: `Deleted ${succeeded} transaction${succeeded !== 1 ? 's' : ''}`, variant: 'success' });
+      } else {
+        toast({ title: `Deleted ${succeeded}/${ids.length} — ${failed} failed`, variant: 'warning' });
+      }
+      setSelectedIds(new Set());
+      setBulkConfirmDelete(false);
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  }
+
+  async function handleBulkCategorize() {
+    if (!bulkCategoryId) return;
+    setIsBulkCategorizing(true);
+    try {
+      const ids = [...selectedIds];
+      const results = await Promise.allSettled(ids.map((id) => api.put(`/transactions/${id}`, { categoryId: bulkCategoryId })));
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      const succeeded = ids.length - failed;
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+      if (failed === 0) {
+        toast({ title: `Categorized ${succeeded} transaction${succeeded !== 1 ? 's' : ''}`, variant: 'success' });
+      } else {
+        toast({ title: `Categorized ${succeeded}/${ids.length} — ${failed} failed`, variant: 'warning' });
+      }
+      setSelectedIds(new Set());
+      setBulkCategoryId('');
+    } finally {
+      setIsBulkCategorizing(false);
+    }
+  }
 
   async function handleExport() {
     setExporting(true);
@@ -719,6 +820,15 @@ export default function TransactionsPage() {
 
   const transactions = data?.pages.flatMap((p) => p.data) ?? [];
   const total = data?.pages[0]?.pagination.total ?? 0;
+
+  const allSelectableIds = transactions
+    .filter((tx) => !tx.transferPairId && canEdit(tx))
+    .map((tx) => tx.id);
+  const allSelected = allSelectableIds.length > 0 && allSelectableIds.every((id) => selectedIds.has(id));
+
+  function toggleSelectAll() {
+    setSelectedIds(allSelected ? new Set() : new Set(allSelectableIds));
+  }
 
   return (
     <div className="space-y-4">
@@ -822,6 +932,42 @@ export default function TransactionsPage() {
         </div>
       )}
 
+      {/* Bulk action bar */}
+      {selectedIds.size > 0 && (
+        <div className="rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 flex items-center gap-3 flex-wrap">
+          <span className="text-sm font-medium text-primary">{selectedIds.size} selected</span>
+          <div className="flex items-center gap-2 ml-auto flex-wrap">
+            <select
+              value={bulkCategoryId}
+              onChange={(e) => setBulkCategoryId(e.target.value)}
+              className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+            >
+              <option value="">Assign category…</option>
+              {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <Button size="sm" variant="outline" onClick={handleBulkCategorize} disabled={!bulkCategoryId || isBulkCategorizing}>
+              {isBulkCategorizing ? 'Applying…' : 'Apply'}
+            </Button>
+            {bulkConfirmDelete ? (
+              <>
+                <span className="text-sm text-destructive font-medium">Delete {selectedIds.size}?</span>
+                <Button size="sm" variant="destructive" onClick={handleBulkDelete} disabled={isBulkDeleting}>
+                  {isBulkDeleting ? 'Deleting…' : 'Confirm'}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setBulkConfirmDelete(false)}>Cancel</Button>
+              </>
+            ) : (
+              <Button size="sm" variant="outline" className="text-destructive hover:text-destructive border-destructive/30" onClick={() => setBulkConfirmDelete(true)}>
+                <Trash2 className="h-3.5 w-3.5 mr-1" />Delete
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={() => { setSelectedIds(new Set()); setBulkConfirmDelete(false); }}>
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
+
       {transactions.length === 0 ? (
         <EmptyState
           icon={Receipt}
@@ -835,6 +981,15 @@ export default function TransactionsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/50">
+                <th className="px-3 py-3 w-8">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleSelectAll}
+                    className="rounded"
+                    title="Select all"
+                  />
+                </th>
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Date</th>
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Description</th>
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Category</th>
@@ -845,7 +1000,17 @@ export default function TransactionsPage() {
             </thead>
             <tbody>
               {transactions.map((tx) => (
-                <tr key={tx.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
+                <tr key={tx.id} className={cn('border-b border-border last:border-0 hover:bg-muted/30 transition-colors', selectedIds.has(tx.id) && 'bg-primary/5')}>
+                  <td className="px-3 py-3">
+                    {!tx.transferPairId && canEdit(tx) && (
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(tx.id)}
+                        onChange={() => toggleSelect(tx.id)}
+                        className="rounded"
+                      />
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
                     {new Date(tx.date).toLocaleDateString('en-IN')}
                   </td>
@@ -901,9 +1066,17 @@ export default function TransactionsPage() {
           {transactions.map((tx) => {
             const isTransfer = !!tx.transferPairId;
             return (
-              <div key={tx.id} className="p-3 space-y-1.5">
+              <div key={tx.id} className={cn('p-3 space-y-1.5', selectedIds.has(tx.id) && 'bg-primary/5')}>
                 {/* Row 1: description + date */}
                 <div className="flex items-start justify-between gap-2">
+                  {!isTransfer && canEdit(tx) && (
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(tx.id)}
+                      onChange={() => toggleSelect(tx.id)}
+                      className="rounded mt-0.5 shrink-0"
+                    />
+                  )}
                   <span className="font-medium text-sm truncate">{tx.description}</span>
                   <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">
                     {new Date(tx.date).toLocaleDateString('en-IN')}

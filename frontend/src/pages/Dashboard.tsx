@@ -3,6 +3,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   AreaChart,
   Area,
+  BarChart,
+  Bar,
+  Legend,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -13,9 +16,10 @@ import {
   Cell,
 } from 'recharts';
 import { CHART_PALETTE, useChartGradients, CustomTooltip, AXIS_STYLE, GRID_STYLE } from '@/lib/chartUtils';
-import { TrendingUp, TrendingDown, ArrowUpRight, Bell, Target } from 'lucide-react';
+import { TrendingUp, TrendingDown, ArrowUpRight, Bell, Target, Users } from 'lucide-react';
 import { useFY } from '@/contexts/FYContext';
-import { fetchDashboardSummary, fetchCashflow, fetchUpcomingAlerts, fetchNetWorthHistory, upsertNetWorthSnapshot } from '@/api/dashboard';
+import { fetchDashboardSummary, fetchCashflow, fetchUpcomingAlerts, fetchNetWorthHistory, upsertNetWorthSnapshot, fetchFamilyOverview } from '@/api/dashboard';
+import { useAuth } from '@/contexts/AuthContext';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
 import { formatINRShort } from '@/lib/indianFormat';
@@ -26,6 +30,7 @@ import { Link, useNavigate } from 'react-router-dom';
 
 export default function DashboardPage() {
   const { selectedFY } = useFY();
+  const { user } = useAuth();
   const { gradIds, GradDefs } = useChartGradients();
   const navigate = useNavigate();
 
@@ -45,6 +50,12 @@ export default function DashboardPage() {
   });
 
   const { data: budgetActuals } = useBudgetsVsActuals(selectedFY);
+
+  const { data: familyOverview } = useQuery({
+    queryKey: ['dashboard', 'family-overview', selectedFY],
+    queryFn: () => fetchFamilyOverview(selectedFY),
+    enabled: user?.role === 'ADMIN',
+  });
 
   const queryClient = useQueryClient();
   const { data: netWorthHistory } = useQuery({
@@ -364,6 +375,28 @@ export default function DashboardPage() {
                 activeDot={{ r: 5, strokeWidth: 2, stroke: 'rgba(255,255,255,0.7)' }}
               />
             </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Family spending breakdown — admin only */}
+      {user?.role === 'ADMIN' && familyOverview && familyOverview.members.length > 1 && (
+        <div className="rounded-xl border border-border bg-card p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Users className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-base font-semibold">Family Spending — FY {selectedFY}</h2>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={familyOverview.chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+              <CartesianGrid {...GRID_STYLE} />
+              <XAxis dataKey="month" {...AXIS_STYLE} />
+              <YAxis tickFormatter={(v) => formatINRShort(v)} width={70} {...AXIS_STYLE} />
+              <Tooltip content={<CustomTooltip formatter={formatINRShort} />} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              {familyOverview.members.map((member) => (
+                <Bar key={member.id} dataKey={member.id} name={member.name} stackId="members" fill={member.colorTag} />
+              ))}
+            </BarChart>
           </ResponsiveContainer>
         </div>
       )}
