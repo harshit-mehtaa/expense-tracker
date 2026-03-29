@@ -1,9 +1,10 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useFY } from '@/contexts/FYContext';
+import { useSearchParams } from 'react-router-dom';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
@@ -512,6 +513,15 @@ export default function TransactionsPage() {
   const [exporting, setExporting] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [deletingTx, setDeletingTx] = useState<Transaction | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Auto-open add modal when navigated from header quick-add button
+  useEffect(() => {
+    if (searchParams.get('add') === '1') {
+      setShowAdd(true);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const canEdit = (tx: Transaction) =>
     user?.role === 'ADMIN' || user?.id === tx.userId;

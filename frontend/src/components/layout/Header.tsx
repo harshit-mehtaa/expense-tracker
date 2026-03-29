@@ -5,11 +5,13 @@ import { formatFYLabel, listFYOptions } from '@/lib/financialYear';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 export function Header() {
   const { user, logout } = useAuth();
   const { selectedFY, setSelectedFY } = useFY();
   const [isDark, setIsDark] = useState(false);
+  const navigate = useNavigate();
   const fyOptions = listFYOptions(5);
 
   const toggleDark = () => {
@@ -41,7 +43,7 @@ export function Header() {
       {/* Right section */}
       <div className="flex items-center gap-2">
         {/* Quick add */}
-        <Button size="sm" className="gap-1">
+        <Button size="sm" className="gap-1" onClick={() => navigate('/transactions?add=1')}>
           <Plus className="h-4 w-4" />
           Add Transaction
         </Button>
