@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, Pencil, Check, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -46,6 +46,10 @@ export default function GoldRealEstatePage() {
   const qc = useQueryClient();
   const [showGoldForm, setShowGoldForm] = useState(false);
   const [showPropertyForm, setShowPropertyForm] = useState(false);
+  const [editingGoldId, setEditingGoldId] = useState<string | null>(null);
+  const [editGoldValue, setEditGoldValue] = useState('');
+  const [editingREId, setEditingREId] = useState<string | null>(null);
+  const [editREValue, setEditREValue] = useState('');
 
   const { data: goldData } = useQuery({ queryKey: ['gold'], queryFn: investmentsApi.getGold });
   const { data: reData } = useQuery({ queryKey: ['realestate'], queryFn: investmentsApi.getRealEstate });
@@ -61,6 +65,18 @@ export default function GoldRealEstatePage() {
   const deleteGoldMutation = useMutation({
     mutationFn: investmentsApi.deleteGold,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['gold'] }),
+  });
+
+  const updateGoldPriceMutation = useMutation({
+    mutationFn: ({ id, price }: { id: string; price: number }) =>
+      investmentsApi.updateGold(id, { currentPricePerGram: price }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['gold'] }); setEditingGoldId(null); },
+  });
+
+  const updateREValueMutation = useMutation({
+    mutationFn: ({ id, value }: { id: string; value: number }) =>
+      investmentsApi.updateRealEstate(id, { currentValue: value }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['realestate'] }); setEditingREId(null); },
   });
 
   const createPropertyMutation = useMutation({
@@ -124,7 +140,37 @@ export default function GoldRealEstatePage() {
                 <div><p className="text-muted-foreground">Quantity</p><p className="font-semibold">{h.quantityGrams}g</p></div>
                 <div><p className="text-muted-foreground">Current Value</p><INRDisplay amount={h.quantityGrams * h.currentPricePerGram} className="font-semibold" /></div>
                 <div><p className="text-muted-foreground">Buy Rate</p><p>₹{h.purchasePricePerGram.toLocaleString('en-IN')}/g</p></div>
-                <div><p className="text-muted-foreground">Current Rate</p><p>₹{h.currentPricePerGram.toLocaleString('en-IN')}/g</p></div>
+                <div>
+                  <p className="text-muted-foreground">Current Rate</p>
+                  {editingGoldId === h.id ? (
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <Input
+                        type="number"
+                        value={editGoldValue}
+                        onChange={(e) => setEditGoldValue(e.target.value)}
+                        className="h-7 w-24 text-xs"
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { const p = Number(editGoldValue); if (p > 0) updateGoldPriceMutation.mutate({ id: h.id, price: p }); }
+                          if (e.key === 'Escape') setEditingGoldId(null);
+                        }}
+                      />
+                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { const p = Number(editGoldValue); if (p > 0) updateGoldPriceMutation.mutate({ id: h.id, price: p }); }}>
+                        <Check className="h-3 w-3 text-green-600" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingGoldId(null)}>
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1 group">
+                      <p>₹{h.currentPricePerGram.toLocaleString('en-IN')}/g</p>
+                      <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setEditingGoldId(h.id); setEditGoldValue(String(h.currentPricePerGram)); }} title="Update price">
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           ))}
@@ -176,7 +222,38 @@ export default function GoldRealEstatePage() {
               </div>
               <div className="grid grid-cols-2 gap-2 text-sm">
                 <div><p className="text-muted-foreground">Purchase Price</p><INRDisplay amount={p.purchasePrice} /></div>
-                <div><p className="text-muted-foreground">Current Value</p><INRDisplay amount={p.currentValue} className="text-green-600 font-semibold" /></div>
+                <div>
+                  <p className="text-muted-foreground">Current Value</p>
+                  {editingREId === p.id ? (
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <Input
+                        type="number"
+                        step="1000"
+                        value={editREValue}
+                        onChange={(e) => setEditREValue(e.target.value)}
+                        className="h-7 w-28 text-xs"
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { const v = Number(editREValue); if (v > 0) updateREValueMutation.mutate({ id: p.id, value: v }); }
+                          if (e.key === 'Escape') setEditingREId(null);
+                        }}
+                      />
+                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { const v = Number(editREValue); if (v > 0) updateREValueMutation.mutate({ id: p.id, value: v }); }}>
+                        <Check className="h-3 w-3 text-green-600" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingREId(null)}>
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1 group">
+                      <INRDisplay amount={p.currentValue} className="text-green-600 font-semibold" />
+                      <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setEditingREId(p.id); setEditREValue(String(p.currentValue)); }} title="Update value">
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
                 <div><p className="text-muted-foreground">Unrealised Gain</p><INRDisplay amount={p.currentValue - p.purchasePrice} colorCode /></div>
                 {p.rentalIncomeMonthly && <div><p className="text-muted-foreground">Monthly Rental</p><INRDisplay amount={p.rentalIncomeMonthly} /></div>}
               </div>

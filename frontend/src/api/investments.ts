@@ -113,6 +113,7 @@ export const investmentsApi = {
   deleteGold: (id: string) => api.delete(`/investments/gold/${id}`),
   getRealEstate: () => api.get<{ data: any }>('/investments/real-estate').then(unwrap),
   createRealEstate: (data: object) => api.post('/investments/real-estate', data).then((r) => r.data.data),
+  updateRealEstate: (id: string, data: object) => api.put(`/investments/real-estate/${id}`, data).then((r) => r.data.data),
   deleteRealEstate: (id: string) => api.delete(`/investments/real-estate/${id}`),
   getExchangeRates: () => api.get<{ data: ExchangeRate[] }>('/investments/exchange-rates').then(unwrap),
   updateExchangeRate: (currency: string, rate: number) => api.put(`/investments/exchange-rates/${currency}`, { rate }),

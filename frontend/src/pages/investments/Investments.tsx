@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { TrendingUp, Plus, Trash2, Edit2, Layers } from 'lucide-react';
+import { TrendingUp, Plus, Trash2, Edit2, Layers, Pencil, Check, X } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import { CHART_PALETTE, CustomTooltip } from '@/lib/chartUtils';
 import { Button } from '@/components/ui/button';
@@ -62,6 +62,8 @@ export default function InvestmentsPage() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabType>('portfolio');
   const [showInvForm, setShowInvForm] = useState(false);
+  const [editingInvId, setEditingInvId] = useState<string | null>(null);
+  const [editInvValue, setEditInvValue] = useState('');
   const [showFDForm, setShowFDForm] = useState(false);
   const [editingFD, setEditingFD] = useState<FD | null>(null);
 
@@ -93,6 +95,16 @@ export default function InvestmentsPage() {
   const deleteInvMutation = useMutation({
     mutationFn: investmentsApi.delete,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['investments', 'portfolio'] }),
+  });
+
+  const updateInvPriceMutation = useMutation({
+    mutationFn: ({ id, price }: { id: string; price: number }) =>
+      investmentsApi.update(id, { currentPricePerUnit: price }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['investments'] });
+      qc.invalidateQueries({ queryKey: ['portfolio'] });
+      setEditingInvId(null);
+    },
   });
 
   // Asset allocation pie chart data
@@ -205,7 +217,49 @@ export default function InvestmentsPage() {
                         </td>
                         <td className="text-right px-4 py-3 text-muted-foreground">{INV_TYPES[inv.type]}</td>
                         <td className="text-right px-4 py-3"><INRDisplay amount={inv.investedINR} /></td>
-                        <td className="text-right px-4 py-3"><INRDisplay amount={inv.currentValueINR} /></td>
+                        <td className="text-right px-4 py-3">
+                          {editingInvId === inv.id ? (
+                            <div className="flex items-center gap-1 justify-end">
+                              <span className="text-xs text-muted-foreground">{inv.currency}</span>
+                              <Input
+                                type="number"
+                                value={editInvValue}
+                                onChange={(e) => setEditInvValue(e.target.value)}
+                                className="h-7 w-28 text-xs text-right"
+                                autoFocus
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    const p = Number(editInvValue);
+                                    if (p > 0) updateInvPriceMutation.mutate({ id: inv.id, price: p });
+                                  }
+                                  if (e.key === 'Escape') setEditingInvId(null);
+                                }}
+                              />
+                              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => {
+                                const p = Number(editInvValue);
+                                if (p > 0) updateInvPriceMutation.mutate({ id: inv.id, price: p });
+                              }}>
+                                <Check className="h-3 w-3 text-green-600" />
+                              </Button>
+                              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingInvId(null)}>
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1 justify-end group">
+                              <INRDisplay amount={inv.currentValueINR} />
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                                onClick={() => { setEditingInvId(inv.id); setEditInvValue(String(inv.currentPricePerUnit)); }}
+                                title={`Update price (${inv.currency}/unit)`}
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          )}
+                        </td>
                         <td className="text-right px-4 py-3">
                           <INRDisplay amount={inv.gainINR} colorCode />
                           <p className={cn('text-xs', inv.gainPct >= 0 ? 'text-green-600' : 'text-red-600')}>
