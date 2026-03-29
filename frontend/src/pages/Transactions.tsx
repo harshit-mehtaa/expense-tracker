@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -46,11 +46,12 @@ interface TxFilters {
   endDate: string;
 }
 
-async function fetchTransactions(fy: string, filters: TxFilters): Promise<TransactionsResponse> {
+async function fetchTransactions(fy: string, filters: TxFilters, cursor?: string): Promise<TransactionsResponse> {
   const res = await api.get<{ data: Transaction[]; pagination: TransactionsResponse['pagination'] }>('/transactions', {
     params: {
       fy,
       limit: 50,
+      cursor: cursor || undefined,
       search: filters.search || undefined,
       type: filters.type || undefined,
       categoryId: filters.categoryId || undefined,
@@ -561,21 +562,30 @@ export default function TransactionsPage() {
 
   const { data: categories = [] } = useCategories();
 
-  const { data, isLoading } = useQuery({
+  const {
+    data,
+    isLoading,
+    isFetchingNextPage,
+    fetchNextPage,
+    hasNextPage,
+  } = useInfiniteQuery({
     queryKey: ['transactions', selectedFY, filters],
-    queryFn: () => fetchTransactions(selectedFY, filters),
+    queryFn: ({ pageParam }) => fetchTransactions(selectedFY, filters, pageParam as string | undefined),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.pagination.hasMore ? lastPage.pagination.nextCursor : undefined,
   });
 
   if (isLoading) return <PageLoader />;
 
-  const transactions = data?.data ?? [];
+  const transactions = data?.pages.flatMap((p) => p.data) ?? [];
+  const total = data?.pages[0]?.pagination.total ?? 0;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Transactions</h1>
-          <p className="text-muted-foreground">FY {selectedFY} · {data?.pagination.total ?? 0} transactions</p>
+          <p className="text-muted-foreground">FY {selectedFY} · {total} transactions</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setShowFilters((v) => !v)} className="relative">
@@ -742,6 +752,14 @@ export default function TransactionsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {hasNextPage && (
+        <div className="flex justify-center pt-2">
+          <Button variant="outline" onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+            {isFetchingNextPage ? 'Loading…' : `Load more (${transactions.length} of ${total} shown)`}
+          </Button>
         </div>
       )}
 
