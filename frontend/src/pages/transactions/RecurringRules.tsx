@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { PlusCircle, Trash2, Pencil, RefreshCw, ToggleLeft, ToggleRight } from 'lucide-react';
+import { PlusCircle, Trash2, Pencil, RefreshCw, ToggleLeft, ToggleRight, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -121,6 +121,29 @@ export default function RecurringRulesPage() {
         variant: result.generated > 0 ? 'success' : 'default',
       });
       qc.invalidateQueries({ queryKey: ['transactions'] });
+    },
+  });
+
+  const applyMutation = useMutation({
+    mutationFn: (rule: RecurringRule) => {
+      const t = rule.templateTransaction as RecurringRule['templateTransaction'] & { paymentMode?: string };
+      return api.post('/transactions', {
+        description: t.description,
+        amount: Number(t.amount),
+        type: t.type,
+        date: new Date().toISOString().slice(0, 10),
+        categoryId: t.categoryId ?? undefined,
+        bankAccountId: t.bankAccountId ?? undefined,
+        paymentMode: t.paymentMode ?? undefined,
+        tags: t.tags ?? [],
+      });
+    },
+    onSuccess: (_, rule) => {
+      toast({ title: `Applied: ${rule.templateTransaction.description}`, variant: 'success' });
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+    },
+    onError: (err: any) => {
+      toast({ title: err?.response?.data?.message ?? 'Failed to apply rule', variant: 'error' });
     },
   });
 
@@ -288,6 +311,19 @@ export default function RecurringRulesPage() {
                 </div>
               </div>
               <div className="flex items-center gap-1 shrink-0">
+                <button
+                  onClick={() => rule.isActive && applyMutation.mutate(rule)}
+                  disabled={!rule.isActive || applyMutation.isPending}
+                  className={cn(
+                    'p-1.5 rounded hover:bg-muted',
+                    rule.isActive
+                      ? 'text-primary hover:text-primary/80'
+                      : 'text-muted-foreground opacity-40 cursor-not-allowed',
+                  )}
+                  title={rule.isActive ? 'Apply now (create transaction for today)' : 'Rule is paused'}
+                >
+                  <Zap className="h-4 w-4" />
+                </button>
                 <button
                   onClick={() => updateMutation.mutate({ id: rule.id, data: { isActive: !rule.isActive } })}
                   className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
