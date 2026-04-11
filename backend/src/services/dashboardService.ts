@@ -516,6 +516,96 @@ export async function getFamilyOverview(fy: string) {
   };
 }
 
+export async function getProfitAndLoss(userId: string, requesterRole: string, fy?: string) {
+  const currentFY = fy ?? getCurrentFY();
+  const { start, end } = getFYRange(currentFY);
+  const userFilter: Prisma.TransactionWhereInput = requesterRole === 'ADMIN' ? {} : { userId };
+
+  // Summary + monthly series + expense categories + income categories — all in parallel
+  const [totalIncome, totalExpense, monthlyResults, expenseCategoryRows, incomeCategoryRows] =
+    await Promise.all([
+      getIncomeForPeriod(userFilter, { start, end }),
+      getExpenseForPeriod(userFilter, { start, end }),
+      // Monthly series — same raw SQL pattern as getCashflow, with safe Prisma.sql userFilter
+      prisma.$queryRaw<Array<{ month: number; year: number; income: number; expense: number }>>`
+        SELECT
+          EXTRACT(MONTH FROM date AT TIME ZONE 'Asia/Kolkata')::int AS month,
+          EXTRACT(YEAR FROM date AT TIME ZONE 'Asia/Kolkata')::int AS year,
+          SUM(CASE WHEN type = 'INCOME' THEN amount ELSE 0 END)::float AS income,
+          SUM(CASE WHEN type = 'EXPENSE' THEN amount ELSE 0 END)::float AS expense
+        FROM "Transaction"
+        WHERE
+          date >= ${start}
+          AND date <= ${end}
+          AND "deletedAt" IS NULL
+          ${requesterRole !== 'ADMIN' ? Prisma.sql`AND "userId" = ${userId}` : Prisma.empty}
+        GROUP BY month, year
+        ORDER BY year, month
+      `,
+      // Expense categories
+      prisma.transaction.groupBy({
+        by: ['categoryId'],
+        where: { ...userFilter, deletedAt: null, type: 'EXPENSE', date: { gte: start, lte: end } },
+        _sum: { amount: true },
+        orderBy: { _sum: { amount: 'desc' } },
+        take: 15,
+      }),
+      // Income categories
+      prisma.transaction.groupBy({
+        by: ['categoryId'],
+        where: { ...userFilter, deletedAt: null, type: 'INCOME', date: { gte: start, lte: end } },
+        _sum: { amount: true },
+        orderBy: { _sum: { amount: 'desc' } },
+        take: 15,
+      }),
+    ]);
+
+  // Resolve category names for both sets
+  const allCategoryIds = [
+    ...expenseCategoryRows.map((r) => r.categoryId),
+    ...incomeCategoryRows.map((r) => r.categoryId),
+  ].filter((id): id is string => id !== null);
+
+  const categories = await prisma.category.findMany({ where: { id: { in: allCategoryIds } } });
+  const catMap = Object.fromEntries(categories.map((c) => [c.id, c]));
+
+  const mapCategories = (rows: typeof expenseCategoryRows) =>
+    rows.map((r) => ({
+      categoryId: r.categoryId,
+      categoryName: r.categoryId ? (catMap[r.categoryId]?.name ?? 'Uncategorized') : 'Uncategorized',
+      total: Number(r._sum.amount ?? 0),
+    }));
+
+  // Build zero-padded 12-month series (Apr to Mar)
+  const monthNames = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
+  const startYear = parseInt(currentFY.split('-')[0]);
+
+  const monthly = monthNames.map((name, idx) => {
+    const month = idx < 9 ? idx + 4 : idx - 8; // Apr=4…Dec=12, Jan=1…Mar=3
+    const year = month >= 4 ? startYear : startYear + 1;
+    const data = monthlyResults.find((r) => r.month === month && r.year === year);
+    return {
+      month: name,
+      monthIndex: month,
+      year,
+      income: data?.income ?? 0,
+      expense: data?.expense ?? 0,
+      net: (data?.income ?? 0) - (data?.expense ?? 0),
+    };
+  });
+
+  const netSavings = totalIncome - totalExpense;
+  const savingsRate = totalIncome > 0 ? Math.round(((netSavings / totalIncome) * 100) * 100) / 100 : 0;
+
+  return {
+    fy: currentFY,
+    summary: { totalIncome, totalExpense, netSavings, savingsRate },
+    monthly,
+    expenseCategories: mapCategories(expenseCategoryRows),
+    incomeCategories: mapCategories(incomeCategoryRows),
+  };
+}
+
 export async function getNetWorthHistory(userId: string) {
   return prisma.netWorthSnapshot.findMany({
     where: { userId },

@@ -17,6 +17,7 @@ import SettingsPage from '@/pages/Settings';
 import GoldRealEstatePage from '@/pages/investments/GoldRealEstate';
 import RecurringRulesPage from '@/pages/transactions/RecurringRules';
 import ChangePasswordPage from '@/pages/ChangePassword';
+import ProfitLossPage from '@/pages/ProfitLoss';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, user } = useAuth();
@@ -61,6 +62,7 @@ export default function App() {
         <Route path="budgets" element={<BudgetsPage />} />
         <Route path="loans/*" element={<LoansPage />} />
         <Route path="tax/*" element={<TaxCentrePage />} />
+        <Route path="profit-loss" element={<ProfitLossPage />} />
         <Route path="settings" element={<SettingsPage />} />
 
         {/* Admin-only routes */}

@@ -75,3 +75,41 @@ export async function fetchFamilyOverview(fy?: string): Promise<FamilyOverview> 
   const res = await api.get<{ data: FamilyOverview }>('/dashboard/family-overview', { params });
   return res.data.data;
 }
+
+// ── Profit & Loss ─────────────────────────────────────────────────────────────
+
+export interface PnLSummary {
+  totalIncome: number;
+  totalExpense: number;
+  netSavings: number;
+  savingsRate: number;
+}
+
+export interface PnLMonthRow {
+  month: string;
+  monthIndex: number;
+  year: number;
+  income: number;
+  expense: number;
+  net: number;
+}
+
+export interface PnLCategoryRow {
+  categoryId: string | null;
+  categoryName: string;
+  total: number;
+}
+
+export interface ProfitAndLoss {
+  fy: string;
+  summary: PnLSummary;
+  monthly: PnLMonthRow[];
+  expenseCategories: PnLCategoryRow[];
+  incomeCategories: PnLCategoryRow[];
+}
+
+export async function fetchProfitAndLoss(fy?: string): Promise<ProfitAndLoss> {
+  const params = fy ? { fy } : {};
+  const res = await api.get<{ data: ProfitAndLoss }>('/reports/profit-and-loss', { params });
+  return res.data.data;
+}

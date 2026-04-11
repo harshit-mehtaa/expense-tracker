@@ -40,7 +40,7 @@ import snapshotsRouter from './routes/snapshots';
 import { parseCSV, makeImportHash } from './services/importService';
 import { prisma } from './config/prisma';
 import { AppError } from './utils/AppError';
-import { computeNetWorthStatement } from './services/dashboardService';
+import { computeNetWorthStatement, getProfitAndLoss } from './services/dashboardService';
 
 const app = express();
 
@@ -247,6 +247,13 @@ app.get('/api/reports/net-worth-statement', requireAuth, asyncHandler(async (req
   const userId = req.user!.userId;
   const statement = await computeNetWorthStatement(userId);
   sendSuccess(res, statement);
+}));
+
+app.get('/api/reports/profit-and-loss', requireAuth, asyncHandler(async (req, res) => {
+  const fy = validateFY(req.query.fy);
+  const { userId, role } = req.user!;
+  const data = await getProfitAndLoss(userId, role, fy);
+  sendSuccess(res, data);
 }));
 
 // ── Error handler (must be last) ──────────────────────────────────────────────

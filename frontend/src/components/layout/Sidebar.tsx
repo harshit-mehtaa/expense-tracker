@@ -28,6 +28,7 @@ const NAV_ITEMS = [
   { to: '/budgets', icon: Target, label: 'Budgets' },
   { to: '/loans', icon: CreditCard, label: 'Loans & EMIs' },
   { to: '/tax', icon: IndianRupee, label: 'Tax Centre' },
+  { to: '/profit-loss', icon: FileText, label: 'P&L Report' },
 ];
 
 const ADMIN_NAV_ITEMS = [
