@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { TablePagination } from '@/components/shared/TablePagination';
-import { investmentsApi, type Investment, type FD, type RD } from '@/api/investments';
+import { investmentsApi, type Investment, type FD, type RD, type SIP } from '@/api/investments';
 import { useFY } from '@/contexts/FYContext';
 import { cn } from '@/lib/utils';
 
@@ -21,6 +21,26 @@ const INV_TYPES: Record<string, string> = {
   BONDS: 'Bonds', CRYPTO: 'Crypto', OTHER: 'Other',
 };
 
+
+const rdSchema = z.object({
+  bankName: z.string().min(1, 'Required'),
+  monthlyInstallment: z.coerce.number().positive(),
+  interestRate: z.coerce.number().positive(),
+  tenureMonths: z.coerce.number().int().positive(),
+  startDate: z.string().min(1, 'Required'),
+  maturityDate: z.string().min(1, 'Required'),
+  status: z.enum(['ACTIVE', 'MATURED', 'CLOSED']).default('ACTIVE'),
+});
+
+const sipSchema = z.object({
+  investmentId: z.string().min(1, 'Required'),
+  fundName: z.string().min(1, 'Required'),
+  monthlyAmount: z.coerce.number().positive(),
+  sipDate: z.coerce.number().int().min(1).max(28),
+  startDate: z.string().min(1, 'Required'),
+  status: z.enum(['ACTIVE', 'PAUSED', 'STOPPED']).default('ACTIVE'),
+  folioNumber: z.string().optional(),
+});
 
 const fdSchema = z.object({
   bankName: z.string().min(1, 'Required'),
@@ -53,6 +73,8 @@ const invSchema = z.object({
   notes: z.string().optional(),
 });
 
+type RDForm = z.infer<typeof rdSchema>;
+type SIPForm = z.infer<typeof sipSchema>;
 type FDForm = z.infer<typeof fdSchema>;
 type InvForm = z.infer<typeof invSchema>;
 
@@ -69,6 +91,8 @@ export default function InvestmentsPage() {
   const [editInvValue, setEditInvValue] = useState('');
   const [showFDForm, setShowFDForm] = useState(false);
   const [editingFD, setEditingFD] = useState<FD | null>(null);
+  const [showRDForm, setShowRDForm] = useState(false);
+  const [showSIPForm, setShowSIPForm] = useState(false);
   const [invPage, setInvPage] = useState(1);
 
   const { data: portfolio } = useQuery({ queryKey: ['portfolio'], queryFn: investmentsApi.getPortfolioSummary });
@@ -82,9 +106,17 @@ export default function InvestmentsPage() {
   const { data: rds = [] } = useQuery({ queryKey: ['rds'], queryFn: () => investmentsApi.getRDs() });
   const { data: sips = [] } = useQuery({ queryKey: ['sips'], queryFn: investmentsApi.getSIPs });
   const { data: tracker80C } = useQuery({ queryKey: ['tax-80c', selectedFY], queryFn: () => investmentsApi.get80CSummary(selectedFY) });
+  // Fetch all investments (unpaginated) for the SIP investmentId dropdown
+  const { data: allInvData } = useQuery({
+    queryKey: ['investments-all'],
+    queryFn: () => investmentsApi.getAll({ page: 1, pageSize: 1000 }),
+  });
+  const allInvestments = allInvData?.items ?? [];
 
   const fdForm = useForm<FDForm>({ resolver: zodResolver(fdSchema), defaultValues: { interestPayoutType: 'CUMULATIVE', isTaxSaver: false, tdsApplicable: true } });
   const invForm = useForm<InvForm>({ resolver: zodResolver(invSchema), defaultValues: { type: 'MUTUAL_FUND', currency: 'INR', isTaxSaving: false } });
+  const rdForm = useForm<RDForm>({ resolver: zodResolver(rdSchema), defaultValues: { status: 'ACTIVE' } });
+  const sipForm = useForm<SIPForm>({ resolver: zodResolver(sipSchema), defaultValues: { status: 'ACTIVE', sipDate: 1 } });
 
   const createFDMutation = useMutation({
     mutationFn: (data: FDForm) => investmentsApi.createFD(data),
@@ -96,8 +128,29 @@ export default function InvestmentsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['fds'] }),
   });
 
+  const createRDMutation = useMutation({
+    mutationFn: (data: RDForm) => investmentsApi.createRD(data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['rds'] }); setShowRDForm(false); rdForm.reset(); },
+  });
+
+  const deleteRDMutation = useMutation({
+    mutationFn: (id: string) => investmentsApi.deleteRD(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['rds'] }),
+  });
+
+  const createSIPMutation = useMutation({
+    mutationFn: (data: SIPForm) => investmentsApi.createSIP(data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['sips'] }); setShowSIPForm(false); sipForm.reset(); },
+  });
+
+  const deleteSIPMutation = useMutation({
+    mutationFn: (id: string) => investmentsApi.deleteSIP(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['sips'] }),
+  });
+
   const invalidateInvestments = useCallback(() => {
     qc.invalidateQueries({ queryKey: ['investments'] });
+    qc.invalidateQueries({ queryKey: ['investments-all'] });
     qc.invalidateQueries({ queryKey: ['portfolio'] });
   }, [qc]);
 
@@ -152,7 +205,15 @@ export default function InvestmentsPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Investments & Portfolio</h1>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setShowFDForm(true)}><Plus className="h-4 w-4 mr-1" /> Add FD</Button>
+          {tab === 'fd' && (
+            <Button variant="outline" onClick={() => setShowFDForm(true)}><Plus className="h-4 w-4 mr-1" /> Add FD</Button>
+          )}
+          {tab === 'rd' && (
+            <Button variant="outline" onClick={() => setShowRDForm(true)}><Plus className="h-4 w-4 mr-1" /> Add RD</Button>
+          )}
+          {tab === 'sip' && (
+            <Button variant="outline" onClick={() => setShowSIPForm(true)}><Plus className="h-4 w-4 mr-1" /> Add SIP</Button>
+          )}
           <Button onClick={() => setShowInvForm(true)}><Plus className="h-4 w-4 mr-1" /> Add Investment</Button>
         </div>
       </div>
@@ -428,7 +489,12 @@ export default function InvestmentsPage() {
             </div>
           ) : rds.map((rd) => (
             <div key={rd.id} className="rounded-lg border bg-card p-5 space-y-3">
-              <p className="font-semibold">{rd.bankName}</p>
+              <div className="flex items-start justify-between">
+                <p className="font-semibold">{rd.bankName}</p>
+                <Button variant="ghost" size="icon" onClick={() => deleteRDMutation.mutate(rd.id)}>
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              </div>
               <div className="grid grid-cols-2 gap-2 text-sm">
                 <div><p className="text-muted-foreground">Monthly</p><INRDisplay amount={rd.monthlyInstallment} className="font-semibold" /></div>
                 <div><p className="text-muted-foreground">Rate</p><p>{rd.interestRate}%</p></div>
@@ -462,17 +528,22 @@ export default function InvestmentsPage() {
             <div key={sip.id} className="rounded-lg border bg-card p-5 space-y-3">
               <div className="flex items-center justify-between">
                 <p className="font-semibold">{sip.fundName}</p>
-                <span className={cn(
-                  'text-xs px-2 py-0.5 rounded-full',
-                  sip.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600',
-                )}>
-                  {sip.status}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className={cn(
+                    'text-xs px-2 py-0.5 rounded-full',
+                    sip.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600',
+                  )}>
+                    {sip.status}
+                  </span>
+                  <Button variant="ghost" size="icon" onClick={() => deleteSIPMutation.mutate(sip.id)}>
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-2 text-sm">
                 <div><p className="text-muted-foreground">Monthly</p><INRDisplay amount={sip.monthlyAmount} className="font-semibold" /></div>
-                <div><p className="text-muted-foreground">SIP Date</p><p>{sip.sipDate}th of month</p></div>
-                <div><p className="text-muted-foreground">Started</p><p>{new Date(sip.startDate).toLocaleDateString('en-IN')}</p></div>
+                <div><p className="text-muted-foreground">SIP Date</p><p>Day {sip.sipDate} of month</p></div>
+                <div><p className="text-muted-foreground">Started</p><p>{sip.startDate ? new Date(sip.startDate).toLocaleDateString('en-IN') : '—'}</p></div>
                 <div><p className="text-muted-foreground">Current Value</p><INRDisplay amount={(sip.investment as any).currentValueINR ?? Number((sip.investment as any).unitsOrQuantity ?? 0) * Number((sip.investment as any).currentPricePerUnit ?? 0)} className="text-green-600" /></div>
               </div>
             </div>
@@ -509,6 +580,77 @@ export default function InvestmentsPage() {
               <div className="flex justify-end gap-3">
                 <Button type="button" variant="outline" onClick={() => { setShowFDForm(false); fdForm.reset(); }}>Cancel</Button>
                 <Button type="submit" disabled={createFDMutation.isPending}>Add FD</Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add RD Form */}
+      {showRDForm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-background rounded-lg border shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
+            <h2 className="text-xl font-semibold mb-4">Add Recurring Deposit</h2>
+            <form onSubmit={rdForm.handleSubmit((data) => createRDMutation.mutate(data))} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="col-span-2 space-y-1"><Label>Bank Name</Label><Input {...rdForm.register('bankName')} placeholder="e.g. HDFC Bank" /></div>
+                <div className="space-y-1"><Label>Monthly Installment (₹)</Label><Input {...rdForm.register('monthlyInstallment')} type="number" /></div>
+                <div className="space-y-1"><Label>Rate (% p.a.)</Label><Input {...rdForm.register('interestRate')} type="number" step="0.01" /></div>
+                <div className="space-y-1"><Label>Tenure (months)</Label><Input {...rdForm.register('tenureMonths')} type="number" /></div>
+                <div className="space-y-1">
+                  <Label>Status</Label>
+                  <select {...rdForm.register('status')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                    <option value="ACTIVE">Active</option>
+                    <option value="MATURED">Matured</option>
+                    <option value="CLOSED">Closed</option>
+                  </select>
+                </div>
+                <div className="space-y-1"><Label>Start Date</Label><Input {...rdForm.register('startDate')} type="date" /></div>
+                <div className="space-y-1"><Label>Maturity Date</Label><Input {...rdForm.register('maturityDate')} type="date" /></div>
+              </div>
+              <div className="flex justify-end gap-3">
+                <Button type="button" variant="outline" onClick={() => { setShowRDForm(false); rdForm.reset(); }}>Cancel</Button>
+                <Button type="submit" disabled={createRDMutation.isPending}>Add RD</Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add SIP Form */}
+      {showSIPForm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-background rounded-lg border shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
+            <h2 className="text-xl font-semibold mb-4">Add SIP</h2>
+            <form onSubmit={sipForm.handleSubmit((data) => createSIPMutation.mutate(data))} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="col-span-2 space-y-1">
+                  <Label>Linked Investment</Label>
+                  <select {...sipForm.register('investmentId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                    <option value="">— Select investment —</option>
+                    {allInvestments.map((inv) => (
+                      <option key={inv.id} value={inv.id}>{inv.name} ({INV_TYPES[inv.type] ?? inv.type})</option>
+                    ))}
+                  </select>
+                  {sipForm.formState.errors.investmentId && <p className="text-xs text-destructive">{sipForm.formState.errors.investmentId.message}</p>}
+                </div>
+                <div className="col-span-2 space-y-1"><Label>Fund Name</Label><Input {...sipForm.register('fundName')} placeholder="e.g. Mirae Asset Large Cap Fund" /></div>
+                <div className="space-y-1"><Label>Monthly Amount (₹)</Label><Input {...sipForm.register('monthlyAmount')} type="number" /></div>
+                <div className="space-y-1"><Label>SIP Date (1–28)</Label><Input {...sipForm.register('sipDate')} type="number" min={1} max={28} /></div>
+                <div className="space-y-1"><Label>Start Date</Label><Input {...sipForm.register('startDate')} type="date" /></div>
+                <div className="space-y-1">
+                  <Label>Status</Label>
+                  <select {...sipForm.register('status')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                    <option value="ACTIVE">Active</option>
+                    <option value="PAUSED">Paused</option>
+                    <option value="STOPPED">Stopped</option>
+                  </select>
+                </div>
+                <div className="col-span-2 space-y-1"><Label>Folio Number (optional)</Label><Input {...sipForm.register('folioNumber')} placeholder="Optional" /></div>
+              </div>
+              <div className="flex justify-end gap-3">
+                <Button type="button" variant="outline" onClick={() => { setShowSIPForm(false); sipForm.reset(); }}>Cancel</Button>
+                <Button type="submit" disabled={createSIPMutation.isPending}>Add SIP</Button>
               </div>
             </form>
           </div>
