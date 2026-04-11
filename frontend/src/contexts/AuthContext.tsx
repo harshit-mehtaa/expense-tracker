@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import api, { setAccessToken } from '@/lib/api';
 
 interface User {
@@ -25,6 +25,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const sessionRestored = useRef(false);
 
   const fetchCurrentUser = useCallback(async () => {
     try {
@@ -36,8 +37,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Restore session on app load by attempting a token refresh
+  // Restore session on app load by attempting a token refresh.
+  // The ref guard prevents React StrictMode's double-invoke from firing two concurrent refresh calls
+  // (which would trigger the backend's token-reuse detection and nuke valid sessions).
   useEffect(() => {
+    if (sessionRestored.current) return;
+    sessionRestored.current = true;
+
     const restoreSession = async () => {
       try {
         const response = await api.post<{ data: { accessToken: string } }>('/auth/refresh');

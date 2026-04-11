@@ -24,7 +24,7 @@ export function Header() {
 
   const { data: alerts = [] } = useQuery({
     queryKey: ['dashboard', 'alerts'],
-    queryFn: fetchUpcomingAlerts,
+    queryFn: () => fetchUpcomingAlerts(),
     staleTime: 5 * 60 * 1000,
   });
 

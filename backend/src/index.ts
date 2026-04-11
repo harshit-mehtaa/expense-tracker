@@ -255,8 +255,8 @@ app.get('/api/reports/profit-and-loss', requireAuth, asyncHandler(async (req, re
   let targetUserId: string | undefined;
   if (role === 'ADMIN' && req.query.targetUserId) {
     const raw = req.query.targetUserId as string;
-    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!UUID_RE.test(raw)) throw AppError.badRequest('Invalid targetUserId format');
+    const CUID_RE = /^[a-z0-9]{20,30}$/i;
+    if (!CUID_RE.test(raw)) throw AppError.badRequest('Invalid targetUserId format');
     const target = await prisma.user.findFirst({ where: { id: raw, deletedAt: null } });
     if (!target) throw AppError.notFound('User');
     targetUserId = raw;

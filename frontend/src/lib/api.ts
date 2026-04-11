@@ -88,7 +88,8 @@ api.interceptors.response.use(
 
     // For all non-401 errors (and 401s that are not retried), dispatch a toast event.
     // Skip network errors that have no response (handled by queryClient onError).
-    if (error.response) {
+    // Skip refresh-endpoint 401s — they just mean "no valid session" and are handled silently by AuthContext.
+    if (error.response && !(isRefreshEndpoint && error.response.status === 401)) {
       const data = error.response.data as { message?: string } | undefined;
       const message = data?.message ?? `Request failed (${error.response.status})`;
       window.dispatchEvent(new CustomEvent('api:error', { detail: { message } }));

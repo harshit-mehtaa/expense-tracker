@@ -8,7 +8,7 @@ import * as transactionService from '../services/transactionService';
 import { AppError } from '../utils/AppError';
 import { prisma } from '../config/prisma';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CUID_RE = /^[a-z0-9]{20,30}$/i;
 
 const router = Router();
 router.use(requireAuth);
@@ -40,7 +40,7 @@ router.get(
     if (req.user!.role === 'ADMIN') {
       const rawTarget = (req.query.targetUserId as string) || (req.query.userId as string);
       if (rawTarget) {
-        if (!UUID_RE.test(rawTarget)) throw AppError.badRequest('Invalid targetUserId format');
+        if (!CUID_RE.test(rawTarget)) throw AppError.badRequest('Invalid targetUserId format');
         const target = await prisma.user.findFirst({ where: { id: rawTarget, deletedAt: null } });
         if (!target) throw AppError.notFound('User');
         effectiveUserId = rawTarget;

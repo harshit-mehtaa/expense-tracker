@@ -10,7 +10,7 @@ import * as svc from '../services/loanService';
 const router = Router();
 router.use(requireAuth);
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CUID_RE = /^[a-z0-9]{20,30}$/i;
 
 const loanSchema = z.object({
   lenderName: z.string().min(1),
@@ -34,7 +34,7 @@ router.get('/', asyncHandler(async (req, res) => {
   let effectiveUserId: string | undefined = req.user!.userId;
   if (req.user!.role === 'ADMIN' && req.query.targetUserId) {
     const raw = req.query.targetUserId as string;
-    if (!UUID_RE.test(raw)) throw AppError.badRequest('Invalid targetUserId format');
+    if (!CUID_RE.test(raw)) throw AppError.badRequest('Invalid targetUserId format');
     const target = await prisma.user.findFirst({ where: { id: raw, deletedAt: null } });
     if (!target) throw AppError.notFound('User');
     effectiveUserId = raw;
