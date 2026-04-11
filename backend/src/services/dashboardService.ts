@@ -516,10 +516,17 @@ export async function getFamilyOverview(fy: string) {
   };
 }
 
-export async function getProfitAndLoss(userId: string, requesterRole: string, fy?: string) {
+export async function getProfitAndLoss(
+  userId: string,
+  requesterRole: string,
+  fy?: string,
+  targetUserId?: string,
+) {
   const currentFY = fy ?? getCurrentFY();
   const { start, end } = getFYRange(currentFY);
-  const userFilter: Prisma.TransactionWhereInput = requesterRole === 'ADMIN' ? {} : { userId };
+  // Effective user: MEMBER always sees own data; ADMIN can scope to a specific member or family-wide
+  const effectiveUserId = requesterRole === 'ADMIN' ? targetUserId : userId;
+  const userFilter: Prisma.TransactionWhereInput = effectiveUserId ? { userId: effectiveUserId } : {};
 
   // Summary + monthly series + expense categories + income categories — all in parallel
   const [totalIncome, totalExpense, monthlyResults, expenseCategoryRows, incomeCategoryRows] =
@@ -538,7 +545,7 @@ export async function getProfitAndLoss(userId: string, requesterRole: string, fy
           date >= ${start}
           AND date <= ${end}
           AND "deletedAt" IS NULL
-          ${requesterRole !== 'ADMIN' ? Prisma.sql`AND "userId" = ${userId}` : Prisma.empty}
+          ${effectiveUserId ? Prisma.sql`AND "userId" = ${effectiveUserId}` : Prisma.empty}
         GROUP BY month, year
         ORDER BY year, month
       `,

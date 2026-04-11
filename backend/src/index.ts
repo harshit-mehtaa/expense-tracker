@@ -252,7 +252,16 @@ app.get('/api/reports/net-worth-statement', requireAuth, asyncHandler(async (req
 app.get('/api/reports/profit-and-loss', requireAuth, asyncHandler(async (req, res) => {
   const fy = validateFY(req.query.fy);
   const { userId, role } = req.user!;
-  const data = await getProfitAndLoss(userId, role, fy);
+  let targetUserId: string | undefined;
+  if (role === 'ADMIN' && req.query.targetUserId) {
+    const raw = req.query.targetUserId as string;
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!UUID_RE.test(raw)) throw AppError.badRequest('Invalid targetUserId format');
+    const target = await prisma.user.findFirst({ where: { id: raw, deletedAt: null } });
+    if (!target) throw AppError.notFound('User not found');
+    targetUserId = raw;
+  }
+  const data = await getProfitAndLoss(userId, role, fy, targetUserId);
   sendSuccess(res, data);
 }));
 

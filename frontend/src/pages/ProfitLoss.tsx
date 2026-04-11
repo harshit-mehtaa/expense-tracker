@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   AreaChart, Area,
@@ -8,7 +9,9 @@ import {
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
 import { useFY } from '@/contexts/FYContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { fetchProfitAndLoss } from '@/api/dashboard';
+import api from '@/lib/api';
 import { formatINRShort } from '@/lib/indianFormat';
 import {
   useChartGradients,
@@ -20,13 +23,23 @@ import {
 
 export default function ProfitLossPage() {
   const { selectedFY } = useFY();
+  const { user } = useAuth();
   const { gradIds, GradDefs } = useChartGradients();
+  const isAdmin = user?.role === 'ADMIN';
+  const [viewUserId, setViewUserId] = useState<string | undefined>(undefined);
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['profit-and-loss', selectedFY],
-    queryFn: () => fetchProfitAndLoss(selectedFY),
+  const { data: members = [], isLoading: isMembersLoading } = useQuery<{ id: string; name: string; isActive: boolean }[]>({
+    queryKey: ['admin-users'],
+    queryFn: () => api.get<{ data: { id: string; name: string; isActive: boolean }[] }>('/admin/users').then((r) => r.data.data),
+    enabled: isAdmin,
   });
 
+  const { data, isLoading: isPnLLoading } = useQuery({
+    queryKey: ['profit-and-loss', selectedFY, viewUserId],
+    queryFn: () => fetchProfitAndLoss(selectedFY, viewUserId),
+  });
+
+  const isLoading = isPnLLoading || (isAdmin && isMembersLoading);
   if (isLoading) return <PageLoader />;
 
   const summary = data?.summary;
@@ -63,7 +76,30 @@ export default function ProfitLossPage() {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold">Profit &amp; Loss</h1>
-        <p className="text-muted-foreground text-sm mt-1">FY {selectedFY} · Income vs expenses breakdown</p>
+        <p className="text-muted-foreground text-sm mt-1">
+          FY {selectedFY} ·{' '}
+          {isAdmin && viewUserId
+            ? `${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}'s P&L`
+            : isAdmin
+            ? 'Family-wide P&L'
+            : 'Income vs expenses breakdown'}
+        </p>
+        {isAdmin && (
+          <div className="flex items-center gap-2 mt-3">
+            <label htmlFor="pnl-user-select" className="text-sm font-medium text-muted-foreground">View:</label>
+            <select
+              id="pnl-user-select"
+              value={viewUserId ?? ''}
+              onChange={(e) => setViewUserId(e.target.value || undefined)}
+              className="rounded-md border bg-background px-3 py-1.5 text-sm"
+            >
+              <option value="">All Family</option>
+              {members.filter((m) => m.isActive).map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* Summary cards */}

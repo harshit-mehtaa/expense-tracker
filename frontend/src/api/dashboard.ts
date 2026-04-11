@@ -108,8 +108,10 @@ export interface ProfitAndLoss {
   incomeCategories: PnLCategoryRow[];
 }
 
-export async function fetchProfitAndLoss(fy?: string): Promise<ProfitAndLoss> {
-  const params = fy ? { fy } : {};
+export async function fetchProfitAndLoss(fy?: string, targetUserId?: string): Promise<ProfitAndLoss> {
+  const params: Record<string, string> = {};
+  if (fy) params.fy = fy;
+  if (targetUserId) params.targetUserId = targetUserId;
   const res = await api.get<{ data: ProfitAndLoss }>('/reports/profit-and-loss', { params });
   return res.data.data;
 }
