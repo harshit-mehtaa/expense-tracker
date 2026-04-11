@@ -170,18 +170,26 @@ export async function get80CSummary(userId: string, fy: string) {
 
 // ─── CRUD: Investments ────────────────────────────────────────────────────────
 
-export async function getInvestments(userId: string, type?: InvestmentType) {
-  const exchangeRates = await prisma.exchangeRate.findMany({ where: { toCurrency: 'INR' } });
+export async function getInvestments(userId: string, type?: InvestmentType, page = 1, pageSize = 25) {
+  const where = { userId, ...(type ? { type } : {}) };
+  const skip = (page - 1) * pageSize;
+
+  const [exchangeRates, total, investments] = await Promise.all([
+    prisma.exchangeRate.findMany({ where: { toCurrency: 'INR' } }),
+    prisma.investment.count({ where }),
+    prisma.investment.findMany({
+      where,
+      include: { sipTransactions: { orderBy: { date: 'asc' } } },
+      orderBy: { purchaseDate: 'desc' },
+      skip,
+      take: pageSize,
+    }),
+  ]);
+
   const rateMap: Record<string, number> = {};
   exchangeRates.forEach((r) => { rateMap[r.fromCurrency] = Number(r.rate); });
 
-  const investments = await prisma.investment.findMany({
-    where: { userId, ...(type ? { type } : {}) },
-    include: { sipTransactions: { orderBy: { date: 'asc' } } },
-    orderBy: { purchaseDate: 'desc' },
-  });
-
-  return investments.map((inv) => {
+  const items = investments.map((inv) => {
     const fxRate = inv.currency === 'INR' ? 1 : (rateMap[inv.currency] ?? 1);
     const buyFx = inv.purchaseExchangeRate ? Number(inv.purchaseExchangeRate) : fxRate;
     const units = Number(inv.unitsOrQuantity);
@@ -202,6 +210,11 @@ export async function getInvestments(userId: string, type?: InvestmentType) {
 
     return { ...inv, investedINR: invested, currentValueINR: current, gainINR: gain, gainPct, xirr: invXirr };
   });
+
+  return {
+    items,
+    pagination: { total, limit: pageSize, hasMore: page * pageSize < total },
+  };
 }
 
 export async function createInvestment(userId: string, data: Prisma.InvestmentCreateWithoutUserInput) {

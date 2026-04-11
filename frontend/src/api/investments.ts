@@ -86,12 +86,30 @@ export interface ExchangeRate {
   updatedAt: string;
 }
 
+export interface InvestmentPaginationMeta {
+  total: number;
+  limit: number;
+  hasMore: boolean;
+}
+
+export interface InvestmentPage {
+  items: Investment[];
+  pagination: InvestmentPaginationMeta;
+}
+
 const unwrap = <T>(res: { data: { data: T } }): T => res.data.data;
 
 export const investmentsApi = {
   getPortfolioSummary: () => api.get<{ data: PortfolioSummary }>('/investments/portfolio-summary').then(unwrap),
   get80CSummary: (fy: string) => api.get<{ data: any }>(`/investments/80c-summary?fy=${fy}`).then(unwrap),
-  getAll: (type?: string) => api.get<{ data: Investment[] }>('/investments', { params: type ? { type } : {} }).then(unwrap),
+  getAll: (params?: { type?: string; page?: number; pageSize?: number }): Promise<InvestmentPage> =>
+    api.get<{ data: Investment[]; pagination: InvestmentPaginationMeta }>('/investments', {
+      params: {
+        ...(params?.type ? { type: params.type } : {}),
+        page: params?.page ?? 1,
+        pageSize: params?.pageSize ?? 25,
+      },
+    }).then((res) => ({ items: res.data.data, pagination: res.data.pagination })),
   create: (data: object) => api.post<{ data: Investment }>('/investments', data).then(unwrap),
   update: (id: string, data: object) => api.put<{ data: Investment }>(`/investments/${id}`, data).then(unwrap),
   delete: (id: string) => api.delete(`/investments/${id}`),

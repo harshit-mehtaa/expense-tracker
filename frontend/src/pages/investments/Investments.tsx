@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
+import { TablePagination } from '@/components/shared/TablePagination';
 import { investmentsApi, type Investment, type FD, type RD } from '@/api/investments';
 import { useFY } from '@/contexts/FYContext';
 import { cn } from '@/lib/utils';
@@ -57,6 +58,8 @@ type InvForm = z.infer<typeof invSchema>;
 
 type TabType = 'portfolio' | 'fd' | 'rd' | 'sip';
 
+const PAGE_SIZE = 25;
+
 export default function InvestmentsPage() {
   const { selectedFY } = useFY();
   const qc = useQueryClient();
@@ -66,9 +69,15 @@ export default function InvestmentsPage() {
   const [editInvValue, setEditInvValue] = useState('');
   const [showFDForm, setShowFDForm] = useState(false);
   const [editingFD, setEditingFD] = useState<FD | null>(null);
+  const [invPage, setInvPage] = useState(1);
 
   const { data: portfolio } = useQuery({ queryKey: ['portfolio'], queryFn: investmentsApi.getPortfolioSummary });
-  const { data: investments = [] } = useQuery({ queryKey: ['investments'], queryFn: () => investmentsApi.getAll() });
+  const { data: invData } = useQuery({
+    queryKey: ['investments', { page: invPage, pageSize: PAGE_SIZE }],
+    queryFn: () => investmentsApi.getAll({ page: invPage, pageSize: PAGE_SIZE }),
+  });
+  const investments = invData?.items ?? [];
+  const invPagination = invData?.pagination;
   const { data: fds = [] } = useQuery({ queryKey: ['fds'], queryFn: () => investmentsApi.getFDs() });
   const { data: rds = [] } = useQuery({ queryKey: ['rds'], queryFn: () => investmentsApi.getRDs() });
   const { data: sips = [] } = useQuery({ queryKey: ['sips'], queryFn: investmentsApi.getSIPs });
@@ -87,11 +96,16 @@ export default function InvestmentsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['fds'] }),
   });
 
+  const invalidateInvestments = useCallback(() => {
+    qc.invalidateQueries({ queryKey: ['investments'] });
+    qc.invalidateQueries({ queryKey: ['portfolio'] });
+  }, [qc]);
+
   const createInvMutation = useMutation({
     mutationFn: (data: InvForm) => investmentsApi.create(data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['investments'] });
-      qc.invalidateQueries({ queryKey: ['portfolio'] });
+      invalidateInvestments();
+      setInvPage(1);
       setShowInvForm(false);
       invForm.reset();
     },
@@ -100,8 +114,8 @@ export default function InvestmentsPage() {
   const deleteInvMutation = useMutation({
     mutationFn: investmentsApi.delete,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['investments'] });
-      qc.invalidateQueries({ queryKey: ['portfolio'] });
+      invalidateInvestments();
+      setInvPage(1);
     },
   });
 
@@ -109,8 +123,7 @@ export default function InvestmentsPage() {
     mutationFn: ({ id, price }: { id: string; price: number }) =>
       investmentsApi.update(id, { currentPricePerUnit: price }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['investments'] });
-      qc.invalidateQueries({ queryKey: ['portfolio'] });
+      invalidateInvestments();
       setEditingInvId(null);
     },
   });
@@ -284,6 +297,15 @@ export default function InvestmentsPage() {
                   </tbody>
                 </table>
               </div>
+            )}
+
+            {invPagination && invPagination.total > PAGE_SIZE && (
+              <TablePagination
+                page={invPage}
+                pageSize={PAGE_SIZE}
+                total={invPagination.total}
+                onPageChange={setInvPage}
+              />
             )}
 
             {/* 80C Tracker */}

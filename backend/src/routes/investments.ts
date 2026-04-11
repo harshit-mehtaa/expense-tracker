@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireAdmin } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
-import { sendSuccess, sendCreated, sendNoContent } from '../utils/response';
+import { sendSuccess, sendCreated, sendNoContent, sendPaginated } from '../utils/response';
 import { getCurrentFY } from '../utils/financialYear';
 import * as svc from '../services/investmentService';
 
@@ -205,8 +205,12 @@ const investmentSchema = z.object({
 
 router.get('/', asyncHandler(async (req, res) => {
   const type = req.query.type as any;
-  const investments = await svc.getInvestments(req.user!.userId, type);
-  sendSuccess(res, investments);
+  const rawPage = Number(req.query.page);
+  const rawSize = Number(req.query.pageSize);
+  const page = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1;
+  const pageSize = Number.isFinite(rawSize) && rawSize >= 1 ? Math.min(100, Math.floor(rawSize)) : 25;
+  const { items, pagination } = await svc.getInvestments(req.user!.userId, type, page, pageSize);
+  sendPaginated(res, items, pagination);
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
