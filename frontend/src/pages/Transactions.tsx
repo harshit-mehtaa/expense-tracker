@@ -8,7 +8,7 @@ import { useSearchParams } from 'react-router-dom';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
-import { Receipt, Upload, Plus, X, CheckCircle, AlertCircle, Download, Pencil, Trash2, SlidersHorizontal } from 'lucide-react';
+import { Receipt, Upload, X, CheckCircle, AlertCircle, Download, Pencil, Trash2, SlidersHorizontal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -854,10 +854,6 @@ export default function TransactionsPage() {
           <Button variant="outline" onClick={() => setShowImport(true)}>
             <Upload className="h-4 w-4 sm:mr-2" />
             <span className="hidden sm:inline">Import CSV</span>
-          </Button>
-          <Button onClick={() => setShowAdd(true)}>
-            <Plus className="h-4 w-4 sm:mr-2" />
-            <span className="hidden sm:inline">Add Transaction</span>
           </Button>
         </div>
       </div>
