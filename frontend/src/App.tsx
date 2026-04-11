@@ -14,7 +14,8 @@ import TaxCentrePage from '@/pages/tax/TaxCentre';
 import FamilyMembersPage from '@/pages/admin/FamilyMembers';
 import ReportsPage from '@/pages/admin/Reports';
 import SettingsPage from '@/pages/Settings';
-import GoldRealEstatePage from '@/pages/investments/GoldRealEstate';
+import GoldPage from '@/pages/investments/Gold';
+import RealEstatePage from '@/pages/investments/RealEstate';
 import RecurringRulesPage from '@/pages/transactions/RecurringRules';
 import ChangePasswordPage from '@/pages/ChangePassword';
 import ProfitLossPage from '@/pages/ProfitLoss';
@@ -57,7 +58,8 @@ export default function App() {
         <Route path="recurring" element={<RecurringRulesPage />} />
         <Route path="accounts/*" element={<AccountsPage />} />
         <Route path="investments/*" element={<InvestmentsPage />} />
-        <Route path="gold-realestate" element={<GoldRealEstatePage />} />
+        <Route path="gold" element={<GoldPage />} />
+        <Route path="real-estate" element={<RealEstatePage />} />
         <Route path="insurance" element={<InsurancePage />} />
         <Route path="budgets" element={<BudgetsPage />} />
         <Route path="loans/*" element={<LoansPage />} />

@@ -13,6 +13,7 @@ import {
   Gem,
   IndianRupee,
   Repeat,
+  Home,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -23,7 +24,8 @@ const NAV_ITEMS = [
   { to: '/recurring', icon: Repeat, label: 'Recurring' },
   { to: '/accounts', icon: Building2, label: 'Accounts & Deposits' },
   { to: '/investments', icon: TrendingUp, label: 'Investments' },
-  { to: '/gold-realestate', icon: Gem, label: 'Gold & Real Estate' },
+  { to: '/gold', icon: Gem, label: 'Gold' },
+  { to: '/real-estate', icon: Home, label: 'Real Estate' },
   { to: '/insurance', icon: Shield, label: 'Insurance' },
   { to: '/budgets', icon: Target, label: 'Budgets' },
   { to: '/loans', icon: CreditCard, label: 'Loans & EMIs' },
