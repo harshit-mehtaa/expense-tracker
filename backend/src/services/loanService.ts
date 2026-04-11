@@ -15,13 +15,13 @@ export async function createLoan(userId: string, data: Omit<Prisma.LoanCreateInp
 
 export async function updateLoan(userId: string, id: string, data: Prisma.LoanUpdateInput) {
   const loan = await prisma.loan.findFirst({ where: { id, userId } });
-  if (!loan) throw AppError.notFound('Loan not found');
+  if (!loan) throw AppError.notFound('Loan');
   return prisma.loan.update({ where: { id }, data });
 }
 
 export async function deleteLoan(userId: string, id: string) {
   const loan = await prisma.loan.findFirst({ where: { id, userId } });
-  if (!loan) throw AppError.notFound('Loan not found');
+  if (!loan) throw AppError.notFound('Loan');
   return prisma.loan.delete({ where: { id } });
 }
 
@@ -88,7 +88,7 @@ export function buildAmortizationSchedule(
 
 export async function getLoanAmortization(userId: string, id: string) {
   const loan = await prisma.loan.findFirst({ where: { id, userId } });
-  if (!loan) throw AppError.notFound('Loan not found');
+  if (!loan) throw AppError.notFound('Loan');
 
   const schedule = buildAmortizationSchedule(
     Number(loan.outstandingBalance),
@@ -113,7 +113,7 @@ export async function simulatePrepayment(
   mode: 'reduce_tenure' | 'reduce_emi',
 ) {
   const loan = await prisma.loan.findFirst({ where: { id, userId } });
-  if (!loan) throw AppError.notFound('Loan not found');
+  if (!loan) throw AppError.notFound('Loan');
 
   const outstanding = Number(loan.outstandingBalance);
   const rate = Number(loan.interestRate);

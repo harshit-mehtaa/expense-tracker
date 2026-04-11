@@ -31,13 +31,13 @@ export async function createInsurancePolicy(userId: string, data: Omit<Prisma.In
 
 export async function updateInsurancePolicy(userId: string, id: string, data: Prisma.InsurancePolicyUpdateInput) {
   const policy = await prisma.insurancePolicy.findFirst({ where: { id, userId } });
-  if (!policy) throw AppError.notFound('Policy not found');
+  if (!policy) throw AppError.notFound('Insurance policy');
   return prisma.insurancePolicy.update({ where: { id }, data });
 }
 
 export async function deleteInsurancePolicy(userId: string, id: string) {
   const policy = await prisma.insurancePolicy.findFirst({ where: { id, userId } });
-  if (!policy) throw AppError.notFound('Policy not found');
+  if (!policy) throw AppError.notFound('Insurance policy');
   return prisma.insurancePolicy.delete({ where: { id } });
 }
 

@@ -210,13 +210,13 @@ export async function createInvestment(userId: string, data: Prisma.InvestmentCr
 
 export async function updateInvestment(userId: string, id: string, data: Prisma.InvestmentUpdateInput) {
   const inv = await prisma.investment.findFirst({ where: { id, userId } });
-  if (!inv) throw AppError.notFound('Investment not found');
+  if (!inv) throw AppError.notFound('Investment');
   return prisma.investment.update({ where: { id }, data });
 }
 
 export async function deleteInvestment(userId: string, id: string) {
   const inv = await prisma.investment.findFirst({ where: { id, userId } });
-  if (!inv) throw AppError.notFound('Investment not found');
+  if (!inv) throw AppError.notFound('Investment');
   return prisma.investment.delete({ where: { id } });
 }
 
@@ -252,13 +252,13 @@ export async function createFD(userId: string, data: Omit<Prisma.FixedDepositCre
 
 export async function updateFD(userId: string, id: string, data: Prisma.FixedDepositUpdateInput) {
   const fd = await prisma.fixedDeposit.findFirst({ where: { id, userId } });
-  if (!fd) throw AppError.notFound('FD not found');
+  if (!fd) throw AppError.notFound('Fixed deposit');
   return prisma.fixedDeposit.update({ where: { id }, data });
 }
 
 export async function deleteFD(userId: string, id: string) {
   const fd = await prisma.fixedDeposit.findFirst({ where: { id, userId } });
-  if (!fd) throw AppError.notFound('FD not found');
+  if (!fd) throw AppError.notFound('Fixed deposit');
   return prisma.fixedDeposit.delete({ where: { id } });
 }
 
@@ -284,13 +284,13 @@ export async function createRD(userId: string, data: Omit<Prisma.RecurringDeposi
 
 export async function updateRD(userId: string, id: string, data: Prisma.RecurringDepositUpdateInput) {
   const rd = await prisma.recurringDeposit.findFirst({ where: { id, userId } });
-  if (!rd) throw AppError.notFound('RD not found');
+  if (!rd) throw AppError.notFound('Recurring deposit');
   return prisma.recurringDeposit.update({ where: { id }, data });
 }
 
 export async function deleteRD(userId: string, id: string) {
   const rd = await prisma.recurringDeposit.findFirst({ where: { id, userId } });
-  if (!rd) throw AppError.notFound('RD not found');
+  if (!rd) throw AppError.notFound('Recurring deposit');
   return prisma.recurringDeposit.delete({ where: { id } });
 }
 
@@ -337,19 +337,19 @@ export async function createSIP(userId: string, data: Omit<Prisma.SIPCreateInput
 
 export async function updateSIP(userId: string, id: string, data: Prisma.SIPUpdateInput) {
   const sip = await prisma.sIP.findFirst({ where: { id, userId } });
-  if (!sip) throw AppError.notFound('SIP not found');
+  if (!sip) throw AppError.notFound('SIP');
   return prisma.sIP.update({ where: { id }, data });
 }
 
 export async function deleteSIP(userId: string, id: string) {
   const sip = await prisma.sIP.findFirst({ where: { id, userId } });
-  if (!sip) throw AppError.notFound('SIP not found');
+  if (!sip) throw AppError.notFound('SIP');
   return prisma.sIP.delete({ where: { id } });
 }
 
 export async function addSIPTransaction(userId: string, sipId: string, data: { date: Date; units: number; nav: number; amount: number; type?: 'BUY' | 'SELL' | 'DIVIDEND' }) {
   const sip = await prisma.sIP.findFirst({ where: { id: sipId, userId } });
-  if (!sip) throw AppError.notFound('SIP not found');
+  if (!sip) throw AppError.notFound('SIP');
   return prisma.sIPTransaction.create({
     data: { investmentId: sip.investmentId, date: data.date, units: data.units, nav: data.nav, amount: data.amount, type: data.type ?? 'BUY' },
   });
@@ -373,13 +373,13 @@ export async function createGoldHolding(userId: string, data: Omit<Prisma.GoldHo
 
 export async function updateGoldHolding(userId: string, id: string, data: Prisma.GoldHoldingUpdateInput) {
   const g = await prisma.goldHolding.findFirst({ where: { id, userId } });
-  if (!g) throw AppError.notFound('Gold holding not found');
+  if (!g) throw AppError.notFound('Gold holding');
   return prisma.goldHolding.update({ where: { id }, data });
 }
 
 export async function deleteGoldHolding(userId: string, id: string) {
   const g = await prisma.goldHolding.findFirst({ where: { id, userId } });
-  if (!g) throw AppError.notFound('Gold holding not found');
+  if (!g) throw AppError.notFound('Gold holding');
   return prisma.goldHolding.delete({ where: { id } });
 }
 
@@ -403,13 +403,13 @@ export async function createRealEstate(userId: string, data: Omit<Prisma.RealEst
 
 export async function updateRealEstate(userId: string, id: string, data: Prisma.RealEstateUpdateInput) {
   const r = await prisma.realEstate.findFirst({ where: { id, userId } });
-  if (!r) throw AppError.notFound('Property not found');
+  if (!r) throw AppError.notFound('Property');
   return prisma.realEstate.update({ where: { id }, data });
 }
 
 export async function deleteRealEstate(userId: string, id: string) {
   const r = await prisma.realEstate.findFirst({ where: { id, userId } });
-  if (!r) throw AppError.notFound('Property not found');
+  if (!r) throw AppError.notFound('Property');
   return prisma.realEstate.delete({ where: { id } });
 }
 

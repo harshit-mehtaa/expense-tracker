@@ -28,19 +28,40 @@ export default function ProfitLossPage() {
   const isAdmin = user?.role === 'ADMIN';
   const [viewUserId, setViewUserId] = useState<string | undefined>(undefined);
 
-  const { data: members = [], isLoading: isMembersLoading } = useQuery<{ id: string; name: string; isActive: boolean }[]>({
+  const { data: members = [], isLoading: isMembersLoading, isError: isMembersError } = useQuery<{ id: string; name: string; isActive: boolean }[]>({
     queryKey: ['admin-users'],
     queryFn: () => api.get<{ data: { id: string; name: string; isActive: boolean }[] }>('/admin/users').then((r) => r.data.data),
     enabled: isAdmin,
   });
 
-  const { data, isLoading: isPnLLoading } = useQuery({
+  const { data, isLoading: isPnLLoading, isError: isPnLError, refetch } = useQuery({
     queryKey: ['profit-and-loss', selectedFY, viewUserId],
     queryFn: () => fetchProfitAndLoss(selectedFY, viewUserId),
   });
 
   const isLoading = isPnLLoading || (isAdmin && isMembersLoading);
   if (isLoading) return <PageLoader />;
+
+  if (isPnLError) {
+    return (
+      <div className="space-y-8">
+        <div>
+          <h1 className="text-2xl font-bold">Profit &amp; Loss</h1>
+          <p className="text-muted-foreground text-sm mt-1">FY {selectedFY}</p>
+        </div>
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-8 text-center space-y-3">
+          <p className="text-sm font-medium text-destructive">Failed to load P&amp;L data</p>
+          <p className="text-xs text-muted-foreground">Check that the backend is running and try again.</p>
+          <button
+            onClick={() => refetch()}
+            className="mt-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const summary = data?.summary;
   const monthly = data?.monthly ?? [];
@@ -87,17 +108,21 @@ export default function ProfitLossPage() {
         {isAdmin && (
           <div className="flex items-center gap-2 mt-3">
             <label htmlFor="pnl-user-select" className="text-sm font-medium text-muted-foreground">View:</label>
-            <select
-              id="pnl-user-select"
-              value={viewUserId ?? ''}
-              onChange={(e) => setViewUserId(e.target.value || undefined)}
-              className="rounded-md border bg-background px-3 py-1.5 text-sm"
-            >
-              <option value="">All Family</option>
-              {members.filter((m) => m.isActive).map((m) => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
-            </select>
+            {isMembersError ? (
+              <span className="text-xs text-destructive">Could not load members</span>
+            ) : (
+              <select
+                id="pnl-user-select"
+                value={viewUserId ?? ''}
+                onChange={(e) => setViewUserId(e.target.value || undefined)}
+                className="rounded-md border bg-background px-3 py-1.5 text-sm"
+              >
+                <option value="">All Family</option>
+                {members.filter((m) => m.isActive).map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            )}
           </div>
         )}
       </div>

@@ -72,7 +72,7 @@ router.post('/', asyncHandler(async (req, res) => {
 
 router.put('/:id', asyncHandler(async (req, res) => {
   const b = await prisma.budget.findFirst({ where: { id: req.params.id, userId: req.user!.userId } });
-  if (!b) throw AppError.notFound('Budget not found');
+  if (!b) throw AppError.notFound('Budget');
   const data = budgetSchema.partial().parse(req.body);
   const updated = await prisma.budget.update({ where: { id: req.params.id }, data });
   sendSuccess(res, updated);
@@ -80,7 +80,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
 
 router.delete('/:id', asyncHandler(async (req, res) => {
   const b = await prisma.budget.findFirst({ where: { id: req.params.id, userId: req.user!.userId } });
-  if (!b) throw AppError.notFound('Budget not found');
+  if (!b) throw AppError.notFound('Budget');
   await prisma.budget.delete({ where: { id: req.params.id } });
   sendNoContent(res);
 }));

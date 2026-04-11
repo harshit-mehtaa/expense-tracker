@@ -34,7 +34,7 @@ router.post('/', asyncHandler(async (req, res) => {
 
 router.put('/:id', asyncHandler(async (req, res) => {
   const cat = await prisma.category.findFirst({ where: { id: req.params.id, userId: req.user!.userId } });
-  if (!cat) throw AppError.notFound('Category not found or not editable');
+  if (!cat) throw AppError.notFound('Category');
   const data = categorySchema.partial().parse(req.body);
   const updated = await prisma.category.update({ where: { id: req.params.id }, data });
   sendSuccess(res, updated);
@@ -42,7 +42,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
 
 router.delete('/:id', asyncHandler(async (req, res) => {
   const cat = await prisma.category.findFirst({ where: { id: req.params.id, userId: req.user!.userId } });
-  if (!cat) throw AppError.notFound('Category not found or not deletable');
+  if (!cat) throw AppError.notFound('Category');
   await prisma.category.delete({ where: { id: req.params.id } });
   sendNoContent(res);
 }));

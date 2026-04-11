@@ -57,7 +57,7 @@ export async function updateUser(id: string, data: {
   panNumberMasked?: string;
 }) {
   const user = await prisma.user.findFirst({ where: { id, deletedAt: null } });
-  if (!user) throw AppError.notFound('User not found');
+  if (!user) throw AppError.notFound('User');
   return prisma.user.update({
     where: { id },
     data,
@@ -68,14 +68,14 @@ export async function updateUser(id: string, data: {
 export async function deleteUser(id: string, requestorId: string) {
   if (id === requestorId) throw AppError.badRequest('Cannot delete your own account');
   const user = await prisma.user.findFirst({ where: { id, deletedAt: null } });
-  if (!user) throw AppError.notFound('User not found');
+  if (!user) throw AppError.notFound('User');
   // Soft delete
   return prisma.user.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } });
 }
 
 export async function resetUserPassword(id: string, newPassword: string) {
   const user = await prisma.user.findFirst({ where: { id, deletedAt: null } });
-  if (!user) throw AppError.notFound('User not found');
+  if (!user) throw AppError.notFound('User');
   const passwordHash = await bcrypt.hash(newPassword, 12);
   return prisma.user.update({ where: { id }, data: { passwordHash, mustChangePassword: true } });
 }

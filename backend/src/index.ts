@@ -135,7 +135,7 @@ app.post(
       const account = await prisma.bankAccount.findFirst({
         where: { id: accountId, userId: req.user!.userId },
       });
-      if (!account) throw AppError.notFound('Bank account not found');
+      if (!account) throw AppError.notFound('Bank account');
     }
 
     // Compute import hashes upfront
@@ -258,7 +258,7 @@ app.get('/api/reports/profit-and-loss', requireAuth, asyncHandler(async (req, re
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!UUID_RE.test(raw)) throw AppError.badRequest('Invalid targetUserId format');
     const target = await prisma.user.findFirst({ where: { id: raw, deletedAt: null } });
-    if (!target) throw AppError.notFound('User not found');
+    if (!target) throw AppError.notFound('User');
     targetUserId = raw;
   }
   const data = await getProfitAndLoss(userId, role, fy, targetUserId);
