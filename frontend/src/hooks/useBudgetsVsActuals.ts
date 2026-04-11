@@ -18,16 +18,16 @@ export interface BudgetActualItem {
   pctUsed: number;
 }
 
-async function fetchBudgetsVsActuals(fy: string): Promise<BudgetActualItem[]> {
-  const res = await api.get<{ data: BudgetActualItem[] }>('/budgets/vs-actuals', {
-    params: { fy },
-  });
+async function fetchBudgetsVsActuals(fy: string, targetUserId?: string): Promise<BudgetActualItem[]> {
+  const params: Record<string, string> = { fy };
+  if (targetUserId) params.targetUserId = targetUserId;
+  const res = await api.get<{ data: BudgetActualItem[] }>('/budgets/vs-actuals', { params });
   return res.data.data;
 }
 
-export function useBudgetsVsActuals(fy: string) {
+export function useBudgetsVsActuals(fy: string, targetUserId?: string) {
   return useQuery({
-    queryKey: ['budgets', 'vs-actuals', fy],
-    queryFn: () => fetchBudgetsVsActuals(fy),
+    queryKey: ['budgets', 'vs-actuals', fy, targetUserId],
+    queryFn: () => fetchBudgetsVsActuals(fy, targetUserId),
   });
 }

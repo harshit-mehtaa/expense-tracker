@@ -32,7 +32,7 @@ export interface AmortizationRow {
 const unwrap = <T>(res: { data: { data: T } }): T => res.data.data;
 
 export const loansApi = {
-  getAll: () => api.get<{ data: Loan[] }>('/loans').then(unwrap),
+  getAll: (targetUserId?: string) => api.get<{ data: Loan[] }>('/loans', { params: targetUserId ? { targetUserId } : {} }).then(unwrap),
   create: (data: object) => api.post<{ data: Loan }>('/loans', data).then(unwrap),
   update: (id: string, data: object) => api.put<{ data: Loan }>(`/loans/${id}`, data).then(unwrap),
   delete: (id: string) => api.delete(`/loans/${id}`),

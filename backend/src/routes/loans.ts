@@ -3,10 +3,14 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendNoContent } from '../utils/response';
+import { AppError } from '../utils/AppError';
+import { prisma } from '../config/prisma';
 import * as svc from '../services/loanService';
 
 const router = Router();
 router.use(requireAuth);
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const loanSchema = z.object({
   lenderName: z.string().min(1),
@@ -27,12 +31,24 @@ const loanSchema = z.object({
 });
 
 router.get('/', asyncHandler(async (req, res) => {
-  const loans = await svc.getLoans(req.user!.userId);
+  let effectiveUserId: string | undefined = req.user!.userId;
+  if (req.user!.role === 'ADMIN' && req.query.targetUserId) {
+    const raw = req.query.targetUserId as string;
+    if (!UUID_RE.test(raw)) throw AppError.badRequest('Invalid targetUserId format');
+    const target = await prisma.user.findFirst({ where: { id: raw, deletedAt: null } });
+    if (!target) throw AppError.notFound('User');
+    effectiveUserId = raw;
+  } else if (req.user!.role === 'ADMIN' && !req.query.targetUserId) {
+    effectiveUserId = undefined; // family-wide
+  }
+  const loans = await svc.getLoans(effectiveUserId);
   sendSuccess(res, loans);
 }));
 
 router.get('/:id/amortization-schedule', asyncHandler(async (req, res) => {
-  const data = await svc.getLoanAmortization(req.user!.userId, req.params.id);
+  // ADMIN can view any loan in the family; MEMBER is scoped to their own
+  const ownerFilter = req.user!.role === 'ADMIN' ? undefined : req.user!.userId;
+  const data = await svc.getLoanAmortization(ownerFilter, req.params.id);
   sendSuccess(res, data);
 }));
 
@@ -41,7 +57,8 @@ router.post('/:id/prepayment-simulation', asyncHandler(async (req, res) => {
     prepaymentAmount: z.number().positive(),
     mode: z.enum(['reduce_tenure', 'reduce_emi']).default('reduce_tenure'),
   }).parse(req.body);
-  const result = await svc.simulatePrepayment(req.user!.userId, req.params.id, prepaymentAmount, mode);
+  const ownerFilter = req.user!.role === 'ADMIN' ? undefined : req.user!.userId;
+  const result = await svc.simulatePrepayment(ownerFilter, req.params.id, prepaymentAmount, mode);
   sendSuccess(res, result);
 }));
 

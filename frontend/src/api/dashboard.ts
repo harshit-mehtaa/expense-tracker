@@ -38,20 +38,25 @@ export interface NetWorthSnapshot {
   totalLiabilities: number | null;
 }
 
-export async function fetchDashboardSummary(fy?: string): Promise<DashboardSummary> {
-  const params = fy ? { fy } : {};
+export async function fetchDashboardSummary(fy?: string, targetUserId?: string): Promise<DashboardSummary> {
+  const params: Record<string, string> = {};
+  if (fy) params.fy = fy;
+  if (targetUserId) params.targetUserId = targetUserId;
   const res = await api.get<{ data: DashboardSummary }>('/dashboard/summary', { params });
   return res.data.data;
 }
 
-export async function fetchCashflow(fy?: string): Promise<CashflowMonth[]> {
-  const params = fy ? { fy } : {};
+export async function fetchCashflow(fy?: string, targetUserId?: string): Promise<CashflowMonth[]> {
+  const params: Record<string, string> = {};
+  if (fy) params.fy = fy;
+  if (targetUserId) params.targetUserId = targetUserId;
   const res = await api.get<{ data: CashflowMonth[] }>('/dashboard/cashflow', { params });
   return res.data.data;
 }
 
-export async function fetchUpcomingAlerts(): Promise<UpcomingAlert[]> {
-  const res = await api.get<{ data: UpcomingAlert[] }>('/dashboard/upcoming-alerts');
+export async function fetchUpcomingAlerts(targetUserId?: string): Promise<UpcomingAlert[]> {
+  const params = targetUserId ? { targetUserId } : {};
+  const res = await api.get<{ data: UpcomingAlert[] }>('/dashboard/upcoming-alerts', { params });
   return res.data.data;
 }
 

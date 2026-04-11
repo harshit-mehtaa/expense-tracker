@@ -9,13 +9,18 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useFY } from '@/contexts/FYContext';
+import { useMemberSelector } from '@/hooks/useMemberSelector';
 import api from '@/lib/api';
 import { cn } from '@/lib/utils';
 
-function useBudgets(fy: string) {
+function useBudgets(fy: string, targetUserId?: string) {
   return useQuery({
-    queryKey: ['budgets-actuals', fy],
-    queryFn: () => api.get<{ data: any[] }>(`/budgets/vs-actuals?fy=${fy}`).then((r) => r.data.data),
+    queryKey: ['budgets-actuals', fy, targetUserId],
+    queryFn: () => {
+      const params: Record<string, string> = { fy };
+      if (targetUserId) params.targetUserId = targetUserId;
+      return api.get<{ data: any[] }>('/budgets/vs-actuals', { params }).then((r) => r.data.data);
+    },
   });
 }
 
@@ -39,9 +44,11 @@ export default function BudgetsPage() {
   const { selectedFY } = useFY();
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
+  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
 
-  const { data: budgets = [], isLoading } = useBudgets(selectedFY);
+  const { data: budgets = [], isLoading } = useBudgets(selectedFY, viewUserId);
   const { data: categories = [] } = useCategories();
+  const isViewingOtherMember = isAdmin && viewUserId !== undefined;
   const expenseCategories = categories.filter((c: any) => c.type === 'EXPENSE');
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm<BudgetForm>({
@@ -67,9 +74,36 @@ export default function BudgetsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Budgets</h1>
-          <p className="text-muted-foreground text-sm mt-1">FY {selectedFY}</p>
+          <p className="text-muted-foreground text-sm mt-1">
+            FY {selectedFY}
+            {isAdmin && viewUserId
+              ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
+              : isAdmin ? ' · All Family' : ''}
+          </p>
+          {isAdmin && !isMembersLoading && (
+            <div className="flex items-center gap-2 mt-2">
+              <label htmlFor="budget-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+              {isMembersError ? (
+                <span className="text-xs text-destructive">Could not load members</span>
+              ) : (
+                <select
+                  id="budget-member-select"
+                  value={viewUserId ?? ''}
+                  onChange={(e) => setViewUserId(e.target.value || undefined)}
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
+                >
+                  <option value="">All Family</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
         </div>
-        <Button onClick={() => setShowForm(true)}><PlusCircle className="h-4 w-4 mr-2" /> Add Budget</Button>
+        {!isViewingOtherMember && (
+          <Button onClick={() => setShowForm(true)}><PlusCircle className="h-4 w-4 mr-2" /> Add Budget</Button>
+        )}
       </div>
 
       {/* Summary */}
@@ -116,9 +150,11 @@ export default function BudgetsPage() {
                     {budget.category?.icon && <span>{budget.category.icon}</span>}
                     <p className="font-semibold">{budget.category?.name ?? 'Unknown'}</p>
                   </div>
-                  <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(budget.id)}>
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+                  {!isViewingOtherMember && (
+                    <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(budget.id)}>
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  )}
                 </div>
 
                 {/* Circular-ish progress: simple bar */}

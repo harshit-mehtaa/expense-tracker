@@ -25,6 +25,7 @@ import { PageLoader } from '@/components/shared/LoadingSpinner';
 import { formatINRShort } from '@/lib/indianFormat';
 import { cn } from '@/lib/utils';
 import { useBudgetsVsActuals } from '@/hooks/useBudgetsVsActuals';
+import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { Link, useNavigate } from 'react-router-dom';
 
 
@@ -33,23 +34,24 @@ export default function DashboardPage() {
   const { user } = useAuth();
   const { gradIds, GradDefs } = useChartGradients();
   const navigate = useNavigate();
+  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
 
   const { data: summary, isLoading: summaryLoading } = useQuery({
-    queryKey: ['dashboard', 'summary', selectedFY],
-    queryFn: () => fetchDashboardSummary(selectedFY),
+    queryKey: ['dashboard', 'summary', selectedFY, viewUserId],
+    queryFn: () => fetchDashboardSummary(selectedFY, viewUserId),
   });
 
   const { data: cashflow, isLoading: cashflowLoading } = useQuery({
-    queryKey: ['dashboard', 'cashflow', selectedFY],
-    queryFn: () => fetchCashflow(selectedFY),
+    queryKey: ['dashboard', 'cashflow', selectedFY, viewUserId],
+    queryFn: () => fetchCashflow(selectedFY, viewUserId),
   });
 
   const { data: alerts } = useQuery({
-    queryKey: ['dashboard', 'alerts'],
-    queryFn: fetchUpcomingAlerts,
+    queryKey: ['dashboard', 'alerts', viewUserId],
+    queryFn: () => fetchUpcomingAlerts(viewUserId),
   });
 
-  const { data: budgetActuals } = useBudgetsVsActuals(selectedFY);
+  const { data: budgetActuals } = useBudgetsVsActuals(selectedFY, viewUserId);
 
   const { data: familyOverview } = useQuery({
     queryKey: ['dashboard', 'family-overview', selectedFY],
@@ -83,7 +85,7 @@ export default function DashboardPage() {
     netWorth: Number(s.netWorth ?? 0),
   }));
 
-  if (summaryLoading) return <PageLoader />;
+  if (summaryLoading || (isAdmin && isMembersLoading)) return <PageLoader />;
 
   const savingsRateClass =
     (summary?.savingsRate ?? 0) > 30
@@ -97,7 +99,32 @@ export default function DashboardPage() {
       {/* Page header */}
       <div>
         <h1 className="text-2xl font-bold">Dashboard</h1>
-        <p className="text-muted-foreground">Financial overview for FY {selectedFY}</p>
+        <p className="text-muted-foreground">
+          Financial overview for FY {selectedFY}
+          {isAdmin && viewUserId
+            ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
+            : isAdmin ? ' · All Family' : ''}
+        </p>
+        {isAdmin && (
+          <div className="flex items-center gap-2 mt-3">
+            <label htmlFor="dashboard-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+            {isMembersError ? (
+              <span className="text-xs text-destructive">Could not load members</span>
+            ) : (
+              <select
+                id="dashboard-member-select"
+                value={viewUserId ?? ''}
+                onChange={(e) => setViewUserId(e.target.value || undefined)}
+                className="rounded-md border bg-background px-3 py-1.5 text-sm"
+              >
+                <option value="">All Family</option>
+                {members.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Stat cards */}

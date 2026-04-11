@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useBudgetsVsActuals, type BudgetActualItem } from '@/hooks/useBudgetsVsActuals';
+import { useMemberSelector } from '@/hooks/useMemberSelector';
 
 interface Transaction {
   id: string;
@@ -47,7 +48,7 @@ interface TxFilters {
   endDate: string;
 }
 
-async function fetchTransactions(fy: string, filters: TxFilters, cursor?: string): Promise<TransactionsResponse> {
+async function fetchTransactions(fy: string, filters: TxFilters, cursor?: string, targetUserId?: string): Promise<TransactionsResponse> {
   const res = await api.get<{ data: Transaction[]; pagination: TransactionsResponse['pagination'] }>('/transactions', {
     params: {
       fy,
@@ -59,6 +60,7 @@ async function fetchTransactions(fy: string, filters: TxFilters, cursor?: string
       paymentMode: filters.paymentMode || undefined,
       startDate: filters.startDate || undefined,
       endDate: filters.endDate || undefined,
+      targetUserId: targetUserId || undefined,
     },
   });
   return { data: res.data.data, pagination: res.data.pagination };
@@ -697,6 +699,8 @@ export default function TransactionsPage() {
   const { user } = useAuth();
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
+  const isViewingOtherMember = isAdmin && viewUserId !== undefined;
   const [showImport, setShowImport] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -810,8 +814,8 @@ export default function TransactionsPage() {
     fetchNextPage,
     hasNextPage,
   } = useInfiniteQuery({
-    queryKey: ['transactions', selectedFY, filters],
-    queryFn: ({ pageParam }) => fetchTransactions(selectedFY, filters, pageParam as string | undefined),
+    queryKey: ['transactions', selectedFY, filters, viewUserId],
+    queryFn: ({ pageParam }) => fetchTransactions(selectedFY, filters, pageParam as string | undefined, viewUserId),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.pagination.hasMore ? lastPage.pagination.nextCursor : undefined,
   });
@@ -835,7 +839,32 @@ export default function TransactionsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Transactions</h1>
-          <p className="text-muted-foreground">FY {selectedFY} · {total} transactions</p>
+          <p className="text-muted-foreground">
+            FY {selectedFY} · {total} transactions
+            {isAdmin && viewUserId
+              ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
+              : isAdmin ? ' · All Family' : ''}
+          </p>
+          {isAdmin && !isMembersLoading && (
+            <div className="flex items-center gap-2 mt-2">
+              <label htmlFor="tx-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+              {isMembersError ? (
+                <span className="text-xs text-destructive">Could not load members</span>
+              ) : (
+                <select
+                  id="tx-member-select"
+                  value={viewUserId ?? ''}
+                  onChange={(e) => setViewUserId(e.target.value || undefined)}
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
+                >
+                  <option value="">All Family</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setShowFilters((v) => !v)} className="relative">
@@ -851,10 +880,12 @@ export default function TransactionsPage() {
             <Download className="h-4 w-4 sm:mr-2" />
             <span className="hidden sm:inline">{exporting ? 'Exporting…' : 'Export CSV'}</span>
           </Button>
-          <Button variant="outline" onClick={() => setShowImport(true)}>
-            <Upload className="h-4 w-4 sm:mr-2" />
-            <span className="hidden sm:inline">Import CSV</span>
-          </Button>
+          {!isViewingOtherMember && (
+            <Button variant="outline" onClick={() => setShowImport(true)}>
+              <Upload className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Import CSV</span>
+            </Button>
+          )}
         </div>
       </div>
 

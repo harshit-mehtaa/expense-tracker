@@ -2,9 +2,9 @@ import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import type { Prisma } from '@prisma/client';
 
-export async function getLoans(userId: string) {
+export async function getLoans(userId?: string) {
   return prisma.loan.findMany({
-    where: { userId },
+    where: userId ? { userId } : {},
     orderBy: { emiDate: 'asc' },
   });
 }
@@ -86,8 +86,8 @@ export function buildAmortizationSchedule(
   return rows;
 }
 
-export async function getLoanAmortization(userId: string, id: string) {
-  const loan = await prisma.loan.findFirst({ where: { id, userId } });
+export async function getLoanAmortization(userId: string | undefined, id: string) {
+  const loan = await prisma.loan.findFirst({ where: userId ? { id, userId } : { id } });
   if (!loan) throw AppError.notFound('Loan');
 
   const schedule = buildAmortizationSchedule(
@@ -107,12 +107,12 @@ export async function getLoanAmortization(userId: string, id: string) {
 // ─── Prepayment Simulation ────────────────────────────────────────────────────
 
 export async function simulatePrepayment(
-  userId: string,
+  userId: string | undefined,
   id: string,
   prepaymentAmount: number,
   mode: 'reduce_tenure' | 'reduce_emi',
 ) {
-  const loan = await prisma.loan.findFirst({ where: { id, userId } });
+  const loan = await prisma.loan.findFirst({ where: userId ? { id, userId } : { id } });
   if (!loan) throw AppError.notFound('Loan');
 
   const outstanding = Number(loan.outstandingBalance);

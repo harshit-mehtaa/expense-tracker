@@ -12,6 +12,7 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { loansApi, type Loan, type AmortizationRow } from '@/api/loans';
 import { formatINRShort } from '@/lib/indianFormat';
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, CustomTooltip } from '@/lib/chartUtils';
+import { useMemberSelector } from '@/hooks/useMemberSelector';
 
 const LOAN_TYPES: Record<string, string> = {
   HOME: 'Home Loan', AUTO: 'Car Loan', PERSONAL: 'Personal Loan',
@@ -185,7 +186,7 @@ function AmortizationModal({ loan, amortData, onClose }: { loan: Loan; amortData
   );
 }
 
-function LoanCard({ loan, onEdit, onDelete }: { loan: Loan; onEdit: () => void; onDelete: () => void }) {
+function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; onEdit: () => void; onDelete: () => void; readOnly?: boolean }) {
   const [showModal, setShowModal] = useState(false);
   const [prepayAmt, setPrepayAmt] = useState('');
   const [prepayMode, setPrepayMode] = useState<'reduce_tenure' | 'reduce_emi'>('reduce_tenure');
@@ -221,10 +222,12 @@ function LoanCard({ loan, onEdit, onDelete }: { loan: Loan; onEdit: () => void; 
           <h3 className="font-semibold mt-1">{loan.lenderName}</h3>
           {loan.loanAccountNumber && <p className="text-xs text-muted-foreground">Ac: ···{loan.loanAccountNumber.slice(-4)}</p>}
         </div>
-        <div className="flex gap-1">
-          <Button variant="ghost" size="icon" onClick={onEdit}><Edit2 className="h-4 w-4" /></Button>
-          <Button variant="ghost" size="icon" onClick={onDelete}><Trash2 className="h-4 w-4 text-destructive" /></Button>
-        </div>
+        {!readOnly && (
+          <div className="flex gap-1">
+            <Button variant="ghost" size="icon" onClick={onEdit}><Edit2 className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" onClick={onDelete}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3 text-sm">
@@ -320,8 +323,13 @@ export default function LoansPage() {
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Loan | null>(null);
+  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
+  const isViewingOtherMember = isAdmin && viewUserId !== undefined;
 
-  const { data: loans = [], isLoading } = useQuery({ queryKey: ['loans'], queryFn: loansApi.getAll });
+  const { data: loans = [], isLoading } = useQuery({
+    queryKey: ['loans', viewUserId],
+    queryFn: () => loansApi.getAll(viewUserId),
+  });
 
   const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm<LoanForm>({
     resolver: zodResolver(loanSchema),
@@ -361,11 +369,36 @@ export default function LoansPage() {
           <h1 className="text-2xl font-bold">Loans & EMIs</h1>
           <p className="text-muted-foreground text-sm mt-1">
             {loans.length} active loans · Total EMI <INRDisplay amount={totalEMI} /> /month
+            {isAdmin && viewUserId
+              ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
+              : isAdmin ? ' · All Family' : ''}
           </p>
+          {isAdmin && !isMembersLoading && (
+            <div className="flex items-center gap-2 mt-2">
+              <label htmlFor="loans-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+              {isMembersError ? (
+                <span className="text-xs text-destructive">Could not load members</span>
+              ) : (
+                <select
+                  id="loans-member-select"
+                  value={viewUserId ?? ''}
+                  onChange={(e) => setViewUserId(e.target.value || undefined)}
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
+                >
+                  <option value="">All Family</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
         </div>
-        <Button onClick={() => { setEditing(null); reset(); setShowForm(true); }}>
-          <Plus className="h-4 w-4 mr-2" /> Add Loan
-        </Button>
+        {!isViewingOtherMember && (
+          <Button onClick={() => { setEditing(null); reset(); setShowForm(true); }}>
+            <Plus className="h-4 w-4 mr-2" /> Add Loan
+          </Button>
+        )}
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -402,6 +435,7 @@ export default function LoansPage() {
               loan={loan}
               onEdit={() => startEdit(loan)}
               onDelete={() => deleteMutation.mutate(loan.id)}
+              readOnly={isViewingOtherMember}
             />
           ))}
         </div>

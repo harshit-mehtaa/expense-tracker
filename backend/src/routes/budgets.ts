@@ -28,20 +28,36 @@ router.get('/', asyncHandler(async (req, res) => {
   sendSuccess(res, budgets);
 }));
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 router.get('/vs-actuals', asyncHandler(async (req, res) => {
   const fyRaw = req.query.fy;
   const fy = (typeof fyRaw === 'string' && /^\d{4}-\d{2}$/.test(fyRaw)) ? fyRaw : getCurrentFY();
   const { start, end } = getFYRange(fy);
 
+  let effectiveUserId: string | undefined;
+  if (req.user!.role === 'ADMIN') {
+    if (req.query.targetUserId) {
+      const raw = req.query.targetUserId as string;
+      if (!UUID_RE.test(raw)) throw AppError.badRequest('Invalid targetUserId format');
+      const target = await prisma.user.findFirst({ where: { id: raw, deletedAt: null } });
+      if (!target) throw AppError.notFound('User');
+      effectiveUserId = raw;
+    }
+    // else family-wide: effectiveUserId stays undefined
+  } else {
+    effectiveUserId = req.user!.userId;
+  }
+
   const budgets = await prisma.budget.findMany({
-    where: { userId: req.user!.userId },
+    where: effectiveUserId ? { userId: effectiveUserId } : {},
     include: { category: true },
   });
 
   const actuals = await prisma.transaction.groupBy({
     by: ['categoryId'],
     where: {
-      userId: req.user!.userId,
+      ...(effectiveUserId ? { userId: effectiveUserId } : {}),
       deletedAt: null,
       type: 'EXPENSE',
       date: { gte: start, lt: end },

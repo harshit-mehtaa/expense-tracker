@@ -3,10 +3,10 @@ import prisma from '../config/prisma';
 import { getFYRange, getCurrentFY, getPreviousFY, getMonthStart } from '../utils/financialYear';
 import { generateDueRecurringTransactions } from './recurringService';
 
-export async function getDashboardSummary(userId: string, requesterRole: string, fy?: string) {
+export async function getDashboardSummary(userId: string, requesterRole: string, fy?: string, targetUserId?: string) {
   // Lazy trigger: generate any due recurring transactions before computing the summary.
   // Non-fatal — a generation failure must never break the dashboard.
-  // Skip for ADMIN role (admin dashboard is family-wide; generation is per-member).
+  // Skip for ADMIN role (admin dashboard is family-wide or per-member view; generation is per-member).
   if (requesterRole !== 'ADMIN') {
     await generateDueRecurringTransactions(userId).catch((err) => {
       console.warn('[dashboard] Recurring generation failed for user', userId, err instanceof Error ? err.message : err);
@@ -19,8 +19,9 @@ export async function getDashboardSummary(userId: string, requesterRole: string,
   const currentRange = getFYRange(currentFY);
   const previousRange = getFYRange(previousFY);
 
-  // Use admin-scoped or user-scoped query
-  const userFilter = requesterRole === 'ADMIN' ? {} : { userId };
+  // effectiveUserId: undefined = family-wide (ADMIN only), string = scoped to that user
+  const effectiveUserId = requesterRole === 'ADMIN' ? targetUserId : userId;
+  const userFilter = effectiveUserId ? { userId: effectiveUserId } : {};
 
   const [currentIncome, currentExpense, prevIncome, prevExpense] = await Promise.all([
     getIncomeForPeriod(userFilter, currentRange),
@@ -29,7 +30,7 @@ export async function getDashboardSummary(userId: string, requesterRole: string,
     getExpenseForPeriod(userFilter, previousRange),
   ]);
 
-  const scopedUserId = requesterRole === 'ADMIN' ? undefined : userId;
+  const scopedUserId = effectiveUserId;
   const [totalAssets, totalLiabilities] = await Promise.all([
     computeNetWorthAssets(scopedUserId),
     computeTotalLiabilities(scopedUserId),
@@ -54,12 +55,11 @@ export async function getDashboardSummary(userId: string, requesterRole: string,
   };
 }
 
-export async function getCashflow(userId: string, requesterRole: string, fy?: string) {
+export async function getCashflow(userId: string, requesterRole: string, fy?: string, targetUserId?: string) {
   const currentFY = fy ?? getCurrentFY();
   const { start, end } = getFYRange(currentFY);
 
-  const userFilter: Prisma.TransactionWhereInput =
-    requesterRole === 'ADMIN' ? {} : { userId };
+  const effectiveUserId = requesterRole === 'ADMIN' ? targetUserId : userId;
 
   // Get monthly aggregates for the FY (Apr = month 4 through Mar = month 3)
   const results = await prisma.$queryRaw<
@@ -75,7 +75,7 @@ export async function getCashflow(userId: string, requesterRole: string, fy?: st
       date >= ${start}
       AND date <= ${end}
       AND "deletedAt" IS NULL
-      ${requesterRole !== 'ADMIN' ? Prisma.sql`AND "userId" = ${userId}` : Prisma.empty}
+      ${effectiveUserId ? Prisma.sql`AND "userId" = ${effectiveUserId}` : Prisma.empty}
     GROUP BY month, year
     ORDER BY year, month
   `;
@@ -100,10 +100,11 @@ export async function getCashflow(userId: string, requesterRole: string, fy?: st
   });
 }
 
-export async function getUpcomingAlerts(userId: string, requesterRole: string) {
+export async function getUpcomingAlerts(userId: string, requesterRole: string, targetUserId?: string) {
   const now = new Date();
   const thirtyDaysOut = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-  const userFilter = requesterRole === 'ADMIN' ? {} : { userId };
+  const effectiveUserId = requesterRole === 'ADMIN' ? targetUserId : userId;
+  const userFilter = effectiveUserId ? { userId: effectiveUserId } : {};
 
   const [fdsMaturingSoon, sipdueThisMonth, insurancePremiumsDue, loansWithEmi, advanceTax, rdsMaturing] =
     await Promise.all([

@@ -5,6 +5,10 @@ import { sendSuccess, sendCreated, sendNoContent, sendPaginated } from '../utils
 import { requireAuth } from '../middleware/auth';
 import { validateFY, getCurrentFY } from '../utils/financialYear';
 import * as transactionService from '../services/transactionService';
+import { AppError } from '../utils/AppError';
+import { prisma } from '../config/prisma';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const router = Router();
 router.use(requireAuth);
@@ -31,11 +35,26 @@ const createTransactionSchema = z.object({
 router.get(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
+    // Resolve effective user filter — ADMIN can view per-member or family-wide
+    let effectiveUserId: string | undefined;
+    if (req.user!.role === 'ADMIN') {
+      const rawTarget = (req.query.targetUserId as string) || (req.query.userId as string);
+      if (rawTarget) {
+        if (!UUID_RE.test(rawTarget)) throw AppError.badRequest('Invalid targetUserId format');
+        const target = await prisma.user.findFirst({ where: { id: rawTarget, deletedAt: null } });
+        if (!target) throw AppError.notFound('User');
+        effectiveUserId = rawTarget;
+      }
+      // else family-wide: effectiveUserId stays undefined
+    } else {
+      effectiveUserId = req.user!.userId;
+    }
+
     const { items, meta } = await transactionService.getTransactions(
       req.user!.userId,
       req.user!.role,
       {
-        userId: req.query.userId as string,
+        userId: effectiveUserId,
         bankAccountId: req.query.bankAccountId as string,
         categoryId: req.query.categoryId as string,
         type: req.query.type as string,

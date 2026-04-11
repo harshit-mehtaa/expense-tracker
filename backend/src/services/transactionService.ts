@@ -37,11 +37,11 @@ export async function getTransactions(
   requesterRole: string,
   filters: TransactionFilters,
 ) {
-  // Members can only see their own transactions
-  const userId = requesterRole === 'ADMIN' && filters.userId ? filters.userId : requesterId;
+  // MEMBER: own data only. ADMIN + userId: specific member. ADMIN + no userId: family-wide.
+  const effectiveUserId = requesterRole !== 'ADMIN' ? requesterId : filters.userId;
 
   const where: Prisma.TransactionWhereInput = {
-    userId,
+    ...(effectiveUserId ? { userId: effectiveUserId } : {}),
     deletedAt: null,
   };
 
