@@ -5,10 +5,9 @@ version: '3.9'
 
 services:
   migrate:
-    command: ["sh", "-c", "npx prisma migrate dev --name init && npx ts-node prisma/seed.ts"]
-    volumes:
-      - ./backend:/app
-      - /app/node_modules
+    command: ["sh", "-c", "npx prisma migrate deploy && npx ts-node prisma/seed.ts"]
+    # No volume mounts — migrate runs from the built image so it uses the correct
+    # Linux Prisma binaries (not the macOS host's node_modules)
 
   backend:
     build:
@@ -16,8 +15,9 @@ services:
       target: builder
     command: ["npx", "ts-node-dev", "--respawn", "--transpile-only", "src/index.ts"]
     volumes:
-      - ./backend:/app
-      - /app/node_modules
+      # Mount only source dirs — container keeps its own node_modules (correct Linux binaries)
+      - ./backend/src:/app/src
+      - ./backend/prisma:/app/prisma
     environment:
       NODE_ENV: development
 
@@ -27,7 +27,8 @@ services:
       target: builder
     command: ["npx", "vite", "--host", "0.0.0.0", "--port", "5173"]
     volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      # Mount only source dirs — container keeps its own node_modules
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
     environment:
       NODE_ENV: development
