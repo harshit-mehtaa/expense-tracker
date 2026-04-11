@@ -79,8 +79,14 @@ export async function refreshTokens(oldRefreshToken: string): Promise<TokenPair>
     throw AppError.unauthorized('User account is inactive');
   }
 
-  // Delete old token and issue new pair (rotation)
-  await prisma.refreshToken.delete({ where: { token: oldRefreshToken } });
+  // Delete old token and issue new pair (rotation).
+  // deleteMany returns count=0 if the token was already consumed (concurrent replay).
+  // Treat that as an invalid token — nuke all user tokens and reject.
+  const deleted = await prisma.refreshToken.deleteMany({ where: { token: oldRefreshToken } });
+  if (deleted.count === 0) {
+    await prisma.refreshToken.deleteMany({ where: { userId: payload.userId } });
+    throw AppError.unauthorized('Refresh token is invalid or expired');
+  }
 
   const newPayload: AuthPayload = { userId: user.id, email: user.email, role: user.role };
   return createTokenPair(newPayload);

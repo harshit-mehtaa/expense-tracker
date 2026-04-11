@@ -976,7 +976,7 @@ export default function TransactionsPage() {
           actionLabel="Import Bank Statement"
           onAction={() => setShowImport(true)}
         />
-      ) : (
+      ) : (<>
         <div className="hidden sm:block rounded-xl border border-border bg-card overflow-hidden">
           <table className="w-full text-sm">
             <thead>
@@ -1134,7 +1134,7 @@ export default function TransactionsPage() {
             );
           })}
         </div>
-      )}
+      </>)}
 
       {hasNextPage && (
         <div className="flex justify-center pt-2">
