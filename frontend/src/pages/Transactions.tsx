@@ -1004,7 +1004,7 @@ export default function TransactionsPage() {
                       : 'border-input bg-background hover:bg-muted text-foreground',
                   )}
                 >
-                  {PAYMENT_MODE_ICONS[mode]}
+                  <span>{PAYMENT_MODE_ICONS[mode]}</span>
                   {PAYMENT_MODE_LABELS[mode]}
                 </button>
               ))}
