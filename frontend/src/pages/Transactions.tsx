@@ -998,7 +998,7 @@ export default function TransactionsPage() {
                   type="button"
                   onClick={() => toggleFilter('paymentModes', mode)}
                   className={cn(
-                    'inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium transition-colors border',
+                    'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-colors border',
                     filters.paymentModes.includes(mode)
                       ? 'bg-primary text-primary-foreground border-primary'
                       : 'border-input bg-background hover:bg-muted text-foreground',
@@ -1181,7 +1181,7 @@ export default function TransactionsPage() {
                   </td>
                   <td className="px-4 py-3">
                     {tx.paymentMode && (
-                      <span className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium', PAYMENT_MODE_COLORS[tx.paymentMode] ?? 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300')}>
+                      <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium', PAYMENT_MODE_COLORS[tx.paymentMode] ?? 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300')}>
                         {PAYMENT_MODE_ICONS[tx.paymentMode]}
                         {tx.paymentMode}
                       </span>
@@ -1262,7 +1262,7 @@ export default function TransactionsPage() {
                     <span className="text-xs text-muted-foreground">—</span>
                   )}
                   {tx.paymentMode && (
-                    <span className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium', PAYMENT_MODE_COLORS[tx.paymentMode] ?? 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300')}>
+                    <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium', PAYMENT_MODE_COLORS[tx.paymentMode] ?? 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300')}>
                       {PAYMENT_MODE_ICONS[tx.paymentMode]}
                       {tx.paymentMode}
                     </span>
