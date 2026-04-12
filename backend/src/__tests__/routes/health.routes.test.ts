@@ -1,7 +1,7 @@
 /**
  * Route integration tests for /api/health.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import request from 'supertest';
 
 // health.ts uses `import prisma from '../config/prisma'` (default import)
@@ -42,5 +42,18 @@ describe('GET /api/health', () => {
     const res = await request(app).get('/api/health');
     expect(res.body.data.uptime).toBeTypeOf('number');
     expect(res.body.data.timestamp).toMatch(/^\d{4}-/); // ISO date string
+  });
+
+  it('falls back to version 1.0.0 when npm_package_version env var is not set', async () => {
+    const original = process.env.npm_package_version;
+    delete process.env.npm_package_version;
+    try {
+      const res = await request(app).get('/api/health');
+      expect(res.body.data.version).toBe('1.0.0');
+    } finally {
+      if (original !== undefined) {
+        process.env.npm_package_version = original;
+      }
+    }
   });
 });

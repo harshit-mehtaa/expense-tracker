@@ -143,6 +143,23 @@ describe('GET /api/transactions', () => {
       expect.objectContaining({ types: ['INCOME', 'EXPENSE'] }),
     );
   });
+
+  it('parseMultiParam returns undefined for empty string (false branch, line 17)', async () => {
+    // ?type= is an empty string → parseMultiParam('') → !s is true → returns undefined
+    await request(makeApp()).get('/api/transactions?type=');
+    expect(getTransactionsMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'ADMIN',
+      expect.objectContaining({ types: undefined }),
+    );
+  });
+
+  it('passes undefined for absent minAmount and maxAmount filters', async () => {
+    await request(makeApp()).get('/api/transactions');
+    const call = getTransactionsMock.mock.calls[0][2];
+    expect(call.minAmount).toBeUndefined();
+    expect(call.maxAmount).toBeUndefined();
+  });
 });
 
 // ─── GET /api/transactions/export ─────────────────────────────────────────────
@@ -162,6 +179,15 @@ describe('GET /api/transactions/export', () => {
     await request(makeApp()).get('/api/transactions/export?fy=2025-26');
     expect(getAllForExportMock).toHaveBeenCalled();
     expect(buildCsvMock).toHaveBeenCalled();
+  });
+
+  it('passes fy=undefined when fy param is absent (false branch, line 93)', async () => {
+    getAllForExportMock.mockResolvedValue([]);
+    buildCsvMock.mockReturnValue('');
+    await request(makeApp()).get('/api/transactions/export');
+    const call = getAllForExportMock.mock.calls[0];
+    // args: (userId, role, filters) — filters.fy should be undefined
+    expect(call[2]).toEqual(expect.objectContaining({ fy: undefined }));
   });
 });
 

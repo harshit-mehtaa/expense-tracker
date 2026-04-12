@@ -564,4 +564,21 @@ describe('get80CTracker', () => {
     const result = await get80CTracker('u1', FY);
     expect(result.breakdown.licPremiums).toBeCloseTo(12_000);
   });
+
+  it('QUARTERLY frequency multiplier: premiumAmount×4', async () => {
+    (prisma.insurancePolicy.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { premiumAmount: 2500, premiumFrequency: 'QUARTERLY' },
+    ]);
+    const result = await get80CTracker('u1', FY);
+    expect(result.breakdown.licPremiums).toBeCloseTo(10_000); // 2500 * 4
+  });
+
+  it('unknown/default frequency: premiumAmount returned as-is (×1)', async () => {
+    // Any value not in MONTHLY/QUARTERLY/HALF_YEARLY hits the default case (including YEARLY)
+    (prisma.insurancePolicy.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { premiumAmount: 7500, premiumFrequency: 'UNKNOWN_FREQ' },
+    ]);
+    const result = await get80CTracker('u1', FY);
+    expect(result.breakdown.licPremiums).toBeCloseTo(7_500);
+  });
 });

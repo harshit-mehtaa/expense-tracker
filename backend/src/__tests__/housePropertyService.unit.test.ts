@@ -245,6 +245,26 @@ describe('calcHousePropertyIncome — LET_OUT', () => {
   });
 });
 
+describe('calcHousePropertyIncome — null field defaults', () => {
+  it('treats null grossAnnualRent, municipalTaxesPaid, homeLoanInterest as 0', async () => {
+    hpMock.findMany.mockResolvedValueOnce([
+      {
+        ...MOCK_PROPERTY,
+        usage: 'LET_OUT',
+        grossAnnualRent: null,
+        municipalTaxesPaid: null,
+        homeLoanInterest: null,
+      },
+    ]);
+    const r = await calcHousePropertyIncome('u1', '2025-26', 'OLD');
+    // gar=0, municipal=0 → GAV=0, NAV=0, stdDed=0, interest=0 → incomeFromHP=0
+    expect(r.properties[0].grossAnnualValue).toBe(0);
+    expect(r.properties[0].netAnnualValue).toBe(0);
+    expect(r.properties[0].interestOnLoan).toBe(0);
+    expect(r.properties[0].incomeFromHP).toBe(0);
+  });
+});
+
 describe('calcHousePropertyIncome — multiple properties', () => {
   it('mixed: one self-occupied (loss) + one let-out (profit) — totalHPIncome is net', async () => {
     const selfOccupied = makeSelfOccupied(150000); // incomeFromHP = -150000

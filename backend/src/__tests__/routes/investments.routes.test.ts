@@ -5,7 +5,7 @@
  * investments (equity/MF), gold, real-estate.
  * Each group: happy-path GET + POST (valid/invalid) + PUT + DELETE.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import request from 'supertest';
 
 vi.mock('../../middleware/auth', () => ({
@@ -111,6 +111,19 @@ describe('GET /api/investments/80c-summary', () => {
     expect(res.status).toBe(200);
     expect(m(svc.get80CSummary)).toHaveBeenCalledWith('u1', '2024-25');
   });
+
+  it('falls back to current FY when fy param is absent (parseFY non-string path)', async () => {
+    // Pin clock to June 2025 → FY 2025-26 so the assertion is deterministic
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2025-06-15'));
+    try {
+      await request(app).get('/api/investments/80c-summary');
+      // parseFY(undefined) → typeof undefined !== 'string' → s='' → regex fails → getCurrentFY()
+      expect(m(svc.get80CSummary)).toHaveBeenCalledWith('u1', '2025-26');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ─── Exchange Rates ───────────────────────────────────────────────────────────
@@ -161,6 +174,11 @@ describe('GET /api/investments/fd/maturing-soon', () => {
     const res = await request(app).get('/api/investments/fd/maturing-soon?days=7');
     expect(res.status).toBe(200);
     expect(m(svc.getFDsMaturing)).toHaveBeenCalledWith('u1', 7);
+  });
+
+  it('defaults to 30 days when days param is absent', async () => {
+    await request(app).get('/api/investments/fd/maturing-soon');
+    expect(m(svc.getFDsMaturing)).toHaveBeenCalledWith('u1', 30);
   });
 });
 
@@ -271,6 +289,11 @@ describe('GET /api/investments/sip/upcoming', () => {
     expect(res.status).toBe(200);
     expect(m(svc.getSIPsUpcoming)).toHaveBeenCalledWith('u1', 14);
   });
+
+  it('defaults to 7 days when days param is absent', async () => {
+    await request(app).get('/api/investments/sip/upcoming');
+    expect(m(svc.getSIPsUpcoming)).toHaveBeenCalledWith('u1', 7);
+  });
 });
 
 describe('POST /api/investments/sip', () => {
@@ -347,6 +370,12 @@ describe('GET /api/investments', () => {
 
   it('clamps page=0 to page=1', async () => {
     await request(app).get('/api/investments?page=0');
+    expect(m(svc.getInvestments)).toHaveBeenCalledWith('u1', undefined, 1, expect.any(Number));
+  });
+
+  it('falls back to page=1 when page is not a finite number', async () => {
+    await request(app).get('/api/investments?page=invalid');
+    // Number('invalid') is NaN → Number.isFinite(NaN) is false → defaults to 1
     expect(m(svc.getInvestments)).toHaveBeenCalledWith('u1', undefined, 1, expect.any(Number));
   });
 

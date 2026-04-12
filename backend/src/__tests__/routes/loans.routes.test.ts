@@ -173,6 +173,12 @@ describe('GET /api/loans/:id/amortization-schedule', () => {
     expect(res.status).toBe(200);
     expect(getAmortizationMock).toHaveBeenCalled();
   });
+
+  it('ADMIN role — ownerFilter is undefined (family-wide access)', async () => {
+    await request(makeAdminApp()).get('/api/loans/loan-1/amortization-schedule');
+    // Line 50: ownerFilter = ADMIN ? undefined : userId
+    expect(getAmortizationMock).toHaveBeenCalledWith(undefined, 'loan-1');
+  });
 });
 
 describe('POST /api/loans/:id/prepayment-simulation', () => {
@@ -182,6 +188,14 @@ describe('POST /api/loans/:id/prepayment-simulation', () => {
       .send({ prepaymentAmount: 100000, mode: 'reduce_tenure' });
     expect(res.status).toBe(200);
     expect(simulateMock).toHaveBeenCalled();
+  });
+
+  it('ADMIN role — ownerFilter is undefined (family-wide access)', async () => {
+    await request(makeAdminApp())
+      .post('/api/loans/loan-1/prepayment-simulation')
+      .send({ prepaymentAmount: 100000, mode: 'reduce_tenure' });
+    // Line 60: ownerFilter = ADMIN ? undefined : userId
+    expect(simulateMock).toHaveBeenCalledWith(undefined, 'loan-1', 100000, 'reduce_tenure');
   });
 
   it('returns 422 when prepaymentAmount is negative', async () => {

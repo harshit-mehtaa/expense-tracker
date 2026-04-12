@@ -13,7 +13,7 @@ export default defineConfig({
       exclude: ['node_modules/', 'dist/', 'prisma/', 'src/__tests__/'],
       thresholds: {
         statements: 94,
-        branches: 90,
+        branches: 92,
         functions: 98,
         lines: 94,
       },

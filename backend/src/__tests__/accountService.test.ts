@@ -167,6 +167,14 @@ describe('updateAccount', () => {
     expect(result).toBe(updated);
   });
 
+  it('converts maturityDate string to Date object when provided (true branch)', async () => {
+    const updated = { ...MOCK_ACCOUNT, maturityDate: new Date('2026-03-31') };
+    acctMock.update.mockResolvedValue(updated);
+    await updateAccount('acct-1', 'u1', 'MEMBER', { maturityDate: '2026-03-31' } as any);
+    const call = acctMock.update.mock.calls[0][0];
+    expect(call.data.maturityDate).toBeInstanceOf(Date);
+  });
+
   it('propagates NotFound from getAccountById', async () => {
     acctMock.findUnique.mockResolvedValue(null);
     await expect(updateAccount('acct-x', 'u1', 'MEMBER', {})).rejects.toThrow(/not found/i);

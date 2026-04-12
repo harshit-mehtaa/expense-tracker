@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   getCurrentFY,
   getFYRange,
@@ -8,6 +8,7 @@ import {
   isSameFY,
   listFYOptions,
   formatFYLabel,
+  validateFY,
 } from '../utils/financialYear';
 
 describe('getCurrentFY', () => {
@@ -116,5 +117,31 @@ describe('formatFYLabel', () => {
 
   it('correctly computes the end year as startYear + 1', () => {
     expect(formatFYLabel('2025-26')).toBe('FY 2025-26 (Apr 2025 – Mar 2026)');
+  });
+});
+
+describe('validateFY', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns the FY string unchanged when it matches YYYY-YY format', () => {
+    expect(validateFY('2024-25')).toBe('2024-25');
+    expect(validateFY('2025-26')).toBe('2025-26');
+  });
+
+  it('falls back to getCurrentFY when input is not a string', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2025-06-15')); // FY 2025-26
+    expect(validateFY(42 as unknown as string)).toBe(getCurrentFY());
+    expect(validateFY(null as unknown as string)).toBe(getCurrentFY());
+  });
+
+  it('falls back to getCurrentFY when string does not match YYYY-DD pattern', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2025-06-15')); // FY 2025-26
+    expect(validateFY('bad-fy')).toBe(getCurrentFY());
+    expect(validateFY('24-25')).toBe(getCurrentFY()); // too short
+    expect(validateFY('2024/25')).toBe(getCurrentFY()); // wrong separator
   });
 });

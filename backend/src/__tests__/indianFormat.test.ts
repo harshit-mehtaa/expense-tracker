@@ -82,6 +82,11 @@ describe('parseINR', () => {
     expect(parseINR('12345')).toBe(12345);
     expect(parseINR('0')).toBe(0);
   });
+
+  it('throws an error when input cannot be parsed as a number', () => {
+    expect(() => parseINR('abc')).toThrow('Cannot parse "abc" as INR amount');
+    expect(() => parseINR('not-a-number')).toThrow(/Cannot parse/);
+  });
 });
 
 describe('roundINR', () => {
