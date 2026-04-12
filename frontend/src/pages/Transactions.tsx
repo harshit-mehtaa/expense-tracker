@@ -34,6 +34,11 @@ interface Transaction {
   transferPairId?: string | null;
 }
 
+interface RawTransaction extends Omit<Transaction, 'categoryName' | 'bankAccountName'> {
+  category?: { name: string; color: string; icon: string } | null;
+  bankAccount?: { bankName: string; accountNumberLast4?: string | null } | null;
+}
+
 interface TransactionsResponse {
   data: Transaction[];
   pagination: { total: number; hasMore: boolean; nextCursor?: string };
@@ -49,7 +54,7 @@ interface TxFilters {
 }
 
 async function fetchTransactions(fy: string, filters: TxFilters, cursor?: string, targetUserId?: string): Promise<TransactionsResponse> {
-  const res = await api.get<{ data: Transaction[]; pagination: TransactionsResponse['pagination'] }>('/transactions', {
+  const res = await api.get<{ data: RawTransaction[]; pagination: TransactionsResponse['pagination'] }>('/transactions', {
     params: {
       fy,
       limit: 50,
@@ -63,7 +68,14 @@ async function fetchTransactions(fy: string, filters: TxFilters, cursor?: string
       targetUserId: targetUserId || undefined,
     },
   });
-  return { data: res.data.data, pagination: res.data.pagination };
+  const data: Transaction[] = (res.data.data ?? []).map((tx) => ({
+    ...tx,
+    categoryName: tx.category?.name,
+    bankAccountName: tx.bankAccount
+      ? `${tx.bankAccount.bankName}${tx.bankAccount.accountNumberLast4 ? ` ****${tx.bankAccount.accountNumberLast4}` : ''}`
+      : undefined,
+  }));
+  return { data, pagination: res.data.pagination };
 }
 
 const PAYMENT_MODE_COLORS: Record<string, string> = {
