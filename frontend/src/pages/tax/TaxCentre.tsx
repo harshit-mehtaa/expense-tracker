@@ -122,7 +122,7 @@ export default function TaxCentrePage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Tax Centre</h1>
+        <h1 className="text-2xl font-bold">Tax Centre</h1>
         <p className="text-muted-foreground text-sm mt-1">FY {selectedFY} · Indian Tax Planning</p>
       </div>
 

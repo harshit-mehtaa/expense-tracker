@@ -2,7 +2,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useNavigate } from 'react-router-dom';
-import { IndianRupee } from 'lucide-react';
+import { IndianRupee, TrendingUp, Shield, BarChart3 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,6 +15,12 @@ const loginSchema = z.object({
 });
 
 type LoginFormData = z.infer<typeof loginSchema>;
+
+const FEATURES = [
+  { icon: TrendingUp, text: 'Track investments, gold & real estate' },
+  { icon: BarChart3, text: 'Monthly cashflow & net worth trends' },
+  { icon: Shield, text: 'Insurance, loans & tax centre' },
+];
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -53,24 +59,63 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background to-muted p-4">
-      <div className="w-full max-w-sm animate-slide-up-fade">
+    <div className="flex min-h-screen">
+      {/* Left panel — gradient brand */}
+      <div className="hidden lg:flex lg:w-[480px] xl:w-[520px] flex-col justify-between bg-gradient-to-br from-violet-600 via-violet-700 to-indigo-800 p-12 text-white">
         {/* Logo */}
-        <div className="mb-8 flex flex-col items-center gap-3">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-primary/70 shadow-lg shadow-primary/30">
-            <IndianRupee className="h-7 w-7 text-primary-foreground" />
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20 backdrop-blur-sm">
+            <IndianRupee className="h-5 w-5 text-white" />
           </div>
-          <div className="text-center">
-            <h1 className="text-2xl font-semibold tracking-tight">Family Finance</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Sign in to your family account</p>
-          </div>
+          <span className="text-lg font-semibold tracking-tight">Family Finance</span>
         </div>
 
-        {/* Form */}
-        <div className="rounded-xl border border-border bg-card p-8 shadow-xl ring-1 ring-border/50">
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+        {/* Hero text */}
+        <div className="space-y-6">
+          <div>
+            <h1 className="text-4xl font-bold leading-tight">
+              Your family's<br />finances, unified.
+            </h1>
+            <p className="mt-4 text-lg text-white/70 leading-relaxed">
+              One place for every rupee — income, expenses, investments, and goals.
+            </p>
+          </div>
+
+          <ul className="space-y-4">
+            {FEATURES.map(({ icon: Icon, text }) => (
+              <li key={text} className="flex items-center gap-3">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15">
+                  <Icon className="h-4 w-4 text-white" />
+                </div>
+                <span className="text-sm text-white/80">{text}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* Bottom tagline */}
+        <p className="text-sm text-white/40">Built for Indian families.</p>
+      </div>
+
+      {/* Right panel — form */}
+      <div className="flex flex-1 flex-col items-center justify-center bg-background p-8">
+        {/* Mobile logo (only on small screens) */}
+        <div className="mb-8 flex flex-col items-center gap-2 lg:hidden">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary shadow-violet-md">
+            <IndianRupee className="h-6 w-6 text-white" />
+          </div>
+          <h1 className="text-xl font-bold">Family Finance</h1>
+        </div>
+
+        <div className="w-full max-w-sm">
+          <div className="mb-8">
+            <h2 className="text-2xl font-bold text-foreground">Welcome back</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Sign in to your family account</p>
+          </div>
+
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+            <div className="space-y-1.5">
+              <Label htmlFor="email" className="text-sm font-medium">Email</Label>
               <Input
                 id="email"
                 type="email"
@@ -83,8 +128,8 @@ export default function LoginPage() {
               )}
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+            <div className="space-y-1.5">
+              <Label htmlFor="password" className="text-sm font-medium">Password</Label>
               <Input
                 id="password"
                 type="password"
@@ -97,20 +142,20 @@ export default function LoginPage() {
             </div>
 
             {error && (
-              <div className="rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
+              <div className="rounded-lg border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                 {error}
               </div>
             )}
 
-            <Button type="submit" className="w-full" disabled={isSubmitting}>
+            <Button type="submit" className="w-full" size="default" disabled={isSubmitting}>
               {isSubmitting ? 'Signing in...' : 'Sign in'}
             </Button>
           </form>
-        </div>
 
-        <p className="mt-4 text-center text-xs text-muted-foreground">
-          Contact your admin to get access.
-        </p>
+          <p className="mt-6 text-center text-xs text-muted-foreground">
+            Contact your admin to get access.
+          </p>
+        </div>
       </div>
     </div>
   );

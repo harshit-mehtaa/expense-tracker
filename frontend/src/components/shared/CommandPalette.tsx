@@ -70,7 +70,7 @@ export function CommandPalette({ open, onClose }: Props) {
       className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center pt-20 px-4"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="w-full max-w-lg rounded-xl border border-border bg-card shadow-2xl overflow-hidden animate-scale-in">
+      <div className="w-full max-w-lg rounded-xl border border-border bg-card shadow-2xl overflow-hidden">
         {/* Search input */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
           <Search className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -99,26 +99,7 @@ export function CommandPalette({ open, onClose }: Props) {
             <p className="px-4 py-3 text-sm text-muted-foreground">No results for "{debouncedQuery}"</p>
           )}
           {!debouncedQuery && (
-            <div className="px-4 py-4">
-              <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wider">Quick navigate</p>
-              <div className="space-y-0.5">
-                {[
-                  { label: 'Dashboard', path: '/' },
-                  { label: 'Transactions', path: '/transactions' },
-                  { label: 'Investments', path: '/investments' },
-                  { label: 'Budgets', path: '/budgets' },
-                  { label: 'Tax Centre', path: '/tax' },
-                ].map((item) => (
-                  <button
-                    key={item.path}
-                    className="w-full flex items-center px-3 py-2 rounded-lg text-sm text-left hover:bg-muted/50"
-                    onClick={() => { navigate(item.path); onClose(); }}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <p className="px-4 py-8 text-sm text-center text-muted-foreground">Type to search transactions</p>
           )}
           {results.map((r) => (
             <button

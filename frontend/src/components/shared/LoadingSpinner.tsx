@@ -30,7 +30,7 @@ export function LoadingSpinner({ size = 'md', className, label }: LoadingSpinner
 
 export function PageLoader() {
   return (
-    <div className="flex h-full min-h-[400px] items-center justify-center animate-fade-in">
+    <div className="flex h-full min-h-[400px] items-center justify-center">
       <LoadingSpinner size="lg" label="Loading..." />
     </div>
   );

@@ -366,7 +366,7 @@ export default function LoansPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Loans & EMIs</h1>
+          <h1 className="text-2xl font-bold">Loans & EMIs</h1>
           <p className="text-muted-foreground text-sm mt-1">
             {loans.length} active loans · Total EMI <INRDisplay amount={totalEMI} /> /month
             {isAdmin && viewUserId

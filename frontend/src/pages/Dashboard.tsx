@@ -87,19 +87,15 @@ export default function DashboardPage() {
 
   if (summaryLoading || (isAdmin && isMembersLoading)) return <PageLoader />;
 
-  const savingsRateClass =
-    (summary?.savingsRate ?? 0) > 30
-      ? 'text-green-600'
-      : (summary?.savingsRate ?? 0) > 10
-      ? 'text-yellow-600'
-      : 'text-red-600';
+  const savingsRate = summary?.savingsRate ?? 0;
+  const savingsScheme = savingsRate > 30 ? 'emerald' : savingsRate > 10 ? 'amber' : 'rose';
 
   return (
     <div className="space-y-6">
       {/* Page header */}
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <p className="text-muted-foreground">
           Financial overview for FY {selectedFY}
           {isAdmin && viewUserId
             ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
@@ -115,7 +111,7 @@ export default function DashboardPage() {
                 id="dashboard-member-select"
                 value={viewUserId ?? ''}
                 onChange={(e) => setViewUserId(e.target.value || undefined)}
-                className="rounded-lg border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+                className="rounded-md border bg-background px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 <option value="">All Family</option>
                 {members.map((m) => (
@@ -128,58 +124,43 @@ export default function DashboardPage() {
       </div>
 
       {/* Stat cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in">
-        {/* Net Worth */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {/* Net Worth — indigo */}
         <StatCard
           title="Net Worth"
           value={summary?.netWorth ?? 0}
           change={summary?.netWorthChangePct}
           subtitle="vs last FY"
-          accentColor={CHART_PALETTE.net}
+          colorScheme="indigo"
         />
-        {/* Income */}
+        {/* Income — emerald */}
         <StatCard
           title="Total Income"
           value={summary?.totalIncome ?? 0}
-          positive
-          accentColor={CHART_PALETTE.income}
+          colorScheme="emerald"
         />
-        {/* Expense */}
+        {/* Expense — rose */}
         <StatCard
           title="Total Expense"
           value={summary?.totalExpense ?? 0}
-          negative
-          accentColor={CHART_PALETTE.expense}
+          colorScheme="rose"
         />
-        {/* Savings Rate */}
-        <div className="rounded-xl border border-border bg-card p-4">
-          <div className="flex items-start justify-between">
-            <p className="text-sm font-medium text-muted-foreground">Savings Rate</p>
-            <div className={cn(
-              'flex h-8 w-8 items-center justify-center rounded-lg',
-              (summary?.savingsRate ?? 0) > 30 ? 'bg-emerald-100 dark:bg-emerald-900/30' :
-              (summary?.savingsRate ?? 0) > 10 ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-rose-100 dark:bg-rose-900/30',
-            )}>
-              <TrendingUp className={cn('h-4 w-4',
-                (summary?.savingsRate ?? 0) > 30 ? 'text-emerald-600' :
-                (summary?.savingsRate ?? 0) > 10 ? 'text-amber-600' : 'text-rose-600',
-              )} />
-            </div>
-          </div>
-          <p className={cn('mt-2 text-2xl font-bold', savingsRateClass)}>
-            {(summary?.savingsRate ?? 0).toFixed(1)}%
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">This FY</p>
-        </div>
+        {/* Savings Rate — color based on health */}
+        <StatCard
+          title="Savings Rate"
+          valueStr={`${savingsRate.toFixed(1)}%`}
+          subtitle="This FY"
+          colorScheme={savingsScheme}
+        />
       </div>
 
       {/* Charts row */}
       <div className="grid gap-4 lg:grid-cols-3">
         {/* Cash Flow chart (spans 2 cols) */}
-        <div className="lg:col-span-2 rounded-xl border border-border bg-card p-4">
+        <div className="lg:col-span-2 rounded-xl border border-border/60 bg-card shadow-card p-4">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-base font-semibold tracking-tight">Cash Flow — FY {selectedFY}</h2>
+              <h2 className="text-base font-semibold">Cash Flow — FY {selectedFY}</h2>
               <p className="text-xs text-muted-foreground mt-0.5">Click any month to view transactions</p>
             </div>
             <div className="flex items-center gap-4 text-xs text-muted-foreground">
@@ -252,8 +233,8 @@ export default function DashboardPage() {
         </div>
 
         {/* Asset split (simplified placeholder) */}
-        <div className="rounded-xl border border-border bg-card p-4">
-          <h2 className="mb-4 text-base font-semibold tracking-tight">Assets vs Liabilities</h2>
+        <div className="rounded-xl border border-border/60 bg-card shadow-card p-4">
+          <h2 className="mb-4 text-base font-semibold">Assets vs Liabilities</h2>
           <ResponsiveContainer width="100%" height={200}>
             <PieChart>
               <Pie
@@ -284,7 +265,7 @@ export default function DashboardPage() {
 
       {/* Upcoming alerts */}
       {alerts && alerts.length > 0 && (
-        <div className="rounded-xl border border-border bg-card p-4">
+        <div className="rounded-xl border border-border/60 bg-card shadow-card p-4">
           <div className="flex items-center gap-2 mb-3">
             <Bell className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-base font-semibold">Upcoming This Month</h2>
@@ -315,7 +296,7 @@ export default function DashboardPage() {
       )}
 
       {/* Budget Health */}
-      <div className="rounded-xl border border-border bg-card p-4">
+      <div className="rounded-xl border border-border/60 bg-card shadow-card p-4">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <Target className="h-4 w-4 text-muted-foreground" />
@@ -364,9 +345,9 @@ export default function DashboardPage() {
                       </span>
                     </span>
                   </div>
-                  <div className="h-2.5 w-full rounded-full bg-muted overflow-hidden">
+                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
                     <div
-                      className="h-2.5 rounded-full transition-all"
+                      className="h-2 rounded-full transition-all"
                       style={{ width: `${pct}%`, background: barGradient }}
                     />
                   </div>
@@ -380,7 +361,7 @@ export default function DashboardPage() {
 
       {/* Net Worth Trend */}
       {netWorthChartData.length > 0 && (
-        <div className="rounded-xl border border-border bg-card p-4">
+        <div className="rounded-xl border border-border/60 bg-card shadow-card p-4">
           <div className="mb-3">
             <h2 className="text-base font-semibold">Net Worth Trend</h2>
             <p className="text-xs text-muted-foreground mt-0.5">Monthly snapshots — based on data at time of capture</p>
@@ -409,7 +390,7 @@ export default function DashboardPage() {
 
       {/* Family spending breakdown — admin only */}
       {user?.role === 'ADMIN' && familyOverview && familyOverview.members.length > 1 && (
-        <div className="rounded-xl border border-border bg-card p-4">
+        <div className="rounded-xl border border-border/60 bg-card shadow-card p-4">
           <div className="flex items-center gap-2 mb-3">
             <Users className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-base font-semibold">Family Spending — FY {selectedFY}</h2>
@@ -434,56 +415,81 @@ export default function DashboardPage() {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
+const COLOR_SCHEMES = {
+  indigo: {
+    bg: 'bg-indigo-50 dark:bg-indigo-950/40',
+    border: 'border-indigo-100 dark:border-indigo-900/50',
+    icon: 'bg-indigo-500',
+    value: 'text-indigo-700 dark:text-indigo-300',
+    label: 'text-indigo-600/80 dark:text-indigo-400/80',
+    trend: { up: 'text-emerald-600', down: 'text-red-500' },
+  },
+  emerald: {
+    bg: 'bg-emerald-50 dark:bg-emerald-950/40',
+    border: 'border-emerald-100 dark:border-emerald-900/50',
+    icon: 'bg-emerald-500',
+    value: 'text-emerald-700 dark:text-emerald-300',
+    label: 'text-emerald-600/80 dark:text-emerald-400/80',
+    trend: { up: 'text-emerald-600', down: 'text-red-500' },
+  },
+  rose: {
+    bg: 'bg-rose-50 dark:bg-rose-950/40',
+    border: 'border-rose-100 dark:border-rose-900/50',
+    icon: 'bg-rose-500',
+    value: 'text-rose-700 dark:text-rose-300',
+    label: 'text-rose-600/80 dark:text-rose-400/80',
+    trend: { up: 'text-green-600', down: 'text-rose-600' },
+  },
+  amber: {
+    bg: 'bg-amber-50 dark:bg-amber-950/40',
+    border: 'border-amber-100 dark:border-amber-900/50',
+    icon: 'bg-amber-500',
+    value: 'text-amber-700 dark:text-amber-300',
+    label: 'text-amber-600/80 dark:text-amber-400/80',
+    trend: { up: 'text-amber-600', down: 'text-amber-600' },
+  },
+} as const;
+
+type ColorScheme = keyof typeof COLOR_SCHEMES;
+
 function StatCard({
   title,
   value,
+  valueStr,
   change,
   subtitle,
-  positive,
-  negative,
-  accentColor,
+  colorScheme = 'indigo',
 }: {
   title: string;
-  value: number;
+  value?: number;
+  valueStr?: string;
   change?: number;
   subtitle?: string;
-  positive?: boolean;
-  negative?: boolean;
-  accentColor?: string;
+  colorScheme?: ColorScheme;
 }) {
+  const c = COLOR_SCHEMES[colorScheme];
   const isPositive = change !== undefined && change >= 0;
 
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <div className="flex items-start justify-between">
-        <p className="text-sm font-medium text-muted-foreground">{title}</p>
-        {accentColor && (
-          <div
-            className="flex h-8 w-8 items-center justify-center rounded-lg opacity-80"
-            style={{ backgroundColor: `${accentColor}20` }}
-          >
-            {positive ? (
-              <TrendingUp className="h-4 w-4" style={{ color: accentColor }} />
-            ) : negative ? (
-              <TrendingDown className="h-4 w-4" style={{ color: accentColor }} />
-            ) : (
-              <ArrowUpRight className="h-4 w-4" style={{ color: accentColor }} />
-            )}
-          </div>
-        )}
-      </div>
-      <INRDisplay
-        amount={value}
-        short
-        className="mt-2 text-2xl font-bold block"
-        positive={positive}
-        negative={negative}
-      />
+    <div className={cn('rounded-xl border p-5 transition-shadow hover:shadow-card', c.bg, c.border)}>
+      <p className={cn('text-xs font-semibold uppercase tracking-wider', c.label)}>{title}</p>
+      {value !== undefined ? (
+        <INRDisplay
+          amount={value}
+          short
+          className={cn('mt-2 text-2xl font-bold block', c.value)}
+        />
+      ) : (
+        <p className={cn('mt-2 text-2xl font-bold', c.value)}>{valueStr}</p>
+      )}
       {change !== undefined && (
-        <div className={cn('mt-1.5 flex items-center gap-1 text-xs font-medium', isPositive ? 'text-emerald-600' : 'text-rose-600')}>
+        <div className={cn('mt-1.5 flex items-center gap-1 text-xs font-medium', isPositive ? c.trend.up : c.trend.down)}>
           {isPositive ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
           <span>{Math.abs(change).toFixed(1)}% {subtitle}</span>
         </div>
+      )}
+      {subtitle && change === undefined && (
+        <p className={cn('mt-1.5 text-xs', c.label)}>{subtitle}</p>
       )}
     </div>
   );

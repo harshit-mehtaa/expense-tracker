@@ -203,7 +203,7 @@ export default function InvestmentsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Investments & Portfolio</h1>
+        <h1 className="text-2xl font-bold">Investments & Portfolio</h1>
         <div className="flex gap-2">
           {tab === 'fd' && (
             <Button variant="outline" onClick={() => setShowFDForm(true)}><Plus className="h-4 w-4 mr-1" /> Add FD</Button>

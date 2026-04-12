@@ -1,3 +1,4 @@
+import type { ElementType } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -38,69 +39,64 @@ const ADMIN_NAV_ITEMS = [
   { to: '/reports', icon: FileText, label: 'Reports' },
 ];
 
+function NavItem({ to, icon: Icon, label, exact }: { to: string; icon: ElementType; label: string; exact?: boolean }) {
+  return (
+    <li>
+      <NavLink
+        to={to}
+        end={exact}
+        className={({ isActive }) =>
+          cn(
+            'group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+            isActive
+              ? 'bg-primary/10 text-primary'
+              : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+          )
+        }
+      >
+        {({ isActive }) => (
+          <>
+            {isActive && (
+              <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-primary" />
+            )}
+            <Icon className={cn('h-4 w-4 shrink-0 transition-colors', isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground')} />
+            {label}
+          </>
+        )}
+      </NavLink>
+    </li>
+  );
+}
+
 export function Sidebar() {
   const { user } = useAuth();
 
   return (
-    <aside
-      data-sidebar
-      className="flex h-full w-64 flex-col border-r border-border bg-sidebar"
-    >
+    <aside className="flex h-full w-60 flex-col bg-background border-r border-border/60">
       {/* Logo */}
-      <div className="flex h-16 items-center gap-3 border-b border-border px-5">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary shadow-primary-sm">
-          <IndianRupee className="h-4 w-4 text-primary-foreground" />
+      <div className="flex h-14 items-center gap-2.5 px-5 border-b border-border/60">
+        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary shadow-violet-md">
+          <IndianRupee className="h-4 w-4 text-white" />
         </div>
-        <span className="font-semibold tracking-tight text-foreground">Family Finance</span>
+        <span className="text-sm font-semibold tracking-tight text-foreground">Family Finance</span>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto p-3">
+      <nav className="flex-1 overflow-y-auto py-3 px-3">
         <ul className="space-y-0.5">
           {NAV_ITEMS.map((item) => (
-            <li key={item.to}>
-              <NavLink
-                to={item.to}
-                end={item.exact}
-                className={({ isActive }) =>
-                  cn(
-                    'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium',
-                    isActive
-                      ? 'bg-primary text-primary-foreground shadow-sm'
-                      : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-                  )
-                }
-              >
-                <item.icon className="h-4 w-4 shrink-0" />
-                {item.label}
-              </NavLink>
-            </li>
+            <NavItem key={item.to} {...item} />
           ))}
 
           {user?.role === 'ADMIN' && (
             <>
-              <li className="mt-4 mb-1 px-3">
-                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/60">
+              <li className="mt-5 mb-1.5 px-3">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
                   Admin
                 </p>
               </li>
               {ADMIN_NAV_ITEMS.map((item) => (
-                <li key={item.to}>
-                  <NavLink
-                    to={item.to}
-                    className={({ isActive }) =>
-                      cn(
-                        'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium',
-                        isActive
-                          ? 'bg-primary text-primary-foreground shadow-sm'
-                          : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-                      )
-                    }
-                  >
-                    <item.icon className="h-4 w-4 shrink-0" />
-                    {item.label}
-                  </NavLink>
-                </li>
+                <NavItem key={item.to} {...item} />
               ))}
             </>
           )}
@@ -108,21 +104,8 @@ export function Sidebar() {
       </nav>
 
       {/* Bottom: Settings */}
-      <div className="border-t border-border p-3">
-        <NavLink
-          to="/settings"
-          className={({ isActive }) =>
-            cn(
-              'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium',
-              isActive
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-            )
-          }
-        >
-          <Settings className="h-4 w-4" />
-          Settings
-        </NavLink>
+      <div className="border-t border-border/60 p-3">
+        <NavItem to="/settings" icon={Settings} label="Settings" />
       </div>
     </aside>
   );

@@ -58,7 +58,7 @@ export default function GoldPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Gold Holdings</h1>
+        <h1 className="text-2xl font-bold">Gold Holdings</h1>
         <Button size="sm" onClick={() => setShowGoldForm(true)}><Plus className="h-4 w-4 mr-1" /> Add Gold</Button>
       </div>
 
