@@ -35,7 +35,7 @@ router.put('/users/:id', asyncHandler(async (req, res) => {
     colorTag: z.string().optional(),
     panNumberMasked: z.string().optional(),
   }).parse(req.body);
-  const user = await svc.updateUser(req.params.id, data);
+  const user = await svc.updateUser(req.params.id, req.user!.userId, data);
   sendSuccess(res, user);
 }));
 

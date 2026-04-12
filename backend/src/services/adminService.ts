@@ -48,7 +48,7 @@ export async function createUser(data: {
   });
 }
 
-export async function updateUser(id: string, data: {
+export async function updateUser(id: string, requesterId: string, data: {
   name?: string;
   email?: string;
   role?: 'ADMIN' | 'MEMBER';
@@ -58,6 +58,9 @@ export async function updateUser(id: string, data: {
 }) {
   const user = await prisma.user.findFirst({ where: { id, deletedAt: null } });
   if (!user) throw AppError.notFound('User');
+  if (id === requesterId && data.role !== undefined && data.role !== user.role) {
+    throw AppError.badRequest('Cannot change your own role');
+  }
   if (data.email && data.email !== user.email) {
     const conflict = await prisma.user.findUnique({ where: { email: data.email } });
     if (conflict) throw AppError.conflict('Email already in use');
@@ -73,6 +76,8 @@ export async function deleteUser(id: string, requestorId: string) {
   if (id === requestorId) throw AppError.badRequest('Cannot delete your own account');
   const user = await prisma.user.findFirst({ where: { id, deletedAt: null } });
   if (!user) throw AppError.notFound('User');
+  // Revoke all active sessions so the deleted user is immediately locked out
+  await prisma.refreshToken.deleteMany({ where: { userId: id } });
   // Soft delete
   return prisma.user.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } });
 }

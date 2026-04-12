@@ -73,10 +73,10 @@ export async function refreshTokens(oldRefreshToken: string): Promise<TokenPair>
     throw AppError.unauthorized('Refresh token is invalid or expired');
   }
 
-  // Verify user still exists and is active
+  // Verify user still exists, is active, and has not been soft-deleted
   const user = await prisma.user.findUnique({ where: { id: payload.userId } });
-  if (!user || !user.isActive) {
-    throw AppError.unauthorized('User account is inactive');
+  if (!user || !user.isActive || user.deletedAt) {
+    throw AppError.unauthorized('User account is inactive or deleted');
   }
 
   // Delete old token and issue new pair (rotation).

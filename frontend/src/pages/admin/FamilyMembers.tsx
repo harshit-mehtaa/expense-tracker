@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -53,6 +53,16 @@ export default function FamilyMembersPage() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { data: users = [], isLoading } = useUsers();
+
+  // Close dropdown on Escape key
+  useEffect(() => {
+    if (!activeMenu) return;
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setActiveMenu(null);
+    }
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [activeMenu]);
 
   // ── Create form ────────────────────────────────────────────────────────────
   const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<UserForm>({
@@ -230,6 +240,11 @@ export default function FamilyMembersPage() {
         </div>
       )}
 
+      {/* ── Transparent overlay to close dropdown on outside click ─────── */}
+      {activeMenu && (
+        <div className="fixed inset-0 z-[5]" onClick={() => setActiveMenu(null)} aria-hidden="true" />
+      )}
+
       {/* ── Add Member Modal ──────────────────────────────────────────────── */}
       {showForm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -303,10 +318,17 @@ export default function FamilyMembersPage() {
               </div>
               <div className="space-y-1">
                 <Label>Role</Label>
-                <select {...editRegister('role')} className="w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+                <select
+                  {...editRegister('role')}
+                  disabled={editUser.id === currentUser?.id}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
+                >
                   <option value="MEMBER">Member</option>
                   <option value="ADMIN">Admin</option>
                 </select>
+                {editUser.id === currentUser?.id && (
+                  <p className="text-xs text-muted-foreground">You cannot change your own role</p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label>Color Tag</Label>
