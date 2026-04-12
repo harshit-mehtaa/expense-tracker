@@ -29,7 +29,10 @@ vi.mock('../../config/prisma', () => {
 
 import dashboardRouter from '../../routes/dashboard';
 import * as svc from '../../services/dashboardService';
+import prisma from '../../config/prisma';
 import { makeApp } from '../helpers/makeApp';
+
+const userFindFirst = prisma.user.findFirst as ReturnType<typeof vi.fn>;
 
 const app = makeApp(dashboardRouter, '/api/dashboard');
 
@@ -44,6 +47,7 @@ beforeEach(() => {
   cashflowSvc.mockResolvedValue([]);
   alertsSvc.mockResolvedValue([]);
   familySvc.mockResolvedValue({ members: [] });
+  userFindFirst.mockResolvedValue({ id: 'u2' }); // default: user found
 });
 
 // ─── GET /api/dashboard/summary ───────────────────────────────────────────────
@@ -65,6 +69,21 @@ describe('GET /api/dashboard/summary', () => {
   it('rejects invalid targetUserId format with 400', async () => {
     const res = await request(app).get('/api/dashboard/summary?targetUserId=not-valid!!');
     expect(res.status).toBe(400);
+  });
+
+  it('returns 404 when targetUserId is a valid CUID format but user not found', async () => {
+    // Valid CUID format: 20-30 alphanumeric chars — but prisma returns null → AppError.notFound
+    userFindFirst.mockResolvedValue(null);
+    const res = await request(app).get('/api/dashboard/summary?targetUserId=clxyz1234567890abcdefgh');
+    expect(res.status).toBe(404);
+  });
+
+  it('forwards resolved targetUserId to service when ADMIN passes valid user', async () => {
+    // ADMIN + valid CUID + user found → service receives the resolved targetUserId
+    userFindFirst.mockResolvedValue({ id: 'clxyz1234567890abcdefgh' });
+    const res = await request(app).get('/api/dashboard/summary?fy=2024-25&targetUserId=clxyz1234567890abcdefgh');
+    expect(res.status).toBe(200);
+    expect(summarySvc).toHaveBeenCalledWith('u1', 'ADMIN', '2024-25', 'clxyz1234567890abcdefgh');
   });
 });
 

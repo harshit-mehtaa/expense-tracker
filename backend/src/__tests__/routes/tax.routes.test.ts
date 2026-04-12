@@ -326,6 +326,12 @@ describe('DELETE /api/tax/other-income/:id', () => {
     const res = await request(app).delete('/api/tax/other-income/os-1');
     expect(res.status).toBe(200);
   });
+
+  it('returns 404 when service returns null', async () => {
+    m(osSvc.deleteOtherIncome).mockResolvedValue(null);
+    const res = await request(app).delete('/api/tax/other-income/nonexistent');
+    expect(res.status).toBe(404);
+  });
 });
 
 // ─── House Property (Schedule HP) ────────────────────────────────────────────
@@ -381,6 +387,12 @@ describe('DELETE /api/tax/house-property/:id', () => {
   it('returns 200 on successful delete', async () => {
     const res = await request(app).delete('/api/tax/house-property/hp-1');
     expect(res.status).toBe(200);
+  });
+
+  it('returns 404 when service returns null', async () => {
+    m(hpSvc.deleteHouseProperty).mockResolvedValue(null);
+    const res = await request(app).delete('/api/tax/house-property/nonexistent');
+    expect(res.status).toBe(404);
   });
 });
 
