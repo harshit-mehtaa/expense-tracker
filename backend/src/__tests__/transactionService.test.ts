@@ -748,6 +748,12 @@ describe('getAllTransactionsForExport', () => {
     expect(call.where.categoryId).toEqual({ in: ['cat-1', 'cat-2'] });
   });
 
+  it('applies singular categoryId filter (else-if branch, lines 481-482)', async () => {
+    await getAllTransactionsForExport('u1', 'MEMBER', { categoryId: 'cat-1' });
+    const call = txMock.findMany.mock.calls[0][0];
+    expect(call.where.categoryId).toBe('cat-1');
+  });
+
   it('applies types filter', async () => {
     await getAllTransactionsForExport('u1', 'MEMBER', { types: ['INCOME', 'EXPENSE'] });
     const call = txMock.findMany.mock.calls[0][0];

@@ -217,6 +217,22 @@ describe('getTaxSummary — old regime tax slabs', () => {
     expect(result.oldRegime.taxableIncome).toBe(550_000); // 600K - 50K std deduction
   });
 
+  it('surcharge applies at 15% for income ₹1–2 crore (line 88 branch)', async () => {
+    // grossSalary=15M → taxable=14.95M → rawTax=112500+(13.95M*0.30)=4,297,500
+    // surcharge=4,297,500*0.15=644,625 → total=(4,297,500+644,625)*1.04=5,139,810
+    profileMock.mockResolvedValue(makeProfile(15_000_000));
+    const result = await getTaxSummary('u1', FY);
+    expect(result.oldRegime.tax).toBeCloseTo(5_139_810, 0);
+  });
+
+  it('surcharge applies at 25% for old regime income ₹2–5 crore (line 89 branch)', async () => {
+    // grossSalary=30M → taxable=29.95M → rawTax=112500+(28.95M*0.30)=8,797,500
+    // surcharge=8,797,500*0.25=2,199,375 → total=(8,797,500+2,199,375)*1.04=11,436,750
+    profileMock.mockResolvedValue(makeProfile(30_000_000));
+    const result = await getTaxSummary('u1', FY);
+    expect(result.oldRegime.tax).toBeCloseTo(11_436_750, 0);
+  });
+
   it('surcharge applies at 37% for old regime income > ₹5 crore', async () => {
     // grossSalary=52M → taxable=51.95M → rawTax=112500+(50.95M*0.30)=15,397,500
     // surcharge=15,397,500*0.37=5,697,075 → total=(15,397,500+5,697,075)*1.04=21,938,358
@@ -253,6 +269,20 @@ describe('getTaxSummary — new regime 2025-26 slabs', () => {
     expect(result.newRegime.taxableIncome).toBe(1_300_000); // 1375K - 75K
   });
 
+  it('2025-26 slab: income ₹1.6M–₹2.0M bracket (line 43)', async () => {
+    // grossSalary=1800K → taxable=1725K → slab: 120000+(125K*0.20)=145000 → cess=150800
+    profileMock.mockResolvedValue(makeProfile(1_800_000, 'NEW'));
+    const result = await getTaxSummary('u1', '2025-26');
+    expect(result.newRegime.tax).toBeCloseTo(150_800, 0);
+  });
+
+  it('2025-26 slab: income ₹2.0M–₹2.4M bracket (line 44)', async () => {
+    // grossSalary=2150K → taxable=2075K → slab: 200000+(75K*0.25)=218750 → cess=227500
+    profileMock.mockResolvedValue(makeProfile(2_150_000, 'NEW'));
+    const result = await getTaxSummary('u1', '2025-26');
+    expect(result.newRegime.tax).toBeCloseTo(227_500, 0);
+  });
+
   it('surcharge capped at 25% for new regime income > ₹5 crore', async () => {
     // grossSalary=52M → taxable=51.925M (75K std ded) → rawTax=300K+(49.525M*0.30)=15,157,500
     // surcharge=15,157,500*0.25=3,789,375 → total=(15,157,500+3,789,375)*1.04=19,704,750
@@ -276,6 +306,14 @@ describe('getTaxSummary — new regime 2024-25 slabs', () => {
     profileMock.mockResolvedValue(makeProfile(775_000, 'NEW'));
     const result = await getTaxSummary('u1', '2024-25');
     expect(result.newRegime.tax).toBe(0);
+  });
+
+  it('2024-25 slab: income ≤₹3L → 0 tax (line 27 branch)', async () => {
+    // grossSalary=375K → taxable=375K-75K=300K → slab returns 0 directly (≤3L branch)
+    profileMock.mockResolvedValue(makeProfile(375_000, 'NEW'));
+    const result = await getTaxSummary('u1', '2024-25');
+    expect(result.newRegime.tax).toBe(0);
+    expect(result.newRegime.taxableIncome).toBe(300_000);
   });
 
   it('2024-25 slab: income ≤₹12L bracket (₹1M–₹1.2M range)', async () => {
@@ -333,6 +371,14 @@ describe('getTaxSummary — metadata', () => {
     const result = await getTaxSummary('u1', '2025-26');
     expect(result.electedRegime).toBe('OLD');
     expect(result.grossSalary).toBe(0);
+  });
+
+  it('null hraReceived and rentPaidMonthly fields fall back to 0 via ?? operator (lines 182-183)', async () => {
+    // Exercises the `?? 0` null-coalescing branches inside the profile-truthy path of hraExempt
+    profileMock.mockResolvedValue({ ...makeProfile(600_000), hraReceived: null, rentPaidMonthly: null });
+    const result = await getTaxSummary('u1', '2025-26');
+    // hraExempt = calcHRAExemption(300K, 0, 0, false) = min(0, 0, 120K) = 0
+    expect(result.oldRegime.taxableIncome).toBe(550_000); // 600K - 50K std deduction - 0 HRA
   });
 
   it('recommendedRegime is NEW when new regime tax is lower (concrete case)', async () => {
@@ -571,6 +617,14 @@ describe('get80CTracker', () => {
     ]);
     const result = await get80CTracker('u1', FY);
     expect(result.breakdown.licPremiums).toBeCloseTo(10_000); // 2500 * 4
+  });
+
+  it('HALF_YEARLY frequency multiplier: premiumAmount×2', async () => {
+    (prisma.insurancePolicy.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { premiumAmount: 5000, premiumFrequency: 'HALF_YEARLY' },
+    ]);
+    const result = await get80CTracker('u1', FY);
+    expect(result.breakdown.licPremiums).toBeCloseTo(10_000); // 5000 * 2
   });
 
   it('unknown/default frequency: premiumAmount returned as-is (×1)', async () => {

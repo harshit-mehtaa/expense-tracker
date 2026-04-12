@@ -117,7 +117,8 @@ describe('GET /api/investments/80c-summary', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2025-06-15'));
     try {
-      await request(app).get('/api/investments/80c-summary');
+      const res = await request(app).get('/api/investments/80c-summary');
+      expect(res.status).toBe(200);
       // parseFY(undefined) → typeof undefined !== 'string' → s='' → regex fails → getCurrentFY()
       expect(m(svc.get80CSummary)).toHaveBeenCalledWith('u1', '2025-26');
     } finally {

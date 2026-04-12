@@ -96,6 +96,15 @@ describe('GET /api/budgets/vs-actuals', () => {
     expect(res.body.data[0].pctUsed).toBe(0);
   });
 
+  it('pctUsed is 0 when budget amount is zero (division-by-zero guard)', async () => {
+    budgetMock.findMany.mockResolvedValue([{ ...MOCK_BUDGET, amount: 0, categoryId: 'cat-zero' }]);
+    txMock.groupBy.mockResolvedValue([{ categoryId: 'cat-zero', _sum: { amount: 100 } }]);
+    const res = await request(app).get('/api/budgets/vs-actuals?fy=2025-26');
+    expect(res.status).toBe(200);
+    // Line 77: Number(b.amount) > 0 ? ... : 0 — false branch when amount=0
+    expect(res.body.data[0].pctUsed).toBe(0);
+  });
+
   it('skips null categoryId entries when building actualsMap', async () => {
     // actuals entry with categoryId: null must not crash (null-guard: a.categoryId check in forEach)
     txMock.groupBy.mockResolvedValue([
@@ -106,6 +115,14 @@ describe('GET /api/budgets/vs-actuals', () => {
     expect(res.status).toBe(200);
     // The budget for cat-1 should show 3000 actual
     expect(res.body.data[0].actual).toBe(3000);
+  });
+
+  it('treats null _sum.amount as 0 via ?? operator (line 70 branch)', async () => {
+    // categoryId is present (truthy) but _sum.amount is null → falls back to 0 via ??
+    txMock.groupBy.mockResolvedValue([{ categoryId: 'cat-1', _sum: { amount: null } }]);
+    const res = await request(app).get('/api/budgets/vs-actuals?fy=2025-26');
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].actual).toBe(0);
   });
 
   // ─── ADMIN targetUserId paths ─────────────────────────────────────────────

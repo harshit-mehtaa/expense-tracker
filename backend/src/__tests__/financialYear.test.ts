@@ -137,7 +137,7 @@ describe('validateFY', () => {
     expect(validateFY(null as unknown as string)).toBe(getCurrentFY());
   });
 
-  it('falls back to getCurrentFY when string does not match YYYY-DD pattern', () => {
+  it('falls back to getCurrentFY when string does not match YYYY-YY pattern', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2025-06-15')); // FY 2025-26
     expect(validateFY('bad-fy')).toBe(getCurrentFY());

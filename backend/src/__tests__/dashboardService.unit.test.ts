@@ -592,4 +592,42 @@ describe('getUpcomingAlerts', () => {
     expect(alert).toBeDefined();
     expect(alert!.entityId).toBe('b-fy');
   });
+
+  it('unknown budget period → rangeFor throws Unhandled BudgetPeriod (line 280)', async () => {
+    // Any period not in MONTHLY/QUARTERLY/FY/YEARLY triggers the throw
+    budgetMock.findMany.mockResolvedValue([{
+      id: 'b-bad', userId: 'u1', amount: 10000, period: 'BIANNUAL', categoryId: 'cat-bad',
+      category: { name: 'Other' },
+    }]);
+    // txMock.groupBy is not reached — rangeFor throws synchronously before Promise.all
+    await expect(getUpcomingAlerts('u1', 'MEMBER')).rejects.toThrow(/Unhandled BudgetPeriod/);
+  });
+
+  // Jan-Mar quarter branch (line 274): else branch when currentMonth0 is 0, 1, or 2
+  describe('QUARTERLY budget in January — triggers Jan-Mar qStart/qEnd branch', () => {
+    const JAN_DATE = new Date('2025-01-15T12:00:00.000Z'); // month index = 0
+
+    beforeAll(() => {
+      vi.setSystemTime(JAN_DATE);
+    });
+
+    afterAll(() => {
+      vi.setSystemTime(PINNED_DATE); // restore outer April pin
+    });
+
+    beforeEach(resetAllMocks);
+
+    it('QUARTERLY budget ≥80% spent in January → BUDGET_ALERT (Jan-Mar qStart/qEnd used)', async () => {
+      budgetMock.findMany.mockResolvedValue([{
+        id: 'b-jan-q', userId: 'u1', amount: 20000, period: 'QUARTERLY', categoryId: 'cat-jan',
+        category: { name: 'Groceries' },
+      }]);
+      txMock.groupBy.mockResolvedValue([{ categoryId: 'cat-jan', _sum: { amount: 17000 } }]);
+      const r = await getUpcomingAlerts('u1', 'MEMBER');
+      // Line 274 else branch fires: qStart = Jan 1, qEnd = Mar 31 of current FY end year
+      const alert = r.find((a: any) => a.type === 'BUDGET_ALERT');
+      expect(alert).toBeDefined();
+      expect(alert!.entityId).toBe('b-jan-q');
+    });
+  });
 });
