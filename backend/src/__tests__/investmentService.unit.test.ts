@@ -787,6 +787,14 @@ describe('updateGoldHolding / deleteGoldHolding', () => {
     await deleteGoldHolding('u1', 'gold-1');
     expect(goldMock.delete).toHaveBeenCalledWith({ where: { id: 'gold-1' } });
   });
+
+  it('updates gold holding when found', async () => {
+    const updated = { id: 'gold-1', quantityGrams: 20 };
+    goldMock.update.mockResolvedValue(updated);
+    const result = await updateGoldHolding('u1', 'gold-1', { quantityGrams: 20 });
+    expect(goldMock.update).toHaveBeenCalledWith({ where: { id: 'gold-1' }, data: { quantityGrams: 20 } });
+    expect(result).toEqual(updated);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -830,6 +838,14 @@ describe('createRealEstate / updateRealEstate / deleteRealEstate', () => {
     reMock.delete.mockResolvedValue({ id: 're-1' });
     await deleteRealEstate('u1', 're-1');
     expect(reMock.delete).toHaveBeenCalledWith({ where: { id: 're-1' } });
+  });
+
+  it('updates real estate when found', async () => {
+    const updated = { id: 're-1', currentValue: 7000000 };
+    reMock.update.mockResolvedValue(updated);
+    const result = await updateRealEstate('u1', 're-1', { currentValue: 7000000 });
+    expect(reMock.update).toHaveBeenCalledWith({ where: { id: 're-1' }, data: { currentValue: 7000000 } });
+    expect(result).toEqual(updated);
   });
 });
 

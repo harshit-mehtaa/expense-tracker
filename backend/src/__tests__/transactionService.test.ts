@@ -454,8 +454,10 @@ describe('createTransaction — TRANSFER', () => {
   };
 
   it('throws BadRequest when transferToAccountId is missing', async () => {
+    // Construct without transferToAccountId key (not via spread+undefined override which is brittle)
+    const { transferToAccountId: _omit, ...dataWithoutDest } = TRANSFER_DATA;
     await expect(
-      createTransaction('u1', { ...TRANSFER_DATA, transferToAccountId: undefined }),
+      createTransaction('u1', dataWithoutDest as any),
     ).rejects.toThrow(/transferToAccountId.*required/i);
   });
 

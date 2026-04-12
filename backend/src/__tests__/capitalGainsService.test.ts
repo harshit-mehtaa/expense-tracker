@@ -201,6 +201,28 @@ describe('calcCapitalGainsSummary', () => {
     expect(result.entries[0].taxBucket).toBe('DEBT_MF_SLAB');
   });
 
+  it('DEBT_MF, isPreApril2023Purchase=false, long hold → still ltcg.debtMFSlab (not ltcg.equity10Pct)', async () => {
+    // Long hold (>1095d) post-Apr-2023 DEBT_MF should also go to debtMFSlab
+    cgMock.findMany.mockResolvedValue([
+      makeEntry({ assetType: 'DEBT_MUTUAL_FUND', isPreApril2023Purchase: false, holdingDays: 1200 }),
+    ]);
+    const result = await calcCapitalGainsSummary('u1', '2025-26');
+    expect(result.ltcg.debtMFSlab).toBe(20000);
+    expect(result.ltcg.equity10Pct).toBe(0);
+    expect(result.entries[0].taxBucket).toBe('DEBT_MF_SLAB');
+  });
+
+  it('EQUITY_LISTED held ≥ 365d, isSection112AEligible=false → ltcg.withIndexation (LTCG_INDEXATION)', async () => {
+    // Non-112A LTCG equity (e.g. no STT paid) → ltcgIndexation bucket, not equity10Pct
+    cgMock.findMany.mockResolvedValue([
+      makeEntry({ assetType: 'EQUITY_LISTED', holdingDays: 500, isSection112AEligible: false }),
+    ]);
+    const result = await calcCapitalGainsSummary('u1', '2025-26');
+    expect(result.ltcg.withIndexation).toBe(20000);
+    expect(result.ltcg.equity10Pct).toBe(0);
+    expect(result.entries[0].taxBucket).toBe('LTCG_INDEXATION');
+  });
+
   it('EQUITY_LISTED held ≥ 365d + isSection112AEligible → ltcg.equity10Pct after ₹1L exemption', async () => {
     // gain=150000, 112A-eligible → ltcg112ARaw=150000, equity10Pct = max(150000-100000, 0) = 50000
     cgMock.findMany.mockResolvedValue([

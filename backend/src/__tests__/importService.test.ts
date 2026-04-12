@@ -303,4 +303,15 @@ describe('parseCSV — Kotak format', () => {
       expect(isNaN(t.date.getTime())).toBe(false);
     });
   });
+
+  it('records invalid date row in errors and continues parsing valid rows', () => {
+    const csv = [
+      'Transaction Date,Description,Chq / Ref No.,Debit Amount,Credit Amount,Balance',
+      'BAD-DATE-ROW,INVALID TRANSACTION,REF001,500.00,,',
+      '01-04-2025,SALARY CREDIT,NEFT001,,75000.00,175000.00',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv), 'KOTAK');
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.transactions.some((t) => t.amount === 75000)).toBe(true);
+  });
 });
