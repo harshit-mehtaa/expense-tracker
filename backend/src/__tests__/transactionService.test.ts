@@ -144,6 +144,22 @@ describe('getTransactions — paymentMode filter', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// bankAccountId filter
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('getTransactions — bankAccountId filter', () => {
+  it('passes bankAccountId directly when provided', async () => {
+    const where = await getWhere('user-1', 'MEMBER', { bankAccountId: 'acct-123' });
+    expect(where.bankAccountId).toBe('acct-123');
+  });
+
+  it('does not set bankAccountId when not provided', async () => {
+    const where = await getWhere('user-1', 'MEMBER', {});
+    expect(where.bankAccountId).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Date / FY filter
 // ─────────────────────────────────────────────────────────────────────────────
 
