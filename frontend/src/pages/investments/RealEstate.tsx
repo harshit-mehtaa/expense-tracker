@@ -54,7 +54,7 @@ export default function RealEstatePage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Real Estate</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Real Estate</h1>
         <Button size="sm" onClick={() => setShowPropertyForm(true)}><Plus className="h-4 w-4 mr-1" /> Add Property</Button>
       </div>
 

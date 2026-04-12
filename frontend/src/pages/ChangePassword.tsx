@@ -62,7 +62,7 @@ export default function ChangePasswordPage() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <div className="w-full max-w-sm space-y-6">
         <div>
-          <h1 className="text-2xl font-bold">Change Password</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Change Password</h1>
           <p className="text-sm text-muted-foreground mt-1">
             You must set a new password before continuing.
           </p>

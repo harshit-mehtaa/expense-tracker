@@ -117,7 +117,7 @@ export default function InsurancePage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Insurance</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Insurance</h1>
           <p className="text-muted-foreground text-sm mt-1">
             {policies.length} policies · Annual premium <INRDisplay amount={totalAnnualPremium} />
           </p>

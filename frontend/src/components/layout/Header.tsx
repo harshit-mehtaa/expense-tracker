@@ -28,7 +28,6 @@ export function Header() {
     staleTime: 5 * 60 * 1000,
   });
 
-  // Sync class on mount and whenever isDark changes
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDark);
   }, [isDark]);
@@ -50,16 +49,22 @@ export function Header() {
     localStorage.setItem('theme', next ? 'dark' : 'light');
   };
 
+  const initials = user?.name?.[0]?.toUpperCase() ?? 'U';
+
   return (
-    <header className="flex h-16 items-center justify-between border-b border-border bg-card px-6">
+    <header
+      data-header
+      className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-border bg-card/95 px-6 shadow-sm backdrop-blur-sm"
+    >
       {/* FY Selector */}
       <div className="flex items-center gap-2">
         <select
           value={selectedFY}
           onChange={(e) => setSelectedFY(e.target.value)}
           className={cn(
-            'rounded-md border border-input bg-background px-3 py-1.5 text-sm',
-            'focus:outline-none focus:ring-2 focus:ring-ring',
+            'rounded-lg border border-input bg-background px-3 py-1.5 text-sm font-medium',
+            'focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary',
+            'text-foreground cursor-pointer',
           )}
           aria-label="Financial Year"
         >
@@ -72,9 +77,9 @@ export function Header() {
       </div>
 
       {/* Right section */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
         {/* Quick add */}
-        <Button size="sm" className="gap-1" onClick={() => navigate('/transactions?add=1')}>
+        <Button size="sm" className="gap-1.5 shadow-primary-sm" onClick={() => navigate('/transactions?add=1')}>
           <Plus className="h-4 w-4" />
           Add Transaction
         </Button>
@@ -90,26 +95,26 @@ export function Header() {
           >
             <Bell className="h-5 w-5" />
             {alerts.length > 0 && (
-              <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] text-white font-bold">
+              <span className="absolute top-1.5 right-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-destructive text-[9px] text-destructive-foreground font-bold leading-none">
                 {alerts.length > 9 ? '9+' : alerts.length}
               </span>
             )}
           </Button>
           {showNotifications && (
-            <div className="absolute right-0 top-full mt-1 w-80 rounded-xl border border-border bg-card shadow-lg z-50 overflow-hidden">
-              <div className="px-4 py-2.5 border-b border-border">
-                <p className="text-sm font-semibold">Notifications</p>
+            <div className="absolute right-0 top-full mt-2 w-80 rounded-xl border border-border bg-card shadow-lg z-50 overflow-hidden animate-scale-in">
+              <div className="px-4 py-3 border-b border-border">
+                <p className="text-sm font-semibold tracking-tight">Notifications</p>
               </div>
               {alerts.length === 0 ? (
                 <p className="px-4 py-6 text-sm text-center text-muted-foreground">No upcoming alerts</p>
               ) : (
                 <div className="max-h-80 overflow-y-auto divide-y divide-border">
                   {alerts.map((alert) => (
-                    <div key={alert.entityId} className="px-4 py-3 hover:bg-muted/50 transition-colors">
+                    <div key={alert.entityId} className="px-4 py-3 hover:bg-muted/50">
                       <p className="text-sm font-medium">{alert.title}</p>
                       <p className={cn(
                         'text-xs mt-0.5',
-                        alert.daysUntilDue === 0 ? 'text-red-500' :
+                        alert.daysUntilDue === 0 ? 'text-destructive' :
                         alert.daysUntilDue <= 3 ? 'text-orange-500' :
                         'text-muted-foreground',
                       )}>
@@ -132,15 +137,16 @@ export function Header() {
         </Button>
 
         {/* User avatar + logout */}
-        <div className="flex items-center gap-2 pl-2 border-l border-border">
+        <div className="flex items-center gap-2 pl-2 ml-0.5 border-l border-border">
           <div
-            className="flex h-8 w-8 items-center justify-center rounded-full text-white text-sm font-medium"
+            className="flex h-8 w-8 items-center justify-center rounded-full text-white text-sm font-semibold ring-2 ring-white/30 shadow-sm"
             style={{ backgroundColor: user?.colorTag ?? '#6366f1' }}
+            title={user?.name}
           >
-            {user?.name?.[0]?.toUpperCase() ?? 'U'}
+            {initials}
           </div>
-          <span className="text-sm font-medium">{user?.name}</span>
-          <Button variant="ghost" size="icon" onClick={logout} aria-label="Logout">
+          <span className="text-sm font-medium text-foreground hidden sm:block">{user?.name}</span>
+          <Button variant="ghost" size="icon" onClick={logout} aria-label="Logout" className="text-muted-foreground hover:text-destructive">
             <LogOut className="h-4 w-4" />
           </Button>
         </div>

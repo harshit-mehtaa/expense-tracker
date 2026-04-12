@@ -98,8 +98,8 @@ export default function DashboardPage() {
     <div className="space-y-6">
       {/* Page header */}
       <div>
-        <h1 className="text-2xl font-bold">Dashboard</h1>
-        <p className="text-muted-foreground">
+        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+        <p className="text-sm text-muted-foreground mt-0.5">
           Financial overview for FY {selectedFY}
           {isAdmin && viewUserId
             ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
@@ -115,7 +115,7 @@ export default function DashboardPage() {
                 id="dashboard-member-select"
                 value={viewUserId ?? ''}
                 onChange={(e) => setViewUserId(e.target.value || undefined)}
-                className="rounded-md border bg-background px-3 py-1.5 text-sm"
+                className="rounded-lg border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
               >
                 <option value="">All Family</option>
                 {members.map((m) => (
@@ -128,7 +128,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Stat cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in">
         {/* Net Worth */}
         <StatCard
           title="Net Worth"
@@ -152,24 +152,25 @@ export default function DashboardPage() {
           accentColor={CHART_PALETTE.expense}
         />
         {/* Savings Rate */}
-        {(() => {
-          const accentHex =
-            (summary?.savingsRate ?? 0) > 30 ? '#10b981'
-            : (summary?.savingsRate ?? 0) > 10 ? '#f59e0b'
-            : '#f43f5e';
-          return (
-            <div
-              className="rounded-xl border border-border border-l-4 bg-card p-4"
-              style={{ borderLeftColor: accentHex }}
-            >
-              <p className="text-sm font-medium text-muted-foreground">Savings Rate</p>
-              <p className={cn('mt-1 text-2xl font-bold', savingsRateClass)}>
-                {(summary?.savingsRate ?? 0).toFixed(1)}%
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">This FY</p>
+        <div className="rounded-xl border border-border bg-card p-4">
+          <div className="flex items-start justify-between">
+            <p className="text-sm font-medium text-muted-foreground">Savings Rate</p>
+            <div className={cn(
+              'flex h-8 w-8 items-center justify-center rounded-lg',
+              (summary?.savingsRate ?? 0) > 30 ? 'bg-emerald-100 dark:bg-emerald-900/30' :
+              (summary?.savingsRate ?? 0) > 10 ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-rose-100 dark:bg-rose-900/30',
+            )}>
+              <TrendingUp className={cn('h-4 w-4',
+                (summary?.savingsRate ?? 0) > 30 ? 'text-emerald-600' :
+                (summary?.savingsRate ?? 0) > 10 ? 'text-amber-600' : 'text-rose-600',
+              )} />
             </div>
-          );
-        })()}
+          </div>
+          <p className={cn('mt-2 text-2xl font-bold', savingsRateClass)}>
+            {(summary?.savingsRate ?? 0).toFixed(1)}%
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">This FY</p>
+        </div>
       </div>
 
       {/* Charts row */}
@@ -178,7 +179,7 @@ export default function DashboardPage() {
         <div className="lg:col-span-2 rounded-xl border border-border bg-card p-4">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-base font-semibold">Cash Flow — FY {selectedFY}</h2>
+              <h2 className="text-base font-semibold tracking-tight">Cash Flow — FY {selectedFY}</h2>
               <p className="text-xs text-muted-foreground mt-0.5">Click any month to view transactions</p>
             </div>
             <div className="flex items-center gap-4 text-xs text-muted-foreground">
@@ -252,7 +253,7 @@ export default function DashboardPage() {
 
         {/* Asset split (simplified placeholder) */}
         <div className="rounded-xl border border-border bg-card p-4">
-          <h2 className="mb-4 text-base font-semibold">Assets vs Liabilities</h2>
+          <h2 className="mb-4 text-base font-semibold tracking-tight">Assets vs Liabilities</h2>
           <ResponsiveContainer width="100%" height={200}>
             <PieChart>
               <Pie
@@ -363,9 +364,9 @@ export default function DashboardPage() {
                       </span>
                     </span>
                   </div>
-                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                  <div className="h-2.5 w-full rounded-full bg-muted overflow-hidden">
                     <div
-                      className="h-2 rounded-full transition-all"
+                      className="h-2.5 rounded-full transition-all"
                       style={{ width: `${pct}%`, background: barGradient }}
                     />
                   </div>
@@ -453,20 +454,33 @@ function StatCard({
   const isPositive = change !== undefined && change >= 0;
 
   return (
-    <div
-      className={cn('rounded-xl border border-border bg-card p-4', accentColor && 'border-l-4')}
-      style={accentColor ? { borderLeftColor: accentColor } : undefined}
-    >
-      <p className="text-sm font-medium text-muted-foreground">{title}</p>
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="flex items-start justify-between">
+        <p className="text-sm font-medium text-muted-foreground">{title}</p>
+        {accentColor && (
+          <div
+            className="flex h-8 w-8 items-center justify-center rounded-lg opacity-80"
+            style={{ backgroundColor: `${accentColor}20` }}
+          >
+            {positive ? (
+              <TrendingUp className="h-4 w-4" style={{ color: accentColor }} />
+            ) : negative ? (
+              <TrendingDown className="h-4 w-4" style={{ color: accentColor }} />
+            ) : (
+              <ArrowUpRight className="h-4 w-4" style={{ color: accentColor }} />
+            )}
+          </div>
+        )}
+      </div>
       <INRDisplay
         amount={value}
         short
-        className="mt-1 text-2xl font-bold block"
+        className="mt-2 text-2xl font-bold block"
         positive={positive}
         negative={negative}
       />
       {change !== undefined && (
-        <div className={cn('mt-1 flex items-center gap-1 text-xs', isPositive ? 'text-green-600' : 'text-red-600')}>
+        <div className={cn('mt-1.5 flex items-center gap-1 text-xs font-medium', isPositive ? 'text-emerald-600' : 'text-rose-600')}>
           {isPositive ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
           <span>{Math.abs(change).toFixed(1)}% {subtitle}</span>
         </div>

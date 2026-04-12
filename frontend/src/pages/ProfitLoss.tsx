@@ -46,7 +46,7 @@ export default function ProfitLossPage() {
     return (
       <div className="space-y-8">
         <div>
-          <h1 className="text-2xl font-bold">Profit &amp; Loss</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Profit &amp; Loss</h1>
           <p className="text-muted-foreground text-sm mt-1">FY {selectedFY}</p>
         </div>
         <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-8 text-center space-y-3">
@@ -96,7 +96,7 @@ export default function ProfitLossPage() {
     <div className="space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold">Profit &amp; Loss</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Profit &amp; Loss</h1>
         <p className="text-muted-foreground text-sm mt-1">
           FY {selectedFY} ·{' '}
           {isAdmin && viewUserId

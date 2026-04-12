@@ -42,16 +42,21 @@ export function Sidebar() {
   const { user } = useAuth();
 
   return (
-    <aside className="flex h-full w-64 flex-col border-r border-border bg-card">
+    <aside
+      data-sidebar
+      className="flex h-full w-64 flex-col border-r border-border bg-sidebar"
+    >
       {/* Logo */}
-      <div className="flex h-16 items-center gap-2 border-b border-border px-6">
-        <IndianRupee className="h-6 w-6 text-primary" />
-        <span className="font-semibold text-foreground">Family Finance</span>
+      <div className="flex h-16 items-center gap-3 border-b border-border px-5">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary shadow-primary-sm">
+          <IndianRupee className="h-4 w-4 text-primary-foreground" />
+        </div>
+        <span className="font-semibold tracking-tight text-foreground">Family Finance</span>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto p-4">
-        <ul className="space-y-1">
+      <nav className="flex-1 overflow-y-auto p-3">
+        <ul className="space-y-0.5">
           {NAV_ITEMS.map((item) => (
             <li key={item.to}>
               <NavLink
@@ -59,10 +64,10 @@ export function Sidebar() {
                 end={item.exact}
                 className={({ isActive }) =>
                   cn(
-                    'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                    'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium',
                     isActive
-                      ? 'bg-primary/10 text-primary'
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground',
                   )
                 }
               >
@@ -74,8 +79,8 @@ export function Sidebar() {
 
           {user?.role === 'ADMIN' && (
             <>
-              <li className="mt-4 mb-2">
-                <p className="px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <li className="mt-4 mb-1 px-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/60">
                   Admin
                 </p>
               </li>
@@ -85,10 +90,10 @@ export function Sidebar() {
                     to={item.to}
                     className={({ isActive }) =>
                       cn(
-                        'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                        'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium',
                         isActive
-                          ? 'bg-primary/10 text-primary'
-                          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          : 'text-muted-foreground hover:bg-accent hover:text-foreground',
                       )
                     }
                   >
@@ -103,15 +108,15 @@ export function Sidebar() {
       </nav>
 
       {/* Bottom: Settings */}
-      <div className="border-t border-border p-4">
+      <div className="border-t border-border p-3">
         <NavLink
           to="/settings"
           className={({ isActive }) =>
             cn(
-              'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+              'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium',
               isActive
-                ? 'bg-primary/10 text-primary'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:bg-accent hover:text-foreground',
             )
           }
         >

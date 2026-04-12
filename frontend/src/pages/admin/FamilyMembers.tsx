@@ -64,7 +64,7 @@ export default function FamilyMembersPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Family Members</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Family Members</h1>
           <p className="text-muted-foreground text-sm mt-1">Manage who has access to this family finance tracker</p>
         </div>
         <Button onClick={() => setShowForm(true)}><Plus className="h-4 w-4 mr-2" /> Add Member</Button>
