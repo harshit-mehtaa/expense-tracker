@@ -1,8 +1,58 @@
 /**
- * Tests for loanService.buildAmortizationSchedule — pure math function, no DB.
+ * Tests for loanService — pure amortization math + DB-touching CRUD functions.
  */
-import { describe, it, expect } from 'vitest';
-import { buildAmortizationSchedule } from '../services/loanService';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+
+// Mock prisma (loanService uses named import { prisma })
+vi.mock('../config/prisma', () => {
+  const mockPrisma = {
+    loan: {
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    },
+  };
+  return { default: mockPrisma, prisma: mockPrisma };
+});
+
+import { prisma } from '../config/prisma';
+import {
+  buildAmortizationSchedule,
+  getLoans,
+  createLoan,
+  updateLoan,
+  deleteLoan,
+  getLoanAmortization,
+  simulatePrepayment,
+} from '../services/loanService';
+
+const loanMock = (prisma as any).loan;
+
+const MOCK_LOAN = {
+  id: 'loan-1',
+  userId: 'u1',
+  outstandingBalance: 4500000,
+  interestRate: 8.5,
+  emiAmount: 45000,
+  emiDate: 5,
+  prepaymentChargesPct: null,
+};
+
+// Pin system time for deterministic amortization schedule assertions
+beforeAll(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2024-01-01'));
+});
+
+afterAll(() => {
+  vi.useRealTimers();
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 // ─── Guard conditions ─────────────────────────────────────────────────────────
 
@@ -122,5 +172,132 @@ describe('buildAmortizationSchedule — EMI field', () => {
     rows.slice(0, -1).forEach((r) => {
       expect(r.emi).toBe(10_000);
     });
+  });
+});
+
+// ─── DB-touching functions (Prisma mocked) ────────────────────────────────────
+
+describe('getLoans', () => {
+  it('scopes query to userId when provided', async () => {
+    loanMock.findMany.mockResolvedValue([MOCK_LOAN]);
+    const result = await getLoans('u1');
+    expect(loanMock.findMany).toHaveBeenCalledWith({
+      where: { userId: 'u1' },
+      orderBy: { emiDate: 'asc' },
+    });
+    expect(result).toHaveLength(1);
+  });
+
+  it('returns all loans when no userId given (family-wide)', async () => {
+    loanMock.findMany.mockResolvedValue([MOCK_LOAN]);
+    await getLoans();
+    expect(loanMock.findMany).toHaveBeenCalledWith({
+      where: {},
+      orderBy: { emiDate: 'asc' },
+    });
+  });
+});
+
+describe('createLoan', () => {
+  it('creates loan with userId merged into data', async () => {
+    const data = {
+      lenderName: 'HDFC',
+      loanType: 'HOME',
+      principalAmount: 5000000,
+      outstandingBalance: 4500000,
+      interestRate: 8.5,
+      emiAmount: 45000,
+      emiDate: 5,
+      tenureMonths: 180,
+    };
+    loanMock.create.mockResolvedValue({ ...data, id: 'loan-new', userId: 'u1' });
+    const result = await createLoan('u1', data as any);
+    expect(loanMock.create).toHaveBeenCalledWith({ data: { ...data, userId: 'u1' } });
+    expect((result as any).id).toBe('loan-new');
+  });
+});
+
+describe('updateLoan', () => {
+  it('returns updated loan when found', async () => {
+    loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
+    loanMock.update.mockResolvedValue({ ...MOCK_LOAN, emiAmount: 46000 });
+    const result = await updateLoan('u1', 'loan-1', { emiAmount: 46000 });
+    expect(loanMock.update).toHaveBeenCalledWith({ where: { id: 'loan-1' }, data: { emiAmount: 46000 } });
+    expect((result as any).emiAmount).toBe(46000);
+  });
+
+  it('throws NotFound when loan does not exist', async () => {
+    loanMock.findFirst.mockResolvedValue(null);
+    await expect(updateLoan('u1', 'nonexistent', {})).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('deleteLoan', () => {
+  it('deletes loan when found', async () => {
+    loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
+    loanMock.delete.mockResolvedValue(MOCK_LOAN);
+    await deleteLoan('u1', 'loan-1');
+    expect(loanMock.delete).toHaveBeenCalledWith({ where: { id: 'loan-1' } });
+  });
+
+  it('throws NotFound when loan does not exist', async () => {
+    loanMock.findFirst.mockResolvedValue(null);
+    await expect(deleteLoan('u1', 'nonexistent')).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('getLoanAmortization', () => {
+  it('returns loan with schedule and summary', async () => {
+    loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
+    const result = await getLoanAmortization('u1', 'loan-1');
+    expect(result.loan).toBe(MOCK_LOAN);
+    expect(Array.isArray(result.schedule)).toBe(true);
+    expect(result.schedule.length).toBeGreaterThan(0);
+    expect(result.summary.remainingMonths).toBe(result.schedule.length);
+    expect(result.summary.totalInterest).toBeGreaterThan(0);
+  });
+
+  it('scopes findFirst to userId when provided', async () => {
+    loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
+    await getLoanAmortization('u1', 'loan-1');
+    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1', userId: 'u1' } });
+  });
+
+  it('omits userId in query when undefined (ADMIN family-wide)', async () => {
+    loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
+    await getLoanAmortization(undefined, 'loan-1');
+    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1' } });
+  });
+
+  it('throws NotFound when loan does not exist', async () => {
+    loanMock.findFirst.mockResolvedValue(null);
+    await expect(getLoanAmortization('u1', 'nonexistent')).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('simulatePrepayment', () => {
+  it('reduce_tenure mode: shorter schedule and positive interest savings', async () => {
+    loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
+    const result = await simulatePrepayment('u1', 'loan-1', 500_000, 'reduce_tenure');
+    expect(result.after.months).toBeLessThan(result.current.months);
+    expect(result.savings.interestSaved).toBeGreaterThan(0);
+    expect(result.savings.monthsSaved).toBeGreaterThan(0);
+  });
+
+  it('reduce_emi mode: positive interest savings', async () => {
+    loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
+    const result = await simulatePrepayment('u1', 'loan-1', 500_000, 'reduce_emi');
+    expect(result.savings.interestSaved).toBeGreaterThan(0);
+  });
+
+  it('prepaymentCharges is 0 when prepaymentChargesPct is null', async () => {
+    loanMock.findFirst.mockResolvedValue({ ...MOCK_LOAN, prepaymentChargesPct: null });
+    const result = await simulatePrepayment('u1', 'loan-1', 100_000, 'reduce_tenure');
+    expect(result.prepaymentCharges).toBe(0);
+  });
+
+  it('throws NotFound when loan does not exist', async () => {
+    loanMock.findFirst.mockResolvedValue(null);
+    await expect(simulatePrepayment('u1', 'nonexistent', 100_000, 'reduce_tenure')).rejects.toThrow(/not found/i);
   });
 });

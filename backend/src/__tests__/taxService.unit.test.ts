@@ -13,11 +13,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock prisma (dual export — taxService uses both named and default imports)
 vi.mock('../config/prisma', () => {
   const mockPrisma = {
-    taxProfile: { findUnique: vi.fn() },
+    taxProfile: { findUnique: vi.fn(), upsert: vi.fn() },
     investment: { findMany: vi.fn().mockResolvedValue([]) },
     fixedDeposit: { findMany: vi.fn().mockResolvedValue([]) },
     insurancePolicy: { findMany: vi.fn().mockResolvedValue([]) },
     loan: { findMany: vi.fn().mockResolvedValue([]) },
+    advanceTaxEvent: { findMany: vi.fn().mockResolvedValue([]) },
   };
   return { default: mockPrisma, prisma: mockPrisma };
 });
@@ -61,6 +62,10 @@ import {
   calcHRAExemption,
   getTaxSummary,
   getITR2Summary,
+  getTaxProfile,
+  upsertTaxProfile,
+  getAdvanceTaxCalendar,
+  get80CTracker,
 } from '../services/taxService';
 import { calcCapitalGainsSummary } from '../services/capitalGainsService';
 import { calcOtherIncomeSummary } from '../services/otherIncomeService';
@@ -100,6 +105,8 @@ beforeEach(() => {
   (prisma.fixedDeposit.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   (prisma.insurancePolicy.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   (prisma.loan.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  (prisma as any).advanceTaxEvent.findMany.mockResolvedValue([]);
+  (prisma.taxProfile as any).upsert.mockResolvedValue(null);
   (buildAmortizationSchedule as ReturnType<typeof vi.fn>).mockReturnValue([]);
   (calcCapitalGainsSummary as ReturnType<typeof vi.fn>).mockResolvedValue({
     stcg: 0, ltcg: 0, totalTaxableGain: 0, entries: [],
@@ -347,5 +354,159 @@ describe('getITR2Summary', () => {
     profileMock.mockResolvedValue(null);
     const result = await getITR2Summary('u1', '2025-26');
     expect(result.regime).toBe('OLD');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// getTaxProfile
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('getTaxProfile', () => {
+  it('queries by userId and fyYear composite key', async () => {
+    const mockProfile = { userId: 'u1', fyYear: '2025-26', regime: 'OLD' };
+    profileMock.mockResolvedValue(mockProfile);
+    const result = await getTaxProfile('u1', '2025-26');
+    expect(profileMock).toHaveBeenCalledWith({
+      where: { userId_fyYear: { userId: 'u1', fyYear: '2025-26' } },
+    });
+    expect(result).toBe(mockProfile);
+  });
+
+  it('returns null when no profile exists', async () => {
+    profileMock.mockResolvedValue(null);
+    const result = await getTaxProfile('u1', '2025-26');
+    expect(result).toBeNull();
+  });
+
+  it('uses getCurrentFY() when fy is not provided', async () => {
+    profileMock.mockResolvedValue(null);
+    await getTaxProfile('u1'); // no fy argument
+    // Should still call findUnique with a fyYear (the current FY)
+    expect(profileMock).toHaveBeenCalledWith({
+      where: { userId_fyYear: { userId: 'u1', fyYear: expect.any(String) } },
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// upsertTaxProfile
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('upsertTaxProfile', () => {
+  it('upserts with correct where/create/update shape', async () => {
+    const upsertMock = prisma.taxProfile.upsert as ReturnType<typeof vi.fn>;
+    const mockProfile = { userId: 'u1', fyYear: '2025-26', grossSalary: 1200000 };
+    upsertMock.mockResolvedValue(mockProfile);
+
+    const data = { grossSalary: 1200000 };
+    const result = await upsertTaxProfile('u1', '2025-26', data);
+
+    expect(upsertMock).toHaveBeenCalledWith({
+      where: { userId_fyYear: { userId: 'u1', fyYear: '2025-26' } },
+      create: { userId: 'u1', fyYear: '2025-26', ...data },
+      update: data,
+    });
+    expect(result).toBe(mockProfile);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// getAdvanceTaxCalendar
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('getAdvanceTaxCalendar', () => {
+  it('returns events ordered by dueDate for the given FY', async () => {
+    const events = [
+      { id: 'e1', fyYear: '2025-26', dueDate: new Date('2025-06-15'), label: 'Q1' },
+      { id: 'e2', fyYear: '2025-26', dueDate: new Date('2025-09-15'), label: 'Q2' },
+    ];
+    const calMock = (prisma as any).advanceTaxEvent.findMany as ReturnType<typeof vi.fn>;
+    calMock.mockResolvedValue(events);
+
+    const result = await getAdvanceTaxCalendar('2025-26');
+    expect(calMock).toHaveBeenCalledWith({
+      where: { fyYear: '2025-26' },
+      orderBy: { dueDate: 'asc' },
+    });
+    expect(result).toHaveLength(2);
+  });
+
+  it('returns empty array when no events exist for the FY', async () => {
+    const calMock = (prisma as any).advanceTaxEvent.findMany as ReturnType<typeof vi.fn>;
+    calMock.mockResolvedValue([]);
+    const result = await getAdvanceTaxCalendar('2020-21');
+    expect(result).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// get80CTracker
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('get80CTracker', () => {
+  const FY = '2025-26';
+
+  it('returns correct breakdown when investments exist', async () => {
+    // ELSS: 50K, PPF: 30K → total 80K < 1.5L limit
+    (prisma.investment.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { type: 'ELSS', unitsOrQuantity: 100, purchasePricePerUnit: 500 },  // 50000
+      { type: 'PPF',  unitsOrQuantity: 300, purchasePricePerUnit: 100 },  // 30000
+    ]);
+    const result = await get80CTracker('u1', FY);
+    expect(result.breakdown.elss).toBeCloseTo(50_000);
+    expect(result.breakdown.ppf).toBeCloseTo(30_000);
+    expect(result.total).toBeCloseTo(80_000);
+    expect(result.utilized).toBeCloseTo(80_000);
+    expect(result.remaining).toBeCloseTo(70_000);
+    expect(result.limit).toBe(150_000);
+  });
+
+  it('caps utilized at ₹1.5L when total exceeds the limit', async () => {
+    // ELSS: 1L, PPF: 1L → total = 2L > 1.5L limit
+    (prisma.investment.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { type: 'ELSS', unitsOrQuantity: 1000, purchasePricePerUnit: 100 }, // 100000
+      { type: 'PPF',  unitsOrQuantity: 1000, purchasePricePerUnit: 100 }, // 100000
+    ]);
+    const result = await get80CTracker('u1', FY);
+    expect(result.total).toBeCloseTo(200_000);
+    expect(result.utilized).toBe(150_000); // capped
+    expect(result.remaining).toBe(0);
+    expect(result.pctUtilized).toBe(100);
+  });
+
+  it('returns zero breakdown when no tax-saving instruments exist', async () => {
+    // All mocks return [] (default from beforeEach)
+    const result = await get80CTracker('u1', FY);
+    expect(result.total).toBe(0);
+    expect(result.utilized).toBe(0);
+    expect(result.remaining).toBe(150_000);
+    expect(result.pctUtilized).toBe(0);
+  });
+
+  it('queries investments with isTaxSaving=true and FY date range', async () => {
+    await get80CTracker('u1', FY);
+    const invFindMany = prisma.investment.findMany as ReturnType<typeof vi.fn>;
+    const callArgs = invFindMany.mock.calls[0][0];
+    expect(callArgs.where.userId).toBe('u1');
+    expect(callArgs.where.isTaxSaving).toBe(true);
+    expect(callArgs.where.purchaseDate).toHaveProperty('gte');
+    expect(callArgs.where.purchaseDate).toHaveProperty('lt');
+  });
+
+  it('includes FD tax-saver amount in breakdown', async () => {
+    (prisma.fixedDeposit.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { principalAmount: 50000 },
+    ]);
+    const result = await get80CTracker('u1', FY);
+    expect(result.breakdown.fdTaxSaver).toBeCloseTo(50_000);
+  });
+
+  it('includes insurance premium (annual) in breakdown', async () => {
+    // MONTHLY policy: 1000 * 12 = 12000
+    (prisma.insurancePolicy.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { premiumAmount: 1000, premiumFrequency: 'MONTHLY' },
+    ]);
+    const result = await get80CTracker('u1', FY);
+    expect(result.breakdown.licPremiums).toBeCloseTo(12_000);
   });
 });
