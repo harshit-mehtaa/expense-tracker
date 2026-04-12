@@ -13,7 +13,9 @@ services:
     build:
       context: ./backend
       target: builder
-    command: ["npx", "ts-node-dev", "--respawn", "--transpile-only", "src/index.ts"]
+    command: ["npx", "ts-node-dev", "--respawn", "--transpile-only", "--poll", "src/index.ts"]
+    # --poll: virtiofs/osxfs on Docker for Mac doesn't reliably deliver inotify events,
+    #         so use stat-based polling to ensure hot-reload detects source file changes.
     volumes:
       # Mount only source dirs — container keeps its own node_modules (correct Linux binaries)
       - ./backend/src:/app/src
@@ -32,3 +34,5 @@ services:
       - ./frontend/public:/app/public
     environment:
       NODE_ENV: development
+      # CHOKIDAR_USEPOLLING: same virtiofs fix for Vite's chokidar file watcher
+      CHOKIDAR_USEPOLLING: "true"
