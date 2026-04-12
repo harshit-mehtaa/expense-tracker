@@ -9,8 +9,11 @@ export interface TransactionFilters {
   userId?: string;
   bankAccountId?: string;
   categoryId?: string;
+  categoryIds?: string[];
   type?: string;
+  types?: string[];
   paymentMode?: string;
+  paymentModes?: string[];
   startDate?: string;
   endDate?: string;
   fy?: string;
@@ -46,9 +49,21 @@ export async function getTransactions(
   };
 
   if (filters.bankAccountId) where.bankAccountId = filters.bankAccountId;
-  if (filters.categoryId) where.categoryId = filters.categoryId;
-  if (filters.type) where.type = filters.type as Prisma.EnumTransactionTypeFilter['equals'];
-  if (filters.paymentMode) where.paymentMode = filters.paymentMode as Prisma.EnumPaymentModeFilter['equals'];
+  if (filters.categoryIds?.length) {
+    where.categoryId = { in: filters.categoryIds };
+  } else if (filters.categoryId) {
+    where.categoryId = filters.categoryId;
+  }
+  if (filters.types?.length) {
+    where.type = { in: filters.types as Prisma.TransactionType[] };
+  } else if (filters.type) {
+    where.type = filters.type as Prisma.EnumTransactionTypeFilter['equals'];
+  }
+  if (filters.paymentModes?.length) {
+    where.paymentMode = { in: filters.paymentModes as Prisma.PaymentMode[] };
+  } else if (filters.paymentMode) {
+    where.paymentMode = filters.paymentMode as Prisma.EnumPaymentModeFilter['equals'];
+  }
 
   if (filters.search) {
     where.description = { contains: filters.search, mode: 'insensitive' };
@@ -440,7 +455,11 @@ export interface ExportFilters {
   startDate?: string;
   endDate?: string;
   type?: string;
+  types?: string[];
   categoryId?: string;
+  categoryIds?: string[];
+  paymentMode?: string;
+  paymentModes?: string[];
   bankAccountId?: string;
 }
 
@@ -456,8 +475,21 @@ export async function getAllTransactionsForExport(
   };
 
   if (filters.bankAccountId) where.bankAccountId = filters.bankAccountId;
-  if (filters.categoryId) where.categoryId = filters.categoryId;
-  if (filters.type) where.type = filters.type as Prisma.EnumTransactionTypeFilter['equals'];
+  if (filters.categoryIds?.length) {
+    where.categoryId = { in: filters.categoryIds };
+  } else if (filters.categoryId) {
+    where.categoryId = filters.categoryId;
+  }
+  if (filters.types?.length) {
+    where.type = { in: filters.types as Prisma.TransactionType[] };
+  } else if (filters.type) {
+    where.type = filters.type as Prisma.EnumTransactionTypeFilter['equals'];
+  }
+  if (filters.paymentModes?.length) {
+    where.paymentMode = { in: filters.paymentModes as Prisma.PaymentMode[] };
+  } else if (filters.paymentMode) {
+    where.paymentMode = filters.paymentMode as Prisma.EnumPaymentModeFilter['equals'];
+  }
 
   if (filters.fy) {
     const { start, end } = getFYRange(filters.fy);

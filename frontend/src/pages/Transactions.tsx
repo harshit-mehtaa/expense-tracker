@@ -8,7 +8,7 @@ import { useSearchParams } from 'react-router-dom';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
-import { Receipt, Upload, X, CheckCircle, AlertCircle, Download, Pencil, Trash2, SlidersHorizontal } from 'lucide-react';
+import { Receipt, Upload, X, CheckCircle, AlertCircle, Download, Pencil, Trash2, SlidersHorizontal, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -47,12 +47,29 @@ interface TransactionsResponse {
 
 interface TxFilters {
   search: string;
-  type: string;
-  categoryId: string;
-  paymentMode: string;
+  types: string[];
+  categoryIds: string[];
+  paymentModes: string[];
   startDate: string;
   endDate: string;
 }
+
+const TRANSACTION_TYPES = [
+  { value: 'INCOME', label: 'Income' },
+  { value: 'EXPENSE', label: 'Expense' },
+  { value: 'TRANSFER', label: 'Transfer' },
+] as const;
+
+const PAYMENT_MODES = ['UPI', 'NEFT', 'RTGS', 'IMPS', 'CASH', 'CHEQUE', 'CARD', 'EMI', 'AUTO_DEBIT'] as const;
+
+const PAYMENT_MODE_LABELS: Record<string, string> = {
+  UPI: 'UPI', NEFT: 'NEFT', RTGS: 'RTGS', IMPS: 'IMPS',
+  CASH: 'Cash', CHEQUE: 'Cheque', CARD: 'Card', EMI: 'EMI', AUTO_DEBIT: 'Auto Debit',
+};
+
+const EMPTY_FILTERS: TxFilters = {
+  search: '', types: [], categoryIds: [], paymentModes: [], startDate: '', endDate: '',
+};
 
 async function fetchTransactions(fy: string, filters: TxFilters, cursor?: string, targetUserId?: string): Promise<TransactionsResponse> {
   const res = await api.get<{ data: RawTransaction[]; pagination: TransactionsResponse['pagination'] }>('/transactions', {
@@ -61,9 +78,9 @@ async function fetchTransactions(fy: string, filters: TxFilters, cursor?: string
       limit: 50,
       cursor: cursor || undefined,
       search: filters.search || undefined,
-      type: filters.type || undefined,
-      categoryId: filters.categoryId || undefined,
-      paymentMode: filters.paymentMode || undefined,
+      type: filters.types.length ? filters.types.join(',') : undefined,
+      categoryId: filters.categoryIds.length ? filters.categoryIds.join(',') : undefined,
+      paymentMode: filters.paymentModes.length ? filters.paymentModes.join(',') : undefined,
       startDate: filters.startDate || undefined,
       endDate: filters.endDate || undefined,
       targetUserId: targetUserId || undefined,
@@ -741,15 +758,19 @@ export default function TransactionsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState<TxFilters>({
-    search: '',
-    type: '',
-    categoryId: '',
-    paymentMode: '',
+    ...EMPTY_FILTERS,
     startDate: searchParams.get('startDate') ?? '',
     endDate: searchParams.get('endDate') ?? '',
   });
+  const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
+  const categoryDropdownRef = useRef<HTMLDivElement>(null);
 
-  const activeFilterCount = Object.values(filters).filter(Boolean).length;
+  const activeFilterCount =
+    (filters.search ? 1 : 0) +
+    filters.types.length +
+    filters.categoryIds.length +
+    filters.paymentModes.length +
+    (filters.startDate || filters.endDate ? 1 : 0);
 
   // Clear selection whenever the visible dataset changes
   useEffect(() => {
@@ -769,6 +790,25 @@ export default function TransactionsPage() {
       setSearchParams({}, { replace: true });
     }
   }, [searchParams, setSearchParams]);
+
+  // Close category dropdown on outside click
+  useEffect(() => {
+    if (!showCategoryDropdown) return;
+    const handler = (e: MouseEvent) => {
+      if (categoryDropdownRef.current && !categoryDropdownRef.current.contains(e.target as Node)) {
+        setShowCategoryDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showCategoryDropdown]);
+
+  function toggleFilter(field: 'types' | 'categoryIds' | 'paymentModes', value: string) {
+    setFilters(f => ({
+      ...f,
+      [field]: f[field].includes(value) ? f[field].filter(v => v !== value) : [...f[field], value],
+    }));
+  }
 
   const canEdit = (tx: Transaction) =>
     user?.role === 'ADMIN' || user?.id === tx.userId;
@@ -918,66 +958,132 @@ export default function TransactionsPage() {
 
       {/* Filter bar */}
       {showFilters && (
-        <div className="rounded-xl border border-border bg-card p-4 space-y-3">
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <div className="col-span-2 md:col-span-3 lg:col-span-1">
+        <div className="rounded-xl border border-border bg-card p-4 space-y-4">
+          {/* Row 1: Search */}
+          <Input
+            placeholder="Search description…"
+            value={filters.search}
+            onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
+          />
+
+          {/* Row 2: Type chips */}
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground font-medium">Type</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {TRANSACTION_TYPES.map(({ value, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => toggleFilter('types', value)}
+                  className={cn(
+                    'px-3 py-1 rounded-full text-xs font-medium transition-colors border',
+                    filters.types.includes(value)
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'border-input bg-background hover:bg-muted text-foreground',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Row 3: Payment mode chips */}
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground font-medium">Payment mode</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {PAYMENT_MODES.map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => toggleFilter('paymentModes', mode)}
+                  className={cn(
+                    'inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium transition-colors border',
+                    filters.paymentModes.includes(mode)
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'border-input bg-background hover:bg-muted text-foreground',
+                  )}
+                >
+                  {PAYMENT_MODE_ICONS[mode]}
+                  {PAYMENT_MODE_LABELS[mode]}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Row 4: Category dropdown + date range */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Category multi-select dropdown */}
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground font-medium">Category</Label>
+              <div ref={categoryDropdownRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowCategoryDropdown(v => !v)}
+                  className="w-full flex items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm hover:bg-muted transition-colors"
+                >
+                  <span className={filters.categoryIds.length === 0 ? 'text-muted-foreground' : ''}>
+                    {filters.categoryIds.length === 0
+                      ? 'All categories'
+                      : `${filters.categoryIds.length} selected`}
+                  </span>
+                  <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', showCategoryDropdown && 'rotate-180')} />
+                </button>
+                {showCategoryDropdown && (
+                  <div className="absolute top-full left-0 right-0 mt-1 z-20 rounded-md border border-border bg-popover shadow-md max-h-52 overflow-y-auto">
+                    {categories.length === 0 ? (
+                      <p className="px-3 py-2 text-sm text-muted-foreground">No categories</p>
+                    ) : (
+                      categories.map((c: any) => (
+                        <label
+                          key={c.id}
+                          className="flex items-center gap-2.5 px-3 py-2 hover:bg-muted cursor-pointer text-sm"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={filters.categoryIds.includes(c.id)}
+                            onChange={() => toggleFilter('categoryIds', c.id)}
+                            className="rounded"
+                          />
+                          {c.icon && <span>{c.icon}</span>}
+                          <span>{c.name}</span>
+                        </label>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* From date */}
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground font-medium">From date</Label>
               <Input
-                placeholder="Search description…"
-                value={filters.search}
-                onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
+                type="date"
+                value={filters.startDate}
+                onChange={(e) => setFilters((f) => ({ ...f, startDate: e.target.value }))}
+                className="text-sm"
               />
             </div>
-            <select
-              value={filters.type}
-              onChange={(e) => setFilters((f) => ({ ...f, type: e.target.value }))}
-              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-            >
-              <option value="">All types</option>
-              <option value="INCOME">Income</option>
-              <option value="EXPENSE">Expense</option>
-              <option value="TRANSFER">Transfer</option>
-            </select>
-            <select
-              value={filters.categoryId}
-              onChange={(e) => setFilters((f) => ({ ...f, categoryId: e.target.value }))}
-              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-            >
-              <option value="">All categories</option>
-              {categories.map((c: any) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-            <select
-              value={filters.paymentMode}
-              onChange={(e) => setFilters((f) => ({ ...f, paymentMode: e.target.value }))}
-              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-            >
-              <option value="">All modes</option>
-              {['UPI', 'NEFT', 'RTGS', 'IMPS', 'CASH', 'CHEQUE', 'CARD', 'EMI', 'AUTO_DEBIT'].map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
-            <Input
-              type="date"
-              value={filters.startDate}
-              onChange={(e) => setFilters((f) => ({ ...f, startDate: e.target.value }))}
-              className="text-sm"
-              title="From date"
-            />
-            <Input
-              type="date"
-              value={filters.endDate}
-              onChange={(e) => setFilters((f) => ({ ...f, endDate: e.target.value }))}
-              className="text-sm"
-              title="To date"
-            />
+
+            {/* To date */}
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground font-medium">To date</Label>
+              <Input
+                type="date"
+                value={filters.endDate}
+                onChange={(e) => setFilters((f) => ({ ...f, endDate: e.target.value }))}
+                className="text-sm"
+              />
+            </div>
           </div>
+
           {activeFilterCount > 0 && (
             <div className="flex">
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => setFilters({ search: '', type: '', categoryId: '', paymentMode: '', startDate: '', endDate: '' })}
+                onClick={() => { setFilters(EMPTY_FILTERS); setShowCategoryDropdown(false); }}
               >
                 <X className="h-3.5 w-3.5 mr-1" /> Clear all
               </Button>

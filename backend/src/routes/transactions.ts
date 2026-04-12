@@ -10,6 +10,13 @@ import { prisma } from '../config/prisma';
 
 const CUID_RE = /^[a-z0-9]{20,30}$/i;
 
+function parseMultiParam(param: unknown): string[] | undefined {
+  const s = param as string | undefined;
+  if (!s) return undefined;
+  const vals = s.split(',').filter(Boolean);
+  return vals.length ? vals : undefined;
+}
+
 const router = Router();
 router.use(requireAuth);
 
@@ -56,9 +63,9 @@ router.get(
       {
         userId: effectiveUserId,
         bankAccountId: req.query.bankAccountId as string,
-        categoryId: req.query.categoryId as string,
-        type: req.query.type as string,
-        paymentMode: req.query.paymentMode as string,
+        categoryIds: parseMultiParam(req.query.categoryId),
+        types: parseMultiParam(req.query.type),
+        paymentModes: parseMultiParam(req.query.paymentMode),
         startDate: req.query.startDate as string,
         endDate: req.query.endDate as string,
         fy: req.query.fy as string,
@@ -86,8 +93,9 @@ router.get(
         fy: req.query.fy ? fy : undefined,
         startDate: req.query.startDate as string | undefined,
         endDate: req.query.endDate as string | undefined,
-        type: req.query.type as string | undefined,
-        categoryId: req.query.categoryId as string | undefined,
+        types: parseMultiParam(req.query.type),
+        categoryIds: parseMultiParam(req.query.categoryId),
+        paymentModes: parseMultiParam(req.query.paymentMode),
         bankAccountId: req.query.bankAccountId as string | undefined,
       },
     );
