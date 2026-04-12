@@ -5,9 +5,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 
+const MEMBER_USER = { userId: 'u1', email: 'a@b.com', role: 'MEMBER' as const };
+const ADMIN_USER = { userId: 'admin-1', email: 'admin@b.com', role: 'ADMIN' as const };
+
 vi.mock('../../middleware/auth', () => ({
   requireAuth: (req: any, _res: any, next: any) => {
-    req.user = { userId: 'u1', email: 'a@b.com', role: 'MEMBER' };
+    req.user = (req as any).__testUser ?? MEMBER_USER;
     next();
   },
   requireAdmin: (_req: any, _res: any, next: any) => next(),
@@ -31,10 +34,23 @@ vi.mock('../../config/prisma', () => {
 import budgetsRouter from '../../routes/budgets';
 import { prisma } from '../../config/prisma';
 import { makeApp } from '../helpers/makeApp';
+import express from 'express';
+import { errorHandler } from '../../middleware/errorHandler';
 
 const budgetMock = (prisma as any).budget;
 const txMock = (prisma as any).transaction;
+const userMock = (prisma as any).user;
 const app = makeApp(budgetsRouter, '/api/budgets');
+
+/** Creates app with ADMIN user injected via __testUser */
+function makeAdminApp() {
+  const a = express();
+  a.use(express.json());
+  a.use((req: any, _res: any, next: any) => { req.__testUser = ADMIN_USER; next(); });
+  a.use('/api/budgets', budgetsRouter);
+  a.use(errorHandler);
+  return a;
+}
 
 const MOCK_BUDGET = {
   id: 'bud-1',
@@ -54,6 +70,7 @@ beforeEach(() => {
   budgetMock.update.mockResolvedValue(MOCK_BUDGET);
   budgetMock.delete.mockResolvedValue(MOCK_BUDGET);
   txMock.groupBy.mockResolvedValue([]);
+  userMock.findFirst.mockResolvedValue({ id: 'u2' }); // default: user found
 });
 
 describe('GET /api/budgets', () => {
@@ -77,6 +94,49 @@ describe('GET /api/budgets/vs-actuals', () => {
     txMock.groupBy.mockResolvedValue([]);
     const res = await request(app).get('/api/budgets/vs-actuals?fy=2025-26');
     expect(res.body.data[0].pctUsed).toBe(0);
+  });
+
+  it('skips null categoryId entries when building actualsMap', async () => {
+    // actuals entry with categoryId: null must not crash (null-guard: a.categoryId check in forEach)
+    txMock.groupBy.mockResolvedValue([
+      { categoryId: null, _sum: { amount: 500 } },
+      { categoryId: 'cat-1', _sum: { amount: 3000 } },
+    ]);
+    const res = await request(app).get('/api/budgets/vs-actuals?fy=2025-26');
+    expect(res.status).toBe(200);
+    // The budget for cat-1 should show 3000 actual
+    expect(res.body.data[0].actual).toBe(3000);
+  });
+
+  // ─── ADMIN targetUserId paths ─────────────────────────────────────────────
+
+  it('ADMIN with invalid targetUserId format — returns 400', async () => {
+    const res = await request(makeAdminApp()).get('/api/budgets/vs-actuals?targetUserId=bad!!id');
+    expect(res.status).toBe(400);
+  });
+
+  it('ADMIN with valid CUID but user not found — returns 404', async () => {
+    userMock.findFirst.mockResolvedValue(null);
+    const res = await request(makeAdminApp()).get('/api/budgets/vs-actuals?targetUserId=clm1234567890abcdefghij');
+    expect(res.status).toBe(404);
+  });
+
+  it('ADMIN with valid CUID and user found — returns 200 scoped to that user', async () => {
+    const res = await request(makeAdminApp()).get('/api/budgets/vs-actuals?targetUserId=clm1234567890abcdefghij');
+    expect(res.status).toBe(200);
+    expect(budgetMock.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'clm1234567890abcdefghij' } }),
+    );
+  });
+
+  it('ADMIN with no targetUserId — family-wide query (no userId filter)', async () => {
+    budgetMock.findMany.mockResolvedValue([]);
+    const res = await request(makeAdminApp()).get('/api/budgets/vs-actuals?fy=2025-26');
+    expect(res.status).toBe(200);
+    // family-wide: findMany called without userId constraint
+    expect(budgetMock.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: {} }),
+    );
   });
 });
 

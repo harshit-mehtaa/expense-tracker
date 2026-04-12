@@ -282,11 +282,18 @@ describe('GET /api/tax/other-income', () => {
 });
 
 describe('GET /api/tax/other-income/summary', () => {
-  it('returns 200 with summary', async () => {
+  it('returns 200 with summary (OLD regime — null profile fallback)', async () => {
     const res = await request(app).get('/api/tax/other-income/summary');
     expect(res.status).toBe(200);
-    // summary route calls getTaxProfile first to determine regime
-    expect(m(taxSvc.getTaxProfile)).toHaveBeenCalled();
+    // getTaxProfile returns null → regime defaults to 'OLD'
+    expect(m(osSvc.calcOtherIncomeSummary)).toHaveBeenCalledWith('u1', expect.any(String), 'OLD');
+  });
+
+  it('uses NEW regime when profile has regime=NEW', async () => {
+    m(taxSvc.getTaxProfile).mockResolvedValue({ regime: 'NEW' });
+    const res = await request(app).get('/api/tax/other-income/summary');
+    expect(res.status).toBe(200);
+    expect(m(osSvc.calcOtherIncomeSummary)).toHaveBeenCalledWith('u1', expect.any(String), 'NEW');
   });
 });
 
@@ -351,9 +358,18 @@ describe('GET /api/tax/house-property', () => {
 });
 
 describe('GET /api/tax/house-property/summary', () => {
-  it('returns 200 with HP income summary', async () => {
+  it('returns 200 with HP income summary (OLD regime — null profile fallback)', async () => {
     const res = await request(app).get('/api/tax/house-property/summary');
     expect(res.status).toBe(200);
+    // getTaxProfile returns null → regime defaults to 'OLD'
+    expect(m(hpSvc.calcHousePropertyIncome)).toHaveBeenCalledWith('u1', expect.any(String), 'OLD');
+  });
+
+  it('uses NEW regime when profile has regime=NEW', async () => {
+    m(taxSvc.getTaxProfile).mockResolvedValue({ regime: 'NEW' });
+    const res = await request(app).get('/api/tax/house-property/summary');
+    expect(res.status).toBe(200);
+    expect(m(hpSvc.calcHousePropertyIncome)).toHaveBeenCalledWith('u1', expect.any(String), 'NEW');
   });
 });
 

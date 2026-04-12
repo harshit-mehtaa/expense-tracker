@@ -344,6 +344,16 @@ describe('GET /api/investments', () => {
     const res = await request(app).get('/api/investments');
     expect(res.status).toBe(200);
   });
+
+  it('clamps page=0 to page=1', async () => {
+    await request(app).get('/api/investments?page=0');
+    expect(m(svc.getInvestments)).toHaveBeenCalledWith('u1', undefined, 1, expect.any(Number));
+  });
+
+  it('caps pageSize=200 to 100', async () => {
+    await request(app).get('/api/investments?pageSize=200');
+    expect(m(svc.getInvestments)).toHaveBeenCalledWith('u1', undefined, expect.any(Number), 100);
+  });
 });
 
 describe('POST /api/investments', () => {

@@ -4,9 +4,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 
+const MEMBER_USER = { userId: 'u1', email: 'a@b.com', role: 'MEMBER' as const };
+const ADMIN_USER = { userId: 'admin-1', email: 'admin@b.com', role: 'ADMIN' as const };
+
 vi.mock('../../middleware/auth', () => ({
   requireAuth: (req: any, _res: any, next: any) => {
-    req.user = { userId: 'u1', email: 'a@b.com', role: 'MEMBER' };
+    req.user = (req as any).__testUser ?? MEMBER_USER;
     next();
   },
   requireAdmin: (_req: any, _res: any, next: any) => next(),
@@ -28,9 +31,24 @@ vi.mock('../../config/prisma', () => {
 
 import loansRouter from '../../routes/loans';
 import * as svc from '../../services/loanService';
+import { prisma } from '../../config/prisma';
 import { makeApp } from '../helpers/makeApp';
+import express from 'express';
+import { errorHandler } from '../../middleware/errorHandler';
 
 const app = makeApp(loansRouter, '/api/loans');
+
+/** Creates app with ADMIN user injected via __testUser */
+function makeAdminApp() {
+  const a = express();
+  a.use(express.json());
+  a.use((req: any, _res: any, next: any) => { req.__testUser = ADMIN_USER; next(); });
+  a.use('/api/loans', loansRouter);
+  a.use(errorHandler);
+  return a;
+}
+
+const userFindFirstMock = (prisma as any).user.findFirst as ReturnType<typeof vi.fn>;
 const getLoansMock = svc.getLoans as ReturnType<typeof vi.fn>;
 const createMock = svc.createLoan as ReturnType<typeof vi.fn>;
 const updateMock = svc.updateLoan as ReturnType<typeof vi.fn>;
@@ -69,6 +87,7 @@ const VALID_LOAN_BODY = {
 beforeEach(() => {
   vi.clearAllMocks();
   getLoansMock.mockResolvedValue([MOCK_LOAN]);
+  userFindFirstMock.mockResolvedValue({ id: 'u2' }); // default: user found
   createMock.mockResolvedValue({ ...MOCK_LOAN, id: 'loan-new' });
   updateMock.mockResolvedValue(MOCK_LOAN);
   deleteMock.mockResolvedValue(undefined);
@@ -77,11 +96,35 @@ beforeEach(() => {
 });
 
 describe('GET /api/loans', () => {
-  it('returns 200 with loan list', async () => {
+  it('returns 200 with loan list (MEMBER)', async () => {
     const res = await request(app).get('/api/loans');
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
-    expect(getLoansMock).toHaveBeenCalled();
+    expect(getLoansMock).toHaveBeenCalledWith('u1'); // MEMBER scoped to own userId
+  });
+
+  it('ADMIN with no targetUserId — family-wide (effectiveUserId=undefined)', async () => {
+    const res = await request(makeAdminApp()).get('/api/loans');
+    expect(res.status).toBe(200);
+    expect(getLoansMock).toHaveBeenCalledWith(undefined); // family-wide
+  });
+
+  it('ADMIN with invalid targetUserId format — returns 400', async () => {
+    const res = await request(makeAdminApp()).get('/api/loans?targetUserId=not-valid!!');
+    expect(res.status).toBe(400);
+  });
+
+  it('ADMIN with valid CUID but user not found — returns 404', async () => {
+    userFindFirstMock.mockResolvedValue(null);
+    const res = await request(makeAdminApp()).get('/api/loans?targetUserId=clm1234567890abcdefghij');
+    expect(res.status).toBe(404);
+  });
+
+  it('ADMIN with valid CUID and user found — scopes to that userId', async () => {
+    // userFindFirstMock returns a non-null user, so route proceeds — effectiveUserId stays as query param
+    const res = await request(makeAdminApp()).get('/api/loans?targetUserId=clm1234567890abcdefghij');
+    expect(res.status).toBe(200);
+    expect(getLoansMock).toHaveBeenCalledWith('clm1234567890abcdefghij');
   });
 });
 

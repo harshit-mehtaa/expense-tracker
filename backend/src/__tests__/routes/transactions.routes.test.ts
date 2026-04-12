@@ -59,6 +59,17 @@ function makeApp() {
   return app;
 }
 
+/** App that injects MEMBER_USER so the else-branch (line 57) is exercised. */
+function makeMemberApp() {
+  const app = express();
+  app.use(express.json());
+  app.use(cookieParser());
+  app.use((req: any, _res: any, next: any) => { req.__testUser = MEMBER_USER; next(); });
+  app.use('/api/transactions', transactionsRouter);
+  app.use(errorHandler);
+  return app;
+}
+
 const MOCK_TX = { id: 'tx-1', amount: 1000, type: 'EXPENSE', description: 'Coffee', date: new Date().toISOString() };
 const MOCK_META = { total: 1, limit: 20, hasMore: false, nextCursor: null };
 
@@ -100,6 +111,37 @@ describe('GET /api/transactions', () => {
     userFindFirstMock.mockResolvedValue(null);
     const res = await request(makeApp()).get('/api/transactions?targetUserId=clm1234567890abcdefghij');
     expect(res.status).toBe(404);
+  });
+
+  it('ADMIN with valid targetUserId found — forwards resolved userId to service', async () => {
+    // userFindFirstMock returns { id: 'user-2' } from beforeEach
+    const res = await request(makeApp()).get('/api/transactions?targetUserId=clm1234567890abcdefghij');
+    expect(res.status).toBe(200);
+    expect(getTransactionsMock).toHaveBeenCalledWith(
+      'admin-id',
+      'ADMIN',
+      expect.objectContaining({ userId: 'clm1234567890abcdefghij' }),
+    );
+  });
+
+  it('MEMBER role — scopes to own userId (else branch)', async () => {
+    const res = await request(makeMemberApp()).get('/api/transactions');
+    expect(res.status).toBe(200);
+    // MEMBER path: effectiveUserId = req.user.userId = 'member-id'
+    expect(getTransactionsMock).toHaveBeenCalledWith(
+      'member-id',
+      'MEMBER',
+      expect.objectContaining({ userId: 'member-id' }),
+    );
+  });
+
+  it('parses comma-separated type filter into array (parseMultiParam positive path)', async () => {
+    await request(makeApp()).get('/api/transactions?type=INCOME,EXPENSE');
+    expect(getTransactionsMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'ADMIN',
+      expect.objectContaining({ types: ['INCOME', 'EXPENSE'] }),
+    );
   });
 });
 
