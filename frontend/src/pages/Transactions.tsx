@@ -28,6 +28,7 @@ interface Transaction {
   date: string;
   paymentMode?: string;
   categoryName?: string;
+  categoryIcon?: string | null;
   categoryId?: string;
   bankAccountName?: string;
   userId: string;
@@ -71,6 +72,7 @@ async function fetchTransactions(fy: string, filters: TxFilters, cursor?: string
   const data: Transaction[] = (res.data.data ?? []).map((tx) => ({
     ...tx,
     categoryName: tx.category?.name,
+    categoryIcon: tx.category?.icon,
     bankAccountName: tx.bankAccount
       ? `${tx.bankAccount.bankName}${tx.bankAccount.accountNumberLast4 ? ` ****${tx.bankAccount.accountNumberLast4}` : ''}`
       : undefined,
@@ -81,12 +83,25 @@ async function fetchTransactions(fy: string, filters: TxFilters, cursor?: string
 const PAYMENT_MODE_COLORS: Record<string, string> = {
   UPI: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
   NEFT: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300',
-  RTGS: 'bg-yellow-100 text-yellow-700',
-  IMPS: 'bg-yellow-100 text-yellow-700',
+  RTGS: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300',
+  IMPS: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300',
   CASH: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
+  CHEQUE: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
   CARD: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
   EMI: 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300',
   AUTO_DEBIT: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
+};
+
+const PAYMENT_MODE_ICONS: Record<string, string> = {
+  UPI: '📱',
+  NEFT: '🏦',
+  RTGS: '🏛️',
+  IMPS: '⚡',
+  CASH: '💵',
+  CHEQUE: '📝',
+  CARD: '💳',
+  EMI: '📅',
+  AUTO_DEBIT: '🔄',
 };
 
 const txSchema = z.object({
@@ -1054,10 +1069,14 @@ export default function TransactionsPage() {
                     {new Date(tx.date).toLocaleDateString('en-IN')}
                   </td>
                   <td className="px-4 py-3 font-medium max-w-[200px] truncate">{tx.description}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{tx.categoryName ?? '—'}</td>
+                  <td className="px-4 py-3 text-muted-foreground">
+                    {tx.categoryIcon && <span className="mr-1">{tx.categoryIcon}</span>}
+                    {tx.categoryName ?? '—'}
+                  </td>
                   <td className="px-4 py-3">
                     {tx.paymentMode && (
-                      <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium', PAYMENT_MODE_COLORS[tx.paymentMode] ?? 'bg-gray-100 text-gray-700')}>
+                      <span className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium', PAYMENT_MODE_COLORS[tx.paymentMode] ?? 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300')}>
+                        {PAYMENT_MODE_ICONS[tx.paymentMode]}
                         {tx.paymentMode}
                       </span>
                     )}
@@ -1129,14 +1148,16 @@ export default function TransactionsPage() {
                     </span>
                   )}
                   {tx.categoryName ? (
-                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground">
+                    <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground">
+                      {tx.categoryIcon}
                       {tx.categoryName}
                     </span>
                   ) : !isTransfer && (
                     <span className="text-xs text-muted-foreground">—</span>
                   )}
                   {tx.paymentMode && (
-                    <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium', PAYMENT_MODE_COLORS[tx.paymentMode] ?? 'bg-gray-100 text-gray-700')}>
+                    <span className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium', PAYMENT_MODE_COLORS[tx.paymentMode] ?? 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300')}>
+                      {PAYMENT_MODE_ICONS[tx.paymentMode]}
                       {tx.paymentMode}
                     </span>
                   )}
