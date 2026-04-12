@@ -300,4 +300,10 @@ describe('simulatePrepayment', () => {
     loanMock.findFirst.mockResolvedValue(null);
     await expect(simulatePrepayment('u1', 'nonexistent', 100_000, 'reduce_tenure')).rejects.toThrow(/not found/i);
   });
+
+  it('queries by id only when userId is undefined (covers !userId branch)', async () => {
+    loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
+    await simulatePrepayment(undefined, 'loan-1', 100_000, 'reduce_tenure');
+    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1' } });
+  });
 });

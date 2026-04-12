@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatINR, formatINRShort, parseINR } from '../utils/indianFormat';
+import { formatINR, formatINRShort, parseINR, roundINR } from '../utils/indianFormat';
 
 describe('formatINR', () => {
   it('formats thousands correctly', () => {
@@ -81,5 +81,27 @@ describe('parseINR', () => {
   it('handles plain numbers', () => {
     expect(parseINR('12345')).toBe(12345);
     expect(parseINR('0')).toBe(0);
+  });
+});
+
+describe('roundINR', () => {
+  it('returns integer amounts unchanged', () => {
+    expect(roundINR(1000)).toBe(1000);
+    expect(roundINR(0)).toBe(0);
+  });
+
+  it('rounds to 2 decimal places (paise precision)', () => {
+    // 100.125 * 100 = 10012.5 → Math.round → 10013 → /100 = 100.13
+    expect(roundINR(100.125)).toBe(100.13);
+  });
+
+  it('preserves exact 2-decimal amounts', () => {
+    expect(roundINR(1234.56)).toBe(1234.56);
+    expect(roundINR(0.01)).toBe(0.01);
+  });
+
+  it('handles negative amounts', () => {
+    // Math.round(-10012.5) = -10012 (rounds toward +infinity for .5)
+    expect(roundINR(-100.125)).toBe(-100.12);
   });
 });

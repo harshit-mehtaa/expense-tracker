@@ -754,6 +754,18 @@ describe('getAllTransactionsForExport', () => {
     expect(call.where.type).toEqual({ in: ['INCOME', 'EXPENSE'] });
   });
 
+  it('applies singular type filter (not array form)', async () => {
+    await getAllTransactionsForExport('u1', 'MEMBER', { type: 'INCOME' });
+    const call = txMock.findMany.mock.calls[0][0];
+    expect(call.where.type).toBe('INCOME');
+  });
+
+  it('applies paymentModes array filter', async () => {
+    await getAllTransactionsForExport('u1', 'MEMBER', { paymentModes: ['CASH', 'UPI'] });
+    const call = txMock.findMany.mock.calls[0][0];
+    expect(call.where.paymentMode).toEqual({ in: ['CASH', 'UPI'] });
+  });
+
   it('applies singular paymentMode filter (not array form)', async () => {
     await getAllTransactionsForExport('u1', 'MEMBER', { paymentMode: 'UPI' });
     const call = txMock.findMany.mock.calls[0][0];

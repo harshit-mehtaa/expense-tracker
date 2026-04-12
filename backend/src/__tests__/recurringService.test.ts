@@ -177,6 +177,15 @@ describe('updateRecurringRule', () => {
     const updateCall = ruleMock.update.mock.calls[0][0];
     expect(updateCall.data.nextRunDate).toBeInstanceOf(Date);
   });
+
+  it('includes frequency in update data when explicitly provided (covers frequency !== undefined branch)', async () => {
+    ruleMock.findFirst.mockResolvedValue(MOCK_RULE);
+    ruleMock.update.mockResolvedValue(MOCK_RULE);
+
+    await updateRecurringRule('rule-1', 'u1', { frequency: 'WEEKLY' });
+    const updateCall = ruleMock.update.mock.calls[0][0];
+    expect(updateCall.data.frequency).toBe('WEEKLY');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

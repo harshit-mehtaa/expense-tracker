@@ -307,6 +307,22 @@ describe('xirr via getPortfolioSummary', () => {
     expect(result.totalInvested).toBeCloseTo(8_300, 0);
     expect(result.totalCurrentValue).toBeCloseTo(8_300, 0);
   });
+
+  it('uses sipTransactions as cashflows when available (non-empty sipTransactions path)', async () => {
+    // Investment with sipTransactions — triggers the allCashflows loop (lines 101-103)
+    invMock.findMany.mockResolvedValue([
+      makeInvestment({
+        sipTransactions: [
+          { amount: 1000, date: ONE_YEAR_AGO },
+          { amount: 1000, date: new Date(ONE_YEAR_AGO.getTime() + 30 * 24 * 60 * 60 * 1000) },
+        ],
+      }),
+    ]);
+    const result = await getPortfolioSummary('u1');
+    // With sipTransactions present, cashflows are built from them → xirr is computed
+    expect(result.xirr).not.toBeNull();
+    expect(isFinite(result.xirr!)).toBe(true);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -351,6 +367,27 @@ describe('get80CSummary', () => {
     ]);
     const result = await get80CSummary('u1', '2025-26');
     expect(result.breakdown.insurance).toBe(12000);
+  });
+
+  it('applies HALF_YEARLY frequency multiplier (×2) for insurance', async () => {
+    invMock.findMany.mockResolvedValue([]);
+    fdMock.findMany.mockResolvedValue([]);
+    insMock.findMany.mockResolvedValue([
+      { premiumAmount: 5000, premiumFrequency: 'HALF_YEARLY', is80cEligible: true },
+    ]);
+    const result = await get80CSummary('u1', '2025-26');
+    expect(result.breakdown.insurance).toBe(10000); // 5000 * 2
+  });
+
+  it('uses raw premium amount as annual for non-standard frequency (default case)', async () => {
+    // frequency not MONTHLY/QUARTERLY/HALF_YEARLY → treated as annual (×1)
+    invMock.findMany.mockResolvedValue([]);
+    fdMock.findMany.mockResolvedValue([]);
+    insMock.findMany.mockResolvedValue([
+      { premiumAmount: 8000, premiumFrequency: 'ANNUALLY', is80cEligible: true },
+    ]);
+    const result = await get80CSummary('u1', '2025-26');
+    expect(result.breakdown.insurance).toBe(8000); // 8000 * 1
   });
 
   it('returns zero when no eligible instruments', async () => {
@@ -415,6 +452,23 @@ describe('getInvestments', () => {
 
     const result = await getInvestments('u1');
     expect(result.items[0].investedINR).toBeCloseTo(8300, 0);
+  });
+
+  it('builds per-investment XIRR from sipTransactions when non-empty (line 204 path)', async () => {
+    const ONE_YEAR_AGO = new Date();
+    ONE_YEAR_AGO.setFullYear(ONE_YEAR_AGO.getFullYear() - 1);
+    const invWithSip = {
+      ...MOCK_INV,
+      sipTransactions: [
+        { amount: 500, date: ONE_YEAR_AGO },
+        { amount: 500, date: new Date(ONE_YEAR_AGO.getTime() + 30 * 24 * 60 * 60 * 1000) },
+      ],
+    };
+    invMock.count.mockResolvedValue(1);
+    invMock.findMany.mockResolvedValue([invWithSip]);
+    const result = await getInvestments('u1');
+    // Item has xirr computed via sipTransactions cashflows (not purchase-date fallback)
+    expect(result.items[0].xirr).not.toBeNull();
   });
 });
 

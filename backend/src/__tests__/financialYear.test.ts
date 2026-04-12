@@ -7,6 +7,7 @@ import {
   getFYFromDate,
   isSameFY,
   listFYOptions,
+  formatFYLabel,
 } from '../utils/financialYear';
 
 describe('getCurrentFY', () => {
@@ -105,5 +106,15 @@ describe('listFYOptions', () => {
     const options = listFYOptions(3);
     expect(options).toHaveLength(3);
     expect(options[0]).toMatch(/^\d{4}-\d{2}$/);
+  });
+});
+
+describe('formatFYLabel', () => {
+  it('formats a FY string to a human-readable label', () => {
+    expect(formatFYLabel('2024-25')).toBe('FY 2024-25 (Apr 2024 – Mar 2025)');
+  });
+
+  it('correctly computes the end year as startYear + 1', () => {
+    expect(formatFYLabel('2025-26')).toBe('FY 2025-26 (Apr 2025 – Mar 2026)');
   });
 });

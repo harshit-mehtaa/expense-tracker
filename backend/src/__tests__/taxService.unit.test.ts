@@ -277,6 +277,27 @@ describe('getTaxSummary — new regime 2024-25 slabs', () => {
     const result = await getTaxSummary('u1', '2024-25');
     expect(result.newRegime.tax).toBe(0);
   });
+
+  it('2024-25 slab: income ≤₹12L bracket (₹1M–₹1.2M range)', async () => {
+    // grossSalary=1100K → taxable=1025K → slab: 50000+(25000*0.15)=53750 → with cess=55900
+    profileMock.mockResolvedValue(makeProfile(1_100_000, 'NEW'));
+    const result = await getTaxSummary('u1', '2024-25');
+    expect(result.newRegime.tax).toBeCloseTo(55_900, 0);
+  });
+
+  it('2024-25 slab: income ≤₹15L bracket (₹1.2M–₹1.5M range)', async () => {
+    // grossSalary=1350K → taxable=1275K → slab: 80000+(75000*0.20)=95000 → with cess=98800
+    profileMock.mockResolvedValue(makeProfile(1_350_000, 'NEW'));
+    const result = await getTaxSummary('u1', '2024-25');
+    expect(result.newRegime.tax).toBeCloseTo(98_800, 0);
+  });
+
+  it('2024-25 slab: income >₹15L (top bracket)', async () => {
+    // grossSalary=1700K → taxable=1625K → slab: 140000+(125000*0.30)=177500 → with cess=184600
+    profileMock.mockResolvedValue(makeProfile(1_700_000, 'NEW'));
+    const result = await getTaxSummary('u1', '2024-25');
+    expect(result.newRegime.tax).toBeCloseTo(184_600, 0);
+  });
 });
 
 describe('getTaxSummary — resolveNewRegimeSlab fallback', () => {
