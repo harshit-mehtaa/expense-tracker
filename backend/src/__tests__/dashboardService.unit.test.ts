@@ -565,4 +565,31 @@ describe('getUpcomingAlerts', () => {
     const r = await getUpcomingAlerts('u1', 'MEMBER');
     expect(r.find((a: any) => a.type === 'BUDGET_ALERT')).toBeUndefined();
   });
+
+  it('QUARTERLY budget ≥80% spent → BUDGET_ALERT', async () => {
+    // Fake timer: 2025-04-15 → month=April (0-idx=3) → Q1 FY2025-26 (Apr–Jun)
+    // rangeFor('QUARTERLY') uses qStart/qEnd computed from that date
+    budgetMock.findMany.mockResolvedValue([{
+      id: 'b-q', userId: 'u1', amount: 20000, period: 'QUARTERLY', categoryId: 'cat-q',
+      category: { name: 'Utilities' },
+    }]);
+    txMock.groupBy.mockResolvedValue([{ categoryId: 'cat-q', _sum: { amount: 17000 } }]);
+    const r = await getUpcomingAlerts('u1', 'MEMBER');
+    const alert = r.find((a: any) => a.type === 'BUDGET_ALERT');
+    expect(alert).toBeDefined();
+    expect(alert!.entityId).toBe('b-q');
+  });
+
+  it('FY budget ≥80% spent → BUDGET_ALERT', async () => {
+    // rangeFor('FY') uses fyRange.start/end for '2025-26'
+    budgetMock.findMany.mockResolvedValue([{
+      id: 'b-fy', userId: 'u1', amount: 50000, period: 'FY', categoryId: 'cat-fy',
+      category: { name: 'Investments' },
+    }]);
+    txMock.groupBy.mockResolvedValue([{ categoryId: 'cat-fy', _sum: { amount: 42000 } }]);
+    const r = await getUpcomingAlerts('u1', 'MEMBER');
+    const alert = r.find((a: any) => a.type === 'BUDGET_ALERT');
+    expect(alert).toBeDefined();
+    expect(alert!.entityId).toBe('b-fy');
+  });
 });

@@ -216,6 +216,14 @@ describe('getTaxSummary — old regime tax slabs', () => {
     const result = await getTaxSummary('u1', FY);
     expect(result.oldRegime.taxableIncome).toBe(550_000); // 600K - 50K std deduction
   });
+
+  it('surcharge applies at 37% for old regime income > ₹5 crore', async () => {
+    // grossSalary=52M → taxable=51.95M → rawTax=112500+(50.95M*0.30)=15,397,500
+    // surcharge=15,397,500*0.37=5,697,075 → total=(15,397,500+5,697,075)*1.04=21,938,358
+    profileMock.mockResolvedValue(makeProfile(52_000_000));
+    const result = await getTaxSummary('u1', FY);
+    expect(result.oldRegime.tax).toBeCloseTo(21_938_358, 0);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -243,6 +251,14 @@ describe('getTaxSummary — new regime 2025-26 slabs', () => {
     profileMock.mockResolvedValue(makeProfile(1_375_000, 'NEW'));
     const result = await getTaxSummary('u1', '2025-26');
     expect(result.newRegime.taxableIncome).toBe(1_300_000); // 1375K - 75K
+  });
+
+  it('surcharge capped at 25% for new regime income > ₹5 crore', async () => {
+    // grossSalary=52M → taxable=51.925M (75K std ded) → rawTax=300K+(49.525M*0.30)=15,157,500
+    // surcharge=15,157,500*0.25=3,789,375 → total=(15,157,500+3,789,375)*1.04=19,704,750
+    profileMock.mockResolvedValue(makeProfile(52_000_000, 'NEW'));
+    const result = await getTaxSummary('u1', '2025-26');
+    expect(result.newRegime.tax).toBeCloseTo(19_704_750, 0);
   });
 });
 
@@ -313,6 +329,24 @@ describe('getTaxSummary — metadata', () => {
     profileMock.mockResolvedValue(makeProfile(1_200_000));
     const result = await getTaxSummary('u1', '2025-26');
     expect(result.savings).toBeCloseTo(163_800, 0);
+  });
+
+  it('section24b: uses amortization schedule to compute annual interest (capped at ₹2L)', async () => {
+    // Mock a section24b-eligible loan; buildAmortizationSchedule returns 12 rows × ₹15K interest = ₹180K
+    // 180K < 200K cap → total24B = 180K reduces oldTaxableIncome
+    (prisma.loan.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 'loan-1', outstandingBalance: 3_000_000, interestRate: 0.085, emiAmount: 30_000,
+        emiDate: new Date('2025-01-01'), section24bEligible: true },
+    ]);
+    const schedule = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, interest: 15_000, principal: 15_000, balance: 0 }));
+    (buildAmortizationSchedule as ReturnType<typeof vi.fn>).mockReturnValue(schedule);
+    profileMock.mockResolvedValue(makeProfile(1_500_000));
+    const result = await getTaxSummary('u1', '2025-26');
+    expect(result.deductions.section24B).toBe(180_000);
+    expect(buildAmortizationSchedule).toHaveBeenCalledOnce();
+    expect(buildAmortizationSchedule).toHaveBeenCalledWith(
+      3_000_000, 0.085, 30_000, new Date('2025-01-01'), expect.any(Date),
+    );
   });
 });
 

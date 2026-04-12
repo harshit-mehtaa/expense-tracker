@@ -231,4 +231,11 @@ describe('calcOtherIncomeSummary', () => {
     const r = await calcOtherIncomeSummary('u1', '2025-26'); // no regime param
     expect(r.deduction80TTA).toBe(6000); // OLD regime applied
   });
+
+  it('null tdsDeducted treated as 0 (covers ?? 0 branch)', async () => {
+    oimMock.findMany.mockResolvedValue([{ ...MOCK_ENTRY, sourceType: 'FD_INTEREST', amount: 8000, tdsDeducted: null }]);
+    const r = await calcOtherIncomeSummary('u1', '2025-26');
+    expect(r.breakdown.fdInterest).toBe(8000);
+    expect(r.totalTdsDeducted).toBe(0); // null ?? 0 = 0
+  });
 });

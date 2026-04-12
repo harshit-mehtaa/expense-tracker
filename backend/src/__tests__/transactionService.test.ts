@@ -753,6 +753,26 @@ describe('getAllTransactionsForExport', () => {
     const call = txMock.findMany.mock.calls[0][0];
     expect(call.where.type).toEqual({ in: ['INCOME', 'EXPENSE'] });
   });
+
+  it('applies singular paymentMode filter (not array form)', async () => {
+    await getAllTransactionsForExport('u1', 'MEMBER', { paymentMode: 'UPI' });
+    const call = txMock.findMany.mock.calls[0][0];
+    expect(call.where.paymentMode).toBe('UPI');
+  });
+
+  it('applies startDate filter as date range lower bound', async () => {
+    await getAllTransactionsForExport('u1', 'MEMBER', { startDate: '2025-04-01' });
+    const call = txMock.findMany.mock.calls[0][0];
+    expect(call.where.date).toBeDefined();
+    expect(call.where.date.gte).toEqual(new Date('2025-04-01'));
+  });
+
+  it('applies endDate filter as date range upper bound', async () => {
+    await getAllTransactionsForExport('u1', 'MEMBER', { endDate: '2025-06-30' });
+    const call = txMock.findMany.mock.calls[0][0];
+    expect(call.where.date).toBeDefined();
+    expect(call.where.date.lte).toEqual(new Date('2025-06-30'));
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

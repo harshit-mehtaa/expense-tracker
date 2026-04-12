@@ -583,6 +583,17 @@ describe('updateRD / deleteRD', () => {
     await expect(updateRD('u1', 'rd-x', {})).rejects.toThrow(/not found/i);
   });
 
+  it('updates RD when found', async () => {
+    const existing = { id: 'rd-1', userId: 'u1', depositAmount: 2000 };
+    const updated = { ...existing, depositAmount: 3000 };
+    rdMock.findFirst.mockResolvedValue(existing);
+    rdMock.update.mockResolvedValue(updated);
+    const result = await updateRD('u1', 'rd-1', { depositAmount: 3000 });
+    expect(rdMock.findFirst).toHaveBeenCalledWith({ where: { id: 'rd-1', userId: 'u1' } });
+    expect(rdMock.update).toHaveBeenCalledWith({ where: { id: 'rd-1' }, data: { depositAmount: 3000 } });
+    expect(result).toEqual(updated);
+  });
+
   it('throws NotFound for deleteRD when not found', async () => {
     rdMock.findFirst.mockResolvedValue(null);
     await expect(deleteRD('u1', 'rd-x')).rejects.toThrow(/not found/i);
@@ -712,6 +723,17 @@ describe('updateSIP / deleteSIP / addSIPTransaction', () => {
   it('throws NotFound for updateSIP when not found', async () => {
     sipMock.findFirst.mockResolvedValue(null);
     await expect(updateSIP('u1', 'sip-x', {})).rejects.toThrow(/not found/i);
+  });
+
+  it('updates SIP when found', async () => {
+    const existing = { id: 'sip-1', userId: 'u1', amount: 5000, investmentId: 'inv-1' };
+    const updated = { ...existing, amount: 7000 };
+    sipMock.findFirst.mockResolvedValue(existing);
+    sipMock.update.mockResolvedValue(updated);
+    const result = await updateSIP('u1', 'sip-1', { amount: 7000 });
+    expect(sipMock.findFirst).toHaveBeenCalledWith({ where: { id: 'sip-1', userId: 'u1' } });
+    expect(sipMock.update).toHaveBeenCalledWith({ where: { id: 'sip-1' }, data: { amount: 7000 } });
+    expect(result).toEqual(updated);
   });
 
   it('throws NotFound for deleteSIP when not found', async () => {
