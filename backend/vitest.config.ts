@@ -9,7 +9,14 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
-      exclude: ['node_modules/', 'dist/', 'prisma/'],
+      include: ['src/**/*.ts'],
+      exclude: ['node_modules/', 'dist/', 'prisma/', 'src/__tests__/'],
+      thresholds: {
+        statements: 40,
+        branches: 35,
+        functions: 40,
+        lines: 40,
+      },
     },
   },
   resolve: {

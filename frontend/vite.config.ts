@@ -1,6 +1,6 @@
 import path from 'path';
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   plugins: [react()],
@@ -15,5 +15,18 @@ export default defineConfig({
     port: 5173,
     // In development, proxy /api requests to the backend via Nginx
     // (all traffic goes through Nginx even in dev — no direct proxy needed here)
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/__tests__/setup.ts'],
+    env: {
+      VITE_API_URL: 'http://localhost:3000',
+    },
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/__tests__/**', 'src/components/ui/**'],
+    },
   },
 });
