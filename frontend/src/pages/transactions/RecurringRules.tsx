@@ -22,7 +22,6 @@ import {
 import api from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
-import { Label } from '@/components/ui/label';
 
 const FREQUENCY_LABELS: Record<RecurringFrequency, string> = {
   DAILY: 'Daily',
