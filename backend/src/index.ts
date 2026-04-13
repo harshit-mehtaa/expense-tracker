@@ -13,7 +13,6 @@ import { requireAuth } from './middleware/auth';
 import { errorHandler } from './middleware/errorHandler';
 import { asyncHandler } from './utils/asyncHandler';
 import { sendCreated, sendSuccess } from './utils/response';
-import { getFYRange, getCurrentFY, validateFY } from './utils/financialYear';
 
 /** Sanitize filename for storage — strip HTML tags and control chars, limit length */
 function sanitizeFilename(name: string): string {
@@ -35,12 +34,12 @@ import categoriesRouter from './routes/categories';
 import budgetsRouter from './routes/budgets';
 import recurringRouter from './routes/recurring';
 import snapshotsRouter from './routes/snapshots';
+import reportsRouter from './routes/reports';
 
 // Import service
 import { parseCSV, makeImportHash } from './services/importService';
 import { prisma } from './config/prisma';
 import { AppError } from './utils/AppError';
-import { computeNetWorthStatement, getProfitAndLoss } from './services/dashboardService';
 
 const app = express();
 
@@ -104,6 +103,7 @@ app.use('/api/categories', categoriesRouter);
 app.use('/api/budgets', budgetsRouter);
 app.use('/api/recurring', recurringRouter);
 app.use('/api/snapshots/net-worth', snapshotsRouter);
+app.use('/api/reports', reportsRouter);
 
 // ── Bank Statement Import ─────────────────────────────────────────────────────
 app.post(
@@ -218,52 +218,6 @@ app.post(
     });
   }),
 );
-
-// ── Reports ───────────────────────────────────────────────────────────────────
-app.get('/api/reports/spending-by-category', requireAuth, asyncHandler(async (req, res) => {
-  const fy = validateFY(req.query.fy);
-  const { start, end } = getFYRange(fy);
-
-  const data = await prisma.transaction.groupBy({
-    by: ['categoryId'],
-    where: { userId: req.user!.userId, deletedAt: null, type: 'EXPENSE', date: { gte: start, lt: end } },
-    _sum: { amount: true },
-    orderBy: { _sum: { amount: 'desc' } },
-  });
-
-  const categories = await prisma.category.findMany({ where: { id: { in: data.map((d) => d.categoryId!).filter(Boolean) } } });
-  const catMap = Object.fromEntries(categories.map((c) => [c.id, c]));
-
-  const result = data.map((d) => ({
-    categoryId: d.categoryId,
-    category: d.categoryId ? catMap[d.categoryId] : null,
-    total: Number(d._sum.amount ?? 0),
-  }));
-
-  sendSuccess(res, result);
-}));
-
-app.get('/api/reports/net-worth-statement', requireAuth, asyncHandler(async (req, res) => {
-  const userId = req.user!.userId;
-  const statement = await computeNetWorthStatement(userId);
-  sendSuccess(res, statement);
-}));
-
-app.get('/api/reports/profit-and-loss', requireAuth, asyncHandler(async (req, res) => {
-  const fy = validateFY(req.query.fy);
-  const { userId, role } = req.user!;
-  let targetUserId: string | undefined;
-  if (role === 'ADMIN' && req.query.targetUserId) {
-    const raw = req.query.targetUserId as string;
-    const CUID_RE = /^[a-z0-9]{20,30}$/i;
-    if (!CUID_RE.test(raw)) throw AppError.badRequest('Invalid targetUserId format');
-    const target = await prisma.user.findFirst({ where: { id: raw, deletedAt: null } });
-    if (!target) throw AppError.notFound('User');
-    targetUserId = raw;
-  }
-  const data = await getProfitAndLoss(userId, role, fy, targetUserId);
-  sendSuccess(res, data);
-}));
 
 // ── Error handler (must be last) ──────────────────────────────────────────────
 app.use(errorHandler);

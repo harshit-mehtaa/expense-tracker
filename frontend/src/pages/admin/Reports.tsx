@@ -9,11 +9,11 @@ import {
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
 import { useFY } from '@/contexts/FYContext';
-import { useAuth } from '@/contexts/AuthContext';
 import { fetchProfitAndLoss } from '@/api/dashboard';
 import api from '@/lib/api';
 import { formatINRShort } from '@/lib/indianFormat';
 import { cn } from '@/lib/utils';
+import { useMemberSelector } from '@/hooks/useMemberSelector';
 import {
   useChartGradients,
   CHART_PALETTE,
@@ -26,48 +26,48 @@ type TabId = 'pl' | 'spending' | 'networth';
 
 export default function ReportsPage() {
   const { selectedFY } = useFY();
-  const { user } = useAuth();
+  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
   const { gradIds, GradDefs } = useChartGradients();
-  const isAdmin = user?.role === 'ADMIN';
 
   const [activeTab, setActiveTab] = useState<TabId>('pl');
-  const [viewUserId, setViewUserId] = useState<string | undefined>(undefined);
 
   const tabs: { id: TabId; label: string }[] = [
     { id: 'pl', label: 'P&L' },
-    ...(isAdmin ? [{ id: 'spending' as TabId, label: 'Spending Analysis' }] : []),
-    ...(isAdmin ? [{ id: 'networth' as TabId, label: 'Net Worth' }] : []),
+    { id: 'spending', label: 'Spending Analysis' },
+    { id: 'networth', label: 'Net Worth' },
   ];
 
-  // P&L queries (all users)
-  const { data: members = [], isLoading: isMembersLoading, isError: isMembersError } = useQuery<{ id: string; name: string; isActive: boolean }[]>({
-    queryKey: ['admin-users'],
-    queryFn: () => api.get<{ data: { id: string; name: string; isActive: boolean }[] }>('/admin/users').then((r) => r.data.data),
-    enabled: isAdmin,
-  });
-
+  // ── P&L query (all users) ────────────────────────────────────────────────────
   const { data: plData, isLoading: isPnLLoading, isError: isPnLError, refetch: refetchPnL } = useQuery({
     queryKey: ['profit-and-loss', selectedFY, viewUserId],
-    queryFn: () => fetchProfitAndLoss(selectedFY, viewUserId),
+    queryFn: () => fetchProfitAndLoss(selectedFY, isAdmin ? viewUserId : undefined),
   });
 
-  // Admin-only queries
+  // ── Spending-by-category query (all users, scoped to effectiveUserId) ─────────
   const { data: spendingByCat = [] } = useQuery({
-    queryKey: ['report-spending', selectedFY],
-    queryFn: () => api.get<{ data: any[] }>(`/reports/spending-by-category?fy=${selectedFY}`).then((r) => r.data.data),
-    enabled: isAdmin,
+    queryKey: ['report-spending', selectedFY, viewUserId],
+    queryFn: () => {
+      const params = new URLSearchParams({ fy: selectedFY });
+      if (isAdmin && viewUserId) params.set('targetUserId', viewUserId);
+      return api.get<{ data: any[] }>(`/reports/spending-by-category?${params}`).then((r) => r.data.data);
+    },
   });
 
+  // ── Net-worth query (all users, scoped to effectiveUserId) ────────────────────
   const { data: netWorth } = useQuery({
-    queryKey: ['report-networth'],
-    queryFn: () => api.get<{ data: any }>('/reports/net-worth-statement').then((r) => r.data.data),
-    enabled: isAdmin,
+    queryKey: ['report-networth', viewUserId],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (isAdmin && viewUserId) params.set('targetUserId', viewUserId);
+      const qs = params.toString();
+      return api.get<{ data: any }>(`/reports/net-worth-statement${qs ? `?${qs}` : ''}`).then((r) => r.data.data);
+    },
   });
 
   const isLoading = isPnLLoading || (isAdmin && isMembersLoading);
   if (isLoading) return <PageLoader />;
 
-  // P&L data
+  // ── P&L data ─────────────────────────────────────────────────────────────────
   const summary = plData?.summary;
   const monthly = plData?.monthly ?? [];
   const expenseCategories = plData?.expenseCategories ?? [];
@@ -93,7 +93,7 @@ export default function ReportsPage() {
     amount: item.total,
   }));
 
-  // Spending analysis data
+  // ── Spending data ─────────────────────────────────────────────────────────────
   const spendingPieData = spendingByCat.slice(0, 9).map((item: any, i: number) => ({
     name: item.category?.name ?? 'Uncategorized',
     value: item.total,
@@ -104,13 +104,45 @@ export default function ReportsPage() {
     amount: item.total,
   }));
 
+  // ── Scope label for subtitle ──────────────────────────────────────────────────
+  const selectedMemberName = isAdmin && viewUserId
+    ? members.find((m) => m.id === viewUserId)?.name ?? 'Member'
+    : null;
+  const scopeLabel = selectedMemberName
+    ? `${selectedMemberName}'s data`
+    : isAdmin
+    ? 'Family-wide'
+    : 'My data';
+
   return (
     <div className="space-y-8">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold">Reports</h1>
-        <p className="text-muted-foreground text-sm mt-1">FY {selectedFY}</p>
+        <p className="text-muted-foreground text-sm mt-1">FY {selectedFY} · {scopeLabel}</p>
       </div>
+
+      {/* Admin member selector — shared across all tabs */}
+      {isAdmin && (
+        <div className="flex items-center gap-2">
+          <label htmlFor="reports-user-select" className="text-sm font-medium text-muted-foreground">View:</label>
+          {isMembersError ? (
+            <span className="text-xs text-destructive">Could not load members</span>
+          ) : (
+            <select
+              id="reports-user-select"
+              value={viewUserId ?? ''}
+              onChange={(e) => setViewUserId(e.target.value || undefined)}
+              className="rounded-md border bg-background px-3 py-1.5 text-sm"
+            >
+              <option value="">All Family</option>
+              {members.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
 
       {/* Tab bar */}
       <div className="flex gap-1 border-b">
@@ -130,7 +162,7 @@ export default function ReportsPage() {
         ))}
       </div>
 
-      {/* ── P&L Tab ─────────────────────────────────────────────────────────── */}
+      {/* ── P&L Tab ──────────────────────────────────────────────────────────────── */}
       {activeTab === 'pl' && (
         <>
           {isPnLError ? (
@@ -146,28 +178,6 @@ export default function ReportsPage() {
             </div>
           ) : (
             <>
-              {/* Admin member selector */}
-              {isAdmin && (
-                <div className="flex items-center gap-2">
-                  <label htmlFor="pnl-user-select" className="text-sm font-medium text-muted-foreground">View:</label>
-                  {isMembersError ? (
-                    <span className="text-xs text-destructive">Could not load members</span>
-                  ) : (
-                    <select
-                      id="pnl-user-select"
-                      value={viewUserId ?? ''}
-                      onChange={(e) => setViewUserId(e.target.value || undefined)}
-                      className="rounded-md border bg-background px-3 py-1.5 text-sm"
-                    >
-                      <option value="">All Family</option>
-                      {members.filter((m) => m.isActive).map((m) => (
-                        <option key={m.id} value={m.id}>{m.name}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              )}
-
               {/* Summary cards */}
               {summary && (
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -315,8 +325,8 @@ export default function ReportsPage() {
         </>
       )}
 
-      {/* ── Spending Analysis Tab (admin only) ───────────────────────────────── */}
-      {activeTab === 'spending' && isAdmin && (
+      {/* ── Spending Analysis Tab ─────────────────────────────────────────────────── */}
+      {activeTab === 'spending' && (
         <section className="space-y-4">
           <h2 className="text-lg font-semibold">Spending by Category — FY {selectedFY}</h2>
           {spendingByCat.length === 0 ? (
@@ -360,48 +370,52 @@ export default function ReportsPage() {
         </section>
       )}
 
-      {/* ── Net Worth Tab (admin only) ────────────────────────────────────────── */}
-      {activeTab === 'networth' && isAdmin && netWorth && (
+      {/* ── Net Worth Tab ─────────────────────────────────────────────────────────── */}
+      {activeTab === 'networth' && (
         <section className="space-y-4">
           <h2 className="text-lg font-semibold">Net Worth Statement</h2>
-          <div className="grid md:grid-cols-3 gap-4">
-            <div className="md:col-span-1 rounded-lg border bg-card p-5 space-y-3">
-              <h3 className="font-medium text-muted-foreground text-sm uppercase tracking-wide">Assets</h3>
-              {Object.entries(netWorth.assets).map(([key, val]) => {
-                const labels: Record<string, string> = {
-                  bankBalances: 'Bank Balances', fixedDeposits: 'Fixed Deposits',
-                  recurringDeposits: 'Recurring Deposits', investments: 'Investments',
-                  gold: 'Gold', realEstate: 'Real Estate',
-                };
-                return (
-                  <div key={key} className="flex justify-between text-sm">
-                    <span>{labels[key] ?? key}</span>
-                    <INRDisplay amount={val as number} />
-                  </div>
-                );
-              })}
-              <div className="border-t pt-2 flex justify-between font-semibold">
-                <span>Total Assets</span>
-                <INRDisplay amount={netWorth.totalAssets} />
+          {!netWorth ? (
+            <div className="text-center py-8 border rounded-lg text-muted-foreground">Loading net worth data...</div>
+          ) : (
+            <div className="grid md:grid-cols-3 gap-4">
+              <div className="md:col-span-1 rounded-lg border bg-card p-5 space-y-3">
+                <h3 className="font-medium text-muted-foreground text-sm uppercase tracking-wide">Assets</h3>
+                {Object.entries(netWorth.assets).map(([key, val]) => {
+                  const labels: Record<string, string> = {
+                    bankBalances: 'Bank Balances', fixedDeposits: 'Fixed Deposits',
+                    recurringDeposits: 'Recurring Deposits', investments: 'Investments',
+                    gold: 'Gold', realEstate: 'Real Estate',
+                  };
+                  return (
+                    <div key={key} className="flex justify-between text-sm">
+                      <span>{labels[key] ?? key}</span>
+                      <INRDisplay amount={val as number} />
+                    </div>
+                  );
+                })}
+                <div className="border-t pt-2 flex justify-between font-semibold">
+                  <span>Total Assets</span>
+                  <INRDisplay amount={netWorth.totalAssets} />
+                </div>
+              </div>
+              <div className="rounded-lg border bg-card p-5 space-y-3">
+                <h3 className="font-medium text-muted-foreground text-sm uppercase tracking-wide">Liabilities</h3>
+                <div className="flex justify-between text-sm">
+                  <span>Loans Outstanding</span>
+                  <INRDisplay amount={netWorth.liabilities.loans} />
+                </div>
+                <div className="border-t pt-2 flex justify-between font-semibold">
+                  <span>Total Liabilities</span>
+                  <INRDisplay amount={netWorth.totalLiabilities} />
+                </div>
+              </div>
+              <div className="rounded-lg border bg-card p-5 flex flex-col items-center justify-center text-center">
+                <p className="text-sm text-muted-foreground">Net Worth</p>
+                <INRDisplay amount={netWorth.netWorth} short className="text-4xl font-bold mt-2" />
+                <p className="text-sm text-muted-foreground mt-2">Assets − Liabilities</p>
               </div>
             </div>
-            <div className="rounded-lg border bg-card p-5 space-y-3">
-              <h3 className="font-medium text-muted-foreground text-sm uppercase tracking-wide">Liabilities</h3>
-              <div className="flex justify-between text-sm">
-                <span>Loans Outstanding</span>
-                <INRDisplay amount={netWorth.liabilities.loans} />
-              </div>
-              <div className="border-t pt-2 flex justify-between font-semibold">
-                <span>Total Liabilities</span>
-                <INRDisplay amount={netWorth.totalLiabilities} />
-              </div>
-            </div>
-            <div className="rounded-lg border bg-card p-5 flex flex-col items-center justify-center text-center">
-              <p className="text-sm text-muted-foreground">Net Worth</p>
-              <INRDisplay amount={netWorth.netWorth} short className="text-4xl font-bold mt-2" />
-              <p className="text-sm text-muted-foreground mt-2">Assets − Liabilities</p>
-            </div>
-          </div>
+          )}
         </section>
       )}
     </div>
