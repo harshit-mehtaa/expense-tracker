@@ -37,8 +37,9 @@ export interface CreateRecurringRuleInput {
   nextRunDate?: string;
 }
 
-export async function fetchRecurringRules(): Promise<RecurringRule[]> {
-  const res = await api.get<{ data: RecurringRule[] }>('/recurring');
+export async function fetchRecurringRules(viewUserId?: string): Promise<RecurringRule[]> {
+  const uid = viewUserId ? `?targetUserId=${viewUserId}` : '';
+  const res = await api.get<{ data: RecurringRule[] }>(`/recurring${uid}`);
   return res.data.data;
 }
 

@@ -3,13 +3,24 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
+import express from 'express';
+import cookieParser from 'cookie-parser';
+
+const ADMIN_USER = { userId: 'admin-id', email: 'admin@example.com', role: 'ADMIN' as const };
+const MEMBER_USER = { userId: 'u1', email: 'a@b.com', role: 'MEMBER' as const };
+const VALID_TARGET_ID = 'clm1234567890abcdefghij';
 
 vi.mock('../../middleware/auth', () => ({
   requireAuth: (req: any, _res: any, next: any) => {
-    req.user = { userId: 'u1', email: 'a@b.com', role: 'MEMBER' };
+    req.user = (req as any).__testUser ?? MEMBER_USER;
     next();
   },
 }));
+
+vi.mock('../../config/prisma', () => {
+  const prisma = { user: { findFirst: vi.fn() } };
+  return { default: prisma, prisma };
+});
 
 vi.mock('../../services/recurringService', () => ({
   listRecurringRules: vi.fn(),
@@ -21,15 +32,29 @@ vi.mock('../../services/recurringService', () => ({
 
 import recurringRouter from '../../routes/recurring';
 import * as svc from '../../services/recurringService';
+import { prisma } from '../../config/prisma';
 import { makeApp } from '../helpers/makeApp';
+import { errorHandler } from '../../middleware/errorHandler';
+
+function makeAdminApp() {
+  const app = express();
+  app.use(express.json());
+  app.use(cookieParser());
+  app.use((req: any, _res: any, next: any) => { req.__testUser = ADMIN_USER; next(); });
+  app.use('/api/recurring', recurringRouter);
+  app.use(errorHandler);
+  return app;
+}
 
 const app = makeApp(recurringRouter, '/api/recurring');
+const adminApp = makeAdminApp();
 
 const listMock = svc.listRecurringRules as ReturnType<typeof vi.fn>;
 const createMock = svc.createRecurringRule as ReturnType<typeof vi.fn>;
 const updateMock = svc.updateRecurringRule as ReturnType<typeof vi.fn>;
 const deleteMock = svc.deleteRecurringRule as ReturnType<typeof vi.fn>;
 const generateMock = svc.generateDueRecurringTransactions as ReturnType<typeof vi.fn>;
+const findFirstMock = prisma.user.findFirst as ReturnType<typeof vi.fn>;
 
 const MOCK_RULE = {
   id: 'rule-1',
@@ -54,6 +79,42 @@ beforeEach(() => {
   updateMock.mockResolvedValue(MOCK_RULE);
   deleteMock.mockResolvedValue(undefined);
   generateMock.mockResolvedValue({ generated: 2 });
+  findFirstMock.mockResolvedValue({ id: VALID_TARGET_ID });
+});
+
+// ─── GET /api/recurring — member scoping ─────────────────────────────────────
+
+describe('GET /api/recurring — member scoping', () => {
+  it('MEMBER: calls listRecurringRules with own userId, ignores ?targetUserId', async () => {
+    const res = await request(app).get(`/api/recurring?targetUserId=${VALID_TARGET_ID}`);
+    expect(res.status).toBe(200);
+    expect(listMock).toHaveBeenCalledWith('u1');
+  });
+
+  it('ADMIN: no ?targetUserId — calls with admin own userId', async () => {
+    const res = await request(adminApp).get('/api/recurring');
+    expect(res.status).toBe(200);
+    expect(listMock).toHaveBeenCalledWith('admin-id');
+  });
+
+  it('ADMIN: valid ?targetUserId, user exists — calls with targetUserId', async () => {
+    const res = await request(adminApp).get(`/api/recurring?targetUserId=${VALID_TARGET_ID}`);
+    expect(res.status).toBe(200);
+    expect(listMock).toHaveBeenCalledWith(VALID_TARGET_ID);
+  });
+
+  it('ADMIN: invalid CUID format — returns 400', async () => {
+    const res = await request(adminApp).get('/api/recurring?targetUserId=bad-id');
+    expect(res.status).toBe(400);
+    expect(listMock).not.toHaveBeenCalled();
+  });
+
+  it('ADMIN: valid CUID but user not found — returns 404', async () => {
+    findFirstMock.mockResolvedValue(null);
+    const res = await request(adminApp).get(`/api/recurring?targetUserId=${VALID_TARGET_ID}`);
+    expect(res.status).toBe(404);
+    expect(listMock).not.toHaveBeenCalled();
+  });
 });
 
 // ─── GET /api/recurring ───────────────────────────────────────────────────────

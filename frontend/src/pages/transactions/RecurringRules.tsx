@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -21,6 +21,8 @@ import {
 } from '@/api/recurring';
 import api from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useMemberSelector } from '@/hooks/useMemberSelector';
+import { Label } from '@/components/ui/label';
 
 const FREQUENCY_LABELS: Record<RecurringFrequency, string> = {
   DAILY: 'Daily',
@@ -60,13 +62,15 @@ function useBankAccounts() {
 export default function RecurringRulesPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
+  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading } = useMemberSelector();
+  const isViewingOther = isAdmin && viewUserId !== undefined;
   const [showForm, setShowForm] = useState(false);
   const [editingRule, setEditingRule] = useState<RecurringRule | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const { data: rules = [], isLoading } = useQuery({
-    queryKey: ['recurring-rules'],
-    queryFn: fetchRecurringRules,
+    queryKey: ['recurring-rules', viewUserId],
+    queryFn: () => fetchRecurringRules(viewUserId),
   });
 
   const { data: categories = [] } = useCategories();
@@ -81,7 +85,15 @@ export default function RecurringRulesPage() {
     },
   });
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['recurring-rules'] });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['recurring-rules', viewUserId] });
+
+  // Reset form/confirm state when the viewed member changes
+  useEffect(() => {
+    setShowForm(false);
+    setEditingRule(null);
+    setDeleteConfirmId(null);
+    reset();
+  }, [viewUserId, reset]);
 
   const createMutation = useMutation({
     mutationFn: (data: CreateRecurringRuleInput) => createRecurringRule(data),
@@ -185,30 +197,49 @@ export default function RecurringRulesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">Recurring Transactions</h1>
           <p className="text-muted-foreground text-sm">Transactions generated automatically on schedule</p>
         </div>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => generateMutation.mutate()}
-            disabled={generateMutation.isPending}
-          >
-            <RefreshCw className={cn('h-4 w-4 mr-1', generateMutation.isPending && 'animate-spin')} />
-            Generate Now
-          </Button>
-          <Button size="sm" onClick={() => { setEditingRule(null); reset(); setShowForm(true); }}>
-            <PlusCircle className="h-4 w-4 mr-1" />
-            Add Rule
-          </Button>
+        <div className="flex items-center gap-3 flex-wrap">
+          {isAdmin && !isMembersLoading && members.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Label className="text-sm text-muted-foreground whitespace-nowrap">Viewing:</Label>
+              <select
+                value={viewUserId ?? ''}
+                onChange={(e) => setViewUserId(e.target.value || undefined)}
+                className="rounded-md border bg-background px-3 py-1.5 text-sm min-w-[140px]"
+              >
+                <option value="">My Data</option>
+                {members.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          {!isViewingOther && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => generateMutation.mutate()}
+                disabled={generateMutation.isPending}
+              >
+                <RefreshCw className={cn('h-4 w-4 mr-1', generateMutation.isPending && 'animate-spin')} />
+                Generate Now
+              </Button>
+              <Button size="sm" onClick={() => { setEditingRule(null); reset(); setShowForm(true); }}>
+                <PlusCircle className="h-4 w-4 mr-1" />
+                Add Rule
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
       {/* Add / Edit form */}
-      {showForm && (
+      {showForm && !isViewingOther && (
         <div className="rounded-xl border border-border bg-card p-5 space-y-4">
           <h2 className="text-base font-semibold">{editingRule ? 'Edit Rule' : 'New Recurring Rule'}</h2>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -310,59 +341,61 @@ export default function RecurringRulesPage() {
                   <span>Next: {new Date(rule.nextRunDate).toLocaleDateString('en-IN')}</span>
                 </div>
               </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <button
-                  onClick={() => rule.isActive && applyMutation.mutate(rule)}
-                  disabled={!rule.isActive || applyMutation.isPending}
-                  className={cn(
-                    'p-1.5 rounded hover:bg-muted',
-                    rule.isActive
-                      ? 'text-primary hover:text-primary/80'
-                      : 'text-muted-foreground opacity-40 cursor-not-allowed',
-                  )}
-                  title={rule.isActive ? 'Apply now (create transaction for today)' : 'Rule is paused'}
-                >
-                  <Zap className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => updateMutation.mutate({ id: rule.id, data: { isActive: !rule.isActive } })}
-                  className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                  title={rule.isActive ? 'Pause' : 'Resume'}
-                >
-                  {rule.isActive ? <ToggleRight className="h-4 w-4 text-green-600" /> : <ToggleLeft className="h-4 w-4" />}
-                </button>
-                <button
-                  onClick={() => startEdit(rule)}
-                  className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                  title="Edit"
-                >
-                  <Pencil className="h-4 w-4" />
-                </button>
-                {deleteConfirmId === rule.id ? (
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => deleteMutation.mutate(rule.id)}
-                      className="text-xs text-red-600 hover:underline px-1"
-                    >
-                      Confirm
-                    </button>
-                    <button
-                      onClick={() => setDeleteConfirmId(null)}
-                      className="text-xs text-muted-foreground hover:underline px-1"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
+              {!isViewingOther && (
+                <div className="flex items-center gap-1 shrink-0">
                   <button
-                    onClick={() => setDeleteConfirmId(rule.id)}
-                    className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-red-500"
-                    title="Delete"
+                    onClick={() => rule.isActive && applyMutation.mutate(rule)}
+                    disabled={!rule.isActive || applyMutation.isPending}
+                    className={cn(
+                      'p-1.5 rounded hover:bg-muted',
+                      rule.isActive
+                        ? 'text-primary hover:text-primary/80'
+                        : 'text-muted-foreground opacity-40 cursor-not-allowed',
+                    )}
+                    title={rule.isActive ? 'Apply now (create transaction for today)' : 'Rule is paused'}
                   >
-                    <Trash2 className="h-4 w-4" />
+                    <Zap className="h-4 w-4" />
                   </button>
-                )}
-              </div>
+                  <button
+                    onClick={() => updateMutation.mutate({ id: rule.id, data: { isActive: !rule.isActive } })}
+                    className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                    title={rule.isActive ? 'Pause' : 'Resume'}
+                  >
+                    {rule.isActive ? <ToggleRight className="h-4 w-4 text-green-600" /> : <ToggleLeft className="h-4 w-4" />}
+                  </button>
+                  <button
+                    onClick={() => startEdit(rule)}
+                    className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                    title="Edit"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  {deleteConfirmId === rule.id ? (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => deleteMutation.mutate(rule.id)}
+                        className="text-xs text-red-600 hover:underline px-1"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        onClick={() => setDeleteConfirmId(null)}
+                        className="text-xs text-muted-foreground hover:underline px-1"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setDeleteConfirmId(rule.id)}
+                      className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-red-500"
+                      title="Delete"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

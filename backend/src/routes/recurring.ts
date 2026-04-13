@@ -5,6 +5,7 @@ import { sendSuccess, sendCreated, sendNoContent } from '../utils/response';
 import { requireAuth } from '../middleware/auth';
 import * as recurringService from '../services/recurringService';
 import { RecurringFrequency } from '@prisma/client';
+import { resolveTargetUserId } from '../utils/resolveTargetUserId';
 
 const router = Router();
 router.use(requireAuth);
@@ -31,7 +32,10 @@ const updateRuleSchema = z.object({
 router.get(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
-    const rules = await recurringService.listRecurringRules(req.user!.userId);
+    const { userId, role } = req.user!;
+    const targetUserId = await resolveTargetUserId(req);
+    const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
+    const rules = await recurringService.listRecurringRules(effectiveUserId);
     sendSuccess(res, rules);
   }),
 );
