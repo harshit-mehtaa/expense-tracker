@@ -197,6 +197,29 @@ describe('parseCSV — SBI format', () => {
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.transactions.some((t) => t.amount === 2000)).toBe(true);
   });
+
+  it('parses SBI compact Dr suffix format — single debit column (lines 108-113)', () => {
+    // row.length < 6 && row[3] → triggers Dr/Cr suffix branch
+    const csv = [
+      'Txn Date,Value Date,Description,Amount',
+      '01-Apr-2025,01-Apr-2025,ELECTRICITY BILL,1500.00Dr',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv), 'SBI');
+    const expense = result.transactions.find((t) => t.type === 'EXPENSE');
+    expect(expense).toBeDefined();
+    expect(expense!.amount).toBe(1500);
+  });
+
+  it('parses SBI compact Cr suffix format — single credit column', () => {
+    const csv = [
+      'Txn Date,Value Date,Description,Amount',
+      '05-Apr-2025,05-Apr-2025,SALARY CREDIT,60000.00Cr',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv), 'SBI');
+    const income = result.transactions.find((t) => t.type === 'INCOME');
+    expect(income).toBeDefined();
+    expect(income!.amount).toBe(60000);
+  });
 });
 
 // ─── parseCSV — ICICI format ──────────────────────────────────────────────────
@@ -234,6 +257,18 @@ describe('parseCSV — ICICI format', () => {
     const result = parseCSV(Buffer.from(ICICI_CSV)); // no bank hint
     expect(result.bank).toBe('ICICI');
   });
+
+  it('records invalid date row in errors and continues parsing valid rows', () => {
+    const csv = [
+      'ICICI Bank Statement',
+      'Transaction Date,Value Date,Description,Ref,Debit,Credit,Balance',
+      'NOT-A-DATE,2025-04-01,Bad Row,REF001,500.00,,',
+      '2025-04-02,2025-04-02,Good Row,REF002,,2000.00,',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv), 'ICICI');
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.transactions.some((t) => t.amount === 2000)).toBe(true);
+  });
 });
 
 // ─── parseCSV — Axis format ───────────────────────────────────────────────────
@@ -263,6 +298,17 @@ describe('parseCSV — Axis format', () => {
     const expense = result.transactions.find((t) => t.type === 'EXPENSE');
     expect(expense).toBeDefined();
     expect(expense!.amount).toBe(499);
+  });
+
+  it('records invalid date row in errors and continues parsing valid rows', () => {
+    const csv = [
+      'Tran Date,Chq No,Description,Debit,Credit,Balance',
+      'NOT-A-DATE,,Bad Row,500.00,,',
+      '2025-04-05,,Valid Row,,1000.00,',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv), 'AXIS');
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.transactions.some((t) => t.amount === 1000)).toBe(true);
   });
 });
 

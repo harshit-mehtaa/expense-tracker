@@ -160,6 +160,14 @@ describe('GET /api/transactions', () => {
     expect(call.minAmount).toBeUndefined();
     expect(call.maxAmount).toBeUndefined();
   });
+
+  it('passes minAmount, maxAmount and limit as numbers when provided (lines 73-76 truthy branches)', async () => {
+    await request(makeApp()).get('/api/transactions?minAmount=500&maxAmount=5000&limit=50');
+    const call = getTransactionsMock.mock.calls[0][2];
+    expect(call.minAmount).toBe(500);
+    expect(call.maxAmount).toBe(5000);
+    expect(call.limit).toBe(50);
+  });
 });
 
 // ─── GET /api/transactions/export ─────────────────────────────────────────────

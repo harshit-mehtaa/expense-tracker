@@ -433,12 +433,6 @@ export async function computeTotalLiabilities(userId?: string): Promise<number> 
   return Number(result._sum.outstandingBalance ?? 0);
 }
 
-async function getNetWorth(userId?: string): Promise<number> {
-  const assets = await computeNetWorthAssets(userId);
-  const liabilities = await computeTotalLiabilities(userId);
-  return assets - liabilities;
-}
-
 export async function upsertNetWorthSnapshot(userId: string) {
   const snapshotDate = getMonthStart(); // First of current month in IST — key for @@unique
   const statement = await computeNetWorthStatement(userId);

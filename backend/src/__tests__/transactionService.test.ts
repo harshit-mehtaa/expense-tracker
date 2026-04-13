@@ -754,6 +754,12 @@ describe('getAllTransactionsForExport', () => {
     expect(call.where.categoryId).toBe('cat-1');
   });
 
+  it('applies bankAccountId filter (line 477)', async () => {
+    await getAllTransactionsForExport('u1', 'MEMBER', { bankAccountId: 'acct-99' });
+    const call = txMock.findMany.mock.calls[0][0];
+    expect(call.where.bankAccountId).toBe('acct-99');
+  });
+
   it('applies types filter', async () => {
     await getAllTransactionsForExport('u1', 'MEMBER', { types: ['INCOME', 'EXPENSE'] });
     const call = txMock.findMany.mock.calls[0][0];
@@ -847,6 +853,17 @@ describe('buildCsv', () => {
     const csv = buildCsv([makeRow({ bankAccount: null })]);
     expect(csv).toBeDefined();
     expect(csv).not.toContain('undefined');
+  });
+
+  it('renders empty string for null paymentMode via ?? operator (line 526)', () => {
+    const csv = buildCsv([makeRow({ paymentMode: null })]);
+    // paymentMode is column 7 (0-indexed 6): null → escape('') → ""
+    expect(csv).not.toContain('null');
+    expect(csv).not.toContain('undefined');
+    // The paymentMode column renders as an empty quoted field
+    const dataLine = csv.split('\r\n')[1];
+    const cols = dataLine.split(',');
+    expect(cols[6]).toBe('""'); // paymentMode column is empty quoted string
   });
 
   it('joins multiple tags with semicolons', () => {

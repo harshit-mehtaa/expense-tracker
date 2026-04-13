@@ -630,4 +630,58 @@ describe('getUpcomingAlerts', () => {
       expect(alert!.entityId).toBe('b-jan-q');
     });
   });
+
+  // Jul-Sep quarter branch: currentMonth0 >= 6 && <= 8
+  describe('QUARTERLY budget in August — triggers Jul-Sep qStart/qEnd branch', () => {
+    const AUG_DATE = new Date('2025-08-15T12:00:00.000Z'); // month index = 7
+
+    beforeAll(() => {
+      vi.setSystemTime(AUG_DATE);
+    });
+
+    afterAll(() => {
+      vi.setSystemTime(PINNED_DATE); // restore outer April pin
+    });
+
+    beforeEach(resetAllMocks);
+
+    it('QUARTERLY budget ≥80% spent in August → BUDGET_ALERT (Jul-Sep branch)', async () => {
+      budgetMock.findMany.mockResolvedValue([{
+        id: 'b-aug-q', userId: 'u1', amount: 15000, period: 'QUARTERLY', categoryId: 'cat-aug',
+        category: { name: 'Travel' },
+      }]);
+      txMock.groupBy.mockResolvedValue([{ categoryId: 'cat-aug', _sum: { amount: 13000 } }]);
+      const r = await getUpcomingAlerts('u1', 'MEMBER');
+      const alert = r.find((a: any) => a.type === 'BUDGET_ALERT');
+      expect(alert).toBeDefined();
+      expect(alert!.entityId).toBe('b-aug-q');
+    });
+  });
+
+  // Oct-Dec quarter branch: currentMonth0 >= 9 && <= 11
+  describe('QUARTERLY budget in October — triggers Oct-Dec qStart/qEnd branch', () => {
+    const OCT_DATE = new Date('2025-10-15T12:00:00.000Z'); // month index = 9
+
+    beforeAll(() => {
+      vi.setSystemTime(OCT_DATE);
+    });
+
+    afterAll(() => {
+      vi.setSystemTime(PINNED_DATE); // restore outer April pin
+    });
+
+    beforeEach(resetAllMocks);
+
+    it('QUARTERLY budget ≥80% spent in October → BUDGET_ALERT (Oct-Dec branch)', async () => {
+      budgetMock.findMany.mockResolvedValue([{
+        id: 'b-oct-q', userId: 'u1', amount: 18000, period: 'QUARTERLY', categoryId: 'cat-oct',
+        category: { name: 'Shopping' },
+      }]);
+      txMock.groupBy.mockResolvedValue([{ categoryId: 'cat-oct', _sum: { amount: 15500 } }]);
+      const r = await getUpcomingAlerts('u1', 'MEMBER');
+      const alert = r.find((a: any) => a.type === 'BUDGET_ALERT');
+      expect(alert).toBeDefined();
+      expect(alert!.entityId).toBe('b-oct-q');
+    });
+  });
 });
