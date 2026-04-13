@@ -8,7 +8,7 @@ import { useSearchParams } from 'react-router-dom';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
-import { Receipt, Upload, X, CheckCircle, AlertCircle, Download, Pencil, Trash2, SlidersHorizontal, ChevronDown } from 'lucide-react';
+import { Receipt, Upload, X, CheckCircle, AlertCircle, Download, Pencil, Trash2, SlidersHorizontal, ChevronDown, Repeat } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -19,6 +19,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useBudgetsVsActuals, type BudgetActualItem } from '@/hooks/useBudgetsVsActuals';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
+import RecurringRulesPage from '@/pages/transactions/RecurringRules';
 
 interface Transaction {
   id: string;
@@ -756,6 +757,15 @@ export default function TransactionsPage() {
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [isBulkCategorizing, setIsBulkCategorizing] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get('tab') ?? 'transactions';
+  function setActiveTab(tab: 'transactions' | 'recurring') {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (tab === 'transactions') next.delete('tab');
+      else next.set('tab', tab);
+      return next;
+    }, { replace: true });
+  }
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState<TxFilters>({
     ...EMPTY_FILTERS,
@@ -787,7 +797,12 @@ export default function TransactionsPage() {
       setShowFilters(true);
     }
     if (searchParams.get('add') || searchParams.get('startDate') || searchParams.get('endDate')) {
-      setSearchParams({}, { replace: true });
+      setSearchParams((prev) => {
+        const next = new URLSearchParams();
+        const tab = prev.get('tab');
+        if (tab) next.set('tab', tab);
+        return next;
+      }, { replace: true });
     }
   }, [searchParams, setSearchParams]);
 
@@ -906,34 +921,38 @@ export default function TransactionsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Transactions</h1>
-          <p className="text-muted-foreground">
-            FY {selectedFY} · {total} transactions
-            {isAdmin && viewUserId
-              ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
-              : isAdmin ? ' · All Family' : ''}
-          </p>
-          {isAdmin && !isMembersLoading && (
-            <div className="flex items-center gap-2 mt-2">
-              <label htmlFor="tx-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
-              {isMembersError ? (
-                <span className="text-xs text-destructive">Could not load members</span>
-              ) : (
-                <select
-                  id="tx-member-select"
-                  value={viewUserId ?? ''}
-                  onChange={(e) => setViewUserId(e.target.value || undefined)}
-                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
-                >
-                  <option value="">All Family</option>
-                  {members.map((m) => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </select>
+          {activeTab === 'transactions' && (
+            <>
+              <p className="text-muted-foreground">
+                FY {selectedFY} · {total} transactions
+                {isAdmin && viewUserId
+                  ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
+                  : isAdmin ? ' · All Family' : ''}
+              </p>
+              {isAdmin && !isMembersLoading && (
+                <div className="flex items-center gap-2 mt-2">
+                  <label htmlFor="tx-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+                  {isMembersError ? (
+                    <span className="text-xs text-destructive">Could not load members</span>
+                  ) : (
+                    <select
+                      id="tx-member-select"
+                      value={viewUserId ?? ''}
+                      onChange={(e) => setViewUserId(e.target.value || undefined)}
+                      className="rounded-md border bg-background px-3 py-1.5 text-sm"
+                    >
+                      <option value="">All Family</option>
+                      {members.map((m) => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
               )}
-            </div>
+            </>
           )}
         </div>
-        <div className="flex flex-wrap gap-2">
+        {activeTab === 'transactions' && <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setShowFilters((v) => !v)} className="relative">
             <SlidersHorizontal className="h-4 w-4 sm:mr-2" />
             <span className="hidden sm:inline">Filters</span>
@@ -953,11 +972,32 @@ export default function TransactionsPage() {
               <span className="hidden sm:inline">Import CSV</span>
             </Button>
           )}
-        </div>
+        </div>}
       </div>
 
+      {/* Tab switcher */}
+      <div className="flex border-b border-border">
+        {(['transactions', 'recurring'] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={cn(
+              'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+              activeTab === tab
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30',
+            )}
+          >
+            {tab === 'transactions' ? <Receipt className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
+            {tab === 'transactions' ? 'Transactions' : 'Recurring'}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'recurring' && <RecurringRulesPage />}
+
       {/* Filter bar */}
-      {showFilters && (
+      {activeTab === 'transactions' && showFilters && (
         <div className="rounded-xl border border-border bg-card p-4 space-y-4">
           {/* Row 1: Search */}
           <Input
@@ -1093,7 +1133,7 @@ export default function TransactionsPage() {
       )}
 
       {/* Bulk action bar */}
-      {selectedIds.size > 0 && (
+      {activeTab === 'transactions' && selectedIds.size > 0 && (
         <div className="rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 flex items-center gap-3 flex-wrap">
           <span className="text-sm font-medium text-primary">{selectedIds.size} selected</span>
           <div className="flex items-center gap-2 ml-auto flex-wrap">
@@ -1128,7 +1168,7 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      {transactions.length === 0 ? (
+      {activeTab === 'transactions' && (transactions.length === 0 ? (
         <EmptyState
           icon={Receipt}
           title="No transactions yet"
@@ -1300,9 +1340,9 @@ export default function TransactionsPage() {
             );
           })}
         </div>
-      </>)}
+      </>))}
 
-      {hasNextPage && (
+      {activeTab === 'transactions' && hasNextPage && (
         <div className="flex justify-center pt-2">
           <Button variant="outline" onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
             {isFetchingNextPage ? 'Loading…' : `Load more (${transactions.length} of ${total} shown)`}
