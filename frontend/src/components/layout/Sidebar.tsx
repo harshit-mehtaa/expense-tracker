@@ -31,12 +31,11 @@ const NAV_ITEMS = [
   { to: '/budgets', icon: Target, label: 'Budgets' },
   { to: '/loans', icon: CreditCard, label: 'Loans & EMIs' },
   { to: '/tax', icon: IndianRupee, label: 'Tax Centre' },
-  { to: '/profit-loss', icon: FileText, label: 'P&L Report' },
+  { to: '/reports', icon: FileText, label: 'Reports' },
 ];
 
 const ADMIN_NAV_ITEMS = [
   { to: '/family', icon: Users, label: 'Family Members' },
-  { to: '/reports', icon: FileText, label: 'Reports' },
 ];
 
 function NavItem({ to, icon: Icon, label, exact }: { to: string; icon: ElementType; label: string; exact?: boolean }) {

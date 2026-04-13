@@ -18,7 +18,6 @@ import GoldPage from '@/pages/investments/Gold';
 import RealEstatePage from '@/pages/investments/RealEstate';
 import RecurringRulesPage from '@/pages/transactions/RecurringRules';
 import ChangePasswordPage from '@/pages/ChangePassword';
-import ProfitLossPage from '@/pages/ProfitLoss';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, user } = useAuth();
@@ -64,7 +63,7 @@ export default function App() {
         <Route path="budgets" element={<BudgetsPage />} />
         <Route path="loans/*" element={<LoansPage />} />
         <Route path="tax/*" element={<TaxCentrePage />} />
-        <Route path="profit-loss" element={<ProfitLossPage />} />
+        <Route path="profit-loss" element={<Navigate to="/reports" replace />} />
         <Route path="settings" element={<SettingsPage />} />
 
         {/* Admin-only routes */}
@@ -76,14 +75,7 @@ export default function App() {
             </AdminRoute>
           }
         />
-        <Route
-          path="reports"
-          element={
-            <AdminRoute>
-              <ReportsPage />
-            </AdminRoute>
-          }
-        />
+        <Route path="reports" element={<ReportsPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
