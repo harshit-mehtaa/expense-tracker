@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useFY } from '@/contexts/FYContext';
 import { taxApi } from '@/api/tax';
+import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { cn } from '@/lib/utils';
 import ScheduleCG from './ScheduleCG';
 import ScheduleOS from './ScheduleOS';
@@ -56,14 +57,20 @@ export default function TaxCentrePage() {
   const [hraResult, setHraResult] = useState<{ exempt: number; taxable: number } | null>(null);
   const [hraError, setHraError] = useState<string | null>(null);
 
+  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading } = useMemberSelector();
+
+  // For tax, viewUserId = undefined means "my own data" (admin defaults to self, not family aggregate)
+  // The save/edit profile form is only shown when viewing own data
+  const isViewingOther = isAdmin && viewUserId !== undefined;
+
   const { data: summary, isLoading: loadingSummary } = useQuery({
-    queryKey: ['tax-summary', selectedFY],
-    queryFn: () => taxApi.getSummary(selectedFY),
+    queryKey: ['tax-summary', selectedFY, viewUserId],
+    queryFn: () => taxApi.getSummary(selectedFY, viewUserId),
   });
 
   const { data: tracker80C } = useQuery({
-    queryKey: ['tax-80c', selectedFY],
-    queryFn: () => taxApi.get80CTracker(selectedFY),
+    queryKey: ['tax-80c', selectedFY, viewUserId],
+    queryFn: () => taxApi.get80CTracker(selectedFY, viewUserId),
   });
 
   const { data: advanceTax = [] } = useQuery({
@@ -72,8 +79,8 @@ export default function TaxCentrePage() {
   });
 
   const { data: profile } = useQuery({
-    queryKey: ['tax-profile', selectedFY],
-    queryFn: () => taxApi.getProfile(selectedFY),
+    queryKey: ['tax-profile', selectedFY, viewUserId],
+    queryFn: () => taxApi.getProfile(selectedFY, viewUserId),
   });
 
   const { register, handleSubmit, watch, formState: { isDirty } } = useForm<ProfileForm>({
@@ -86,8 +93,8 @@ export default function TaxCentrePage() {
   const saveMutation = useMutation({
     mutationFn: (data: ProfileForm) => taxApi.saveProfile(selectedFY, data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['tax-summary', selectedFY] });
-      qc.invalidateQueries({ queryKey: ['tax-profile', selectedFY] });
+      qc.invalidateQueries({ queryKey: ['tax-summary', selectedFY, viewUserId] });
+      qc.invalidateQueries({ queryKey: ['tax-profile', selectedFY, viewUserId] });
     },
   });
 
@@ -119,11 +126,36 @@ export default function TaxCentrePage() {
     { id: 'itr2', label: 'ITR-2 Overview' },
   ] as const;
 
+  const selectedMemberName = viewUserId
+    ? members.find((m) => m.id === viewUserId)?.name ?? 'Member'
+    : undefined;
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Tax Centre</h1>
-        <p className="text-muted-foreground text-sm mt-1">FY {selectedFY} · Indian Tax Planning</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Tax Centre</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            FY {selectedFY} · {isViewingOther ? `Viewing: ${selectedMemberName}` : 'Indian Tax Planning'}
+          </p>
+        </div>
+
+        {/* Member selector — visible to ADMIN only */}
+        {isAdmin && !isMembersLoading && members.length > 0 && (
+          <div className="flex items-center gap-2 shrink-0">
+            <Label className="text-sm text-muted-foreground whitespace-nowrap">Viewing:</Label>
+            <select
+              value={viewUserId ?? ''}
+              onChange={(e) => setViewUserId(e.target.value || undefined)}
+              className="rounded-md border bg-background px-3 py-1.5 text-sm min-w-[160px]"
+            >
+              <option value="">My Data</option>
+              {members.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
@@ -145,91 +177,108 @@ export default function TaxCentrePage() {
       {/* Tax Summary Tab */}
       {activeTab === 'summary' && (
         <div className="space-y-6">
-          {/* Profile Form */}
+          {/* Profile Form — read-only when viewing another member */}
           <div className="rounded-lg border bg-card p-6">
-            <h2 className="font-semibold mb-4">Income & Tax Profile</h2>
-            <form onSubmit={handleSubmit((data) => saveMutation.mutate(data))} className="space-y-4">
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                <div className="space-y-1 col-span-full md:col-span-1">
-                  <Label>Tax Regime</Label>
-                  <select {...register('regime')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
-                    <option value="OLD">Old Regime — with deductions</option>
-                    <option value="NEW">New Regime — lower slabs, fewer deductions</option>
-                  </select>
+            <h2 className="font-semibold mb-4">
+              {isViewingOther ? `${selectedMemberName}'s Income & Tax Profile` : 'Income & Tax Profile'}
+            </h2>
+            {isViewingOther ? (
+              /* Read-only view for another member's profile */
+              profile ? (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                  <div><span className="text-muted-foreground">Regime:</span> <span className="font-medium">{profile.regime ?? '—'}</span></div>
+                  <div><span className="text-muted-foreground">Gross Salary:</span> <span className="font-medium">₹{(profile.grossSalary ?? 0).toLocaleString('en-IN')}</span></div>
+                  <div><span className="text-muted-foreground">80C:</span> <span className="font-medium">₹{(profile.deduction80C ?? 0).toLocaleString('en-IN')}</span></div>
+                  <div><span className="text-muted-foreground">TDS Paid:</span> <span className="font-medium">₹{(profile.taxPaidTds ?? 0).toLocaleString('en-IN')}</span></div>
+                  <div><span className="text-muted-foreground">Advance Tax:</span> <span className="font-medium">₹{(profile.taxPaidAdvance ?? 0).toLocaleString('en-IN')}</span></div>
                 </div>
-                {selectedRegime === 'NEW' && (
-                  <div className="col-span-full rounded-md border border-amber-400 bg-amber-50 dark:bg-amber-950 px-4 py-2.5 text-sm text-amber-800 dark:text-amber-200">
-                    <strong>New Regime:</strong> Only ₹75,000 standard deduction applies. Deductions like 80C, 80D, HRA, Section 24(b), and NPS are <strong>not available</strong>.
+              ) : (
+                <p className="text-sm text-muted-foreground">No profile found for this member.</p>
+              )
+            ) : (
+              <form onSubmit={handleSubmit((data) => saveMutation.mutate(data))} className="space-y-4">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  <div className="space-y-1 col-span-full md:col-span-1">
+                    <Label>Tax Regime</Label>
+                    <select {...register('regime')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                      <option value="OLD">Old Regime — with deductions</option>
+                      <option value="NEW">New Regime — lower slabs, fewer deductions</option>
+                    </select>
                   </div>
-                )}
-                <div className="space-y-1">
-                  <Label>Gross Salary (₹)</Label>
-                  <Input {...register('grossSalary')} type="number" placeholder="Annual CTC" />
+                  {selectedRegime === 'NEW' && (
+                    <div className="col-span-full rounded-md border border-amber-400 bg-amber-50 dark:bg-amber-950 px-4 py-2.5 text-sm text-amber-800 dark:text-amber-200">
+                      <strong>New Regime:</strong> Only ₹75,000 standard deduction applies. Deductions like 80C, 80D, HRA, Section 24(b), and NPS are <strong>not available</strong>.
+                    </div>
+                  )}
+                  <div className="space-y-1">
+                    <Label>Gross Salary (₹)</Label>
+                    <Input {...register('grossSalary')} type="number" placeholder="Annual CTC" />
+                  </div>
+                  {/* Old-regime-only deductions — hidden when NEW regime selected */}
+                  {selectedRegime !== 'NEW' && (
+                    <>
+                      <div className="space-y-1">
+                        <Label>HRA Received (₹)</Label>
+                        <Input {...register('hraReceived')} type="number" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Rent Paid / Month (₹)</Label>
+                        <Input {...register('rentPaidMonthly')} type="number" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>City Type</Label>
+                        <select {...register('cityType')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                          <option value="METRO">Metro (Mumbai/Delhi/Kolkata/Chennai)</option>
+                          <option value="NON_METRO">Non-Metro</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label>80C — Investments &amp; Ins. (₹)</Label>
+                        <Input {...register('deduction80C')} type="number" max={150000} placeholder="Max ₹1,50,000" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>80D — Health Insurance (₹)</Label>
+                        <Input {...register('deduction80D')} type="number" placeholder="Self + parents" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Sec 24(b) — Home Loan Int. (₹)</Label>
+                        <Input {...register('deduction24B')} type="number" max={200000} placeholder="Max ₹2,00,000" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>80E — Education Loan Int. (₹)</Label>
+                        <Input {...register('deduction80E')} type="number" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>80G — Donations (₹)</Label>
+                        <Input {...register('deduction80G')} type="number" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>80CCD(1B) — NPS Extra (₹)</Label>
+                        <Input {...register('nps80Ccd1B')} type="number" max={50000} />
+                      </div>
+                    </>
+                  )}
+                  {/* Tax paid — applicable for both regimes */}
+                  <div className="space-y-1">
+                    <Label>TDS Deducted (₹)</Label>
+                    <Input {...register('taxPaidTds')} type="number" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Advance Tax Paid (₹)</Label>
+                    <Input {...register('taxPaidAdvance')} type="number" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Self Assessment Tax Paid (₹)</Label>
+                    <Input {...register('taxPaidSelfAssessment')} type="number" />
+                  </div>
                 </div>
-                {/* Old-regime-only deductions — hidden when NEW regime selected */}
-                {selectedRegime !== 'NEW' && (
-                  <>
-                    <div className="space-y-1">
-                      <Label>HRA Received (₹)</Label>
-                      <Input {...register('hraReceived')} type="number" />
-                    </div>
-                    <div className="space-y-1">
-                      <Label>Rent Paid / Month (₹)</Label>
-                      <Input {...register('rentPaidMonthly')} type="number" />
-                    </div>
-                    <div className="space-y-1">
-                      <Label>City Type</Label>
-                      <select {...register('cityType')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
-                        <option value="METRO">Metro (Mumbai/Delhi/Kolkata/Chennai)</option>
-                        <option value="NON_METRO">Non-Metro</option>
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <Label>80C — Investments &amp; Ins. (₹)</Label>
-                      <Input {...register('deduction80C')} type="number" max={150000} placeholder="Max ₹1,50,000" />
-                    </div>
-                    <div className="space-y-1">
-                      <Label>80D — Health Insurance (₹)</Label>
-                      <Input {...register('deduction80D')} type="number" placeholder="Self + parents" />
-                    </div>
-                    <div className="space-y-1">
-                      <Label>Sec 24(b) — Home Loan Int. (₹)</Label>
-                      <Input {...register('deduction24B')} type="number" max={200000} placeholder="Max ₹2,00,000" />
-                    </div>
-                    <div className="space-y-1">
-                      <Label>80E — Education Loan Int. (₹)</Label>
-                      <Input {...register('deduction80E')} type="number" />
-                    </div>
-                    <div className="space-y-1">
-                      <Label>80G — Donations (₹)</Label>
-                      <Input {...register('deduction80G')} type="number" />
-                    </div>
-                    <div className="space-y-1">
-                      <Label>80CCD(1B) — NPS Extra (₹)</Label>
-                      <Input {...register('nps80Ccd1B')} type="number" max={50000} />
-                    </div>
-                  </>
-                )}
-                {/* Tax paid — applicable for both regimes */}
-                <div className="space-y-1">
-                  <Label>TDS Deducted (₹)</Label>
-                  <Input {...register('taxPaidTds')} type="number" />
+                <div className="flex justify-end">
+                  <Button type="submit" disabled={saveMutation.isPending}>
+                    {saveMutation.isPending ? 'Saving…' : 'Calculate & Save'}
+                  </Button>
                 </div>
-                <div className="space-y-1">
-                  <Label>Advance Tax Paid (₹)</Label>
-                  <Input {...register('taxPaidAdvance')} type="number" />
-                </div>
-                <div className="space-y-1">
-                  <Label>Self Assessment Tax Paid (₹)</Label>
-                  <Input {...register('taxPaidSelfAssessment')} type="number" />
-                </div>
-              </div>
-              <div className="flex justify-end">
-                <Button type="submit" disabled={saveMutation.isPending}>
-                  {saveMutation.isPending ? 'Saving…' : 'Calculate & Save'}
-                </Button>
-              </div>
-            </form>
+              </form>
+            )}
           </div>
 
           {/* Old vs New Regime Comparison */}
@@ -301,7 +350,7 @@ export default function TaxCentrePage() {
       {/* 80C Tracker Tab */}
       {activeTab === '80c' && tracker80C && (
         <div className="space-y-6">
-          {selectedRegime === 'NEW' && (
+          {selectedRegime === 'NEW' && !isViewingOther && (
             <div className="rounded-lg border border-amber-400 bg-amber-50 dark:bg-amber-950 p-4 text-sm text-amber-800 dark:text-amber-200">
               <strong>Not applicable in New Regime.</strong> Section 80C deductions are not available under the New Tax Regime.
               Switch to Old Regime in your tax profile to benefit from these deductions.
@@ -461,7 +510,7 @@ export default function TaxCentrePage() {
       {activeTab === 'cg' && (
         <div className="rounded-lg border bg-card p-6">
           <h2 className="font-semibold mb-4">Schedule CG — Capital Gains</h2>
-          <ScheduleCG fy={selectedFY} />
+          <ScheduleCG fy={selectedFY} viewUserId={viewUserId} />
         </div>
       )}
 
@@ -469,7 +518,7 @@ export default function TaxCentrePage() {
       {activeTab === 'os' && (
         <div className="rounded-lg border bg-card p-6">
           <h2 className="font-semibold mb-4">Schedule OS — Income from Other Sources</h2>
-          <ScheduleOS fy={selectedFY} />
+          <ScheduleOS fy={selectedFY} viewUserId={viewUserId} />
         </div>
       )}
 
@@ -477,7 +526,7 @@ export default function TaxCentrePage() {
       {activeTab === 'hp' && (
         <div className="rounded-lg border bg-card p-6">
           <h2 className="font-semibold mb-4">Schedule HP — House Property</h2>
-          <ScheduleHP fy={selectedFY} />
+          <ScheduleHP fy={selectedFY} viewUserId={viewUserId} />
         </div>
       )}
 
@@ -485,7 +534,7 @@ export default function TaxCentrePage() {
       {activeTab === 'fa' && (
         <div className="rounded-lg border bg-card p-6">
           <h2 className="font-semibold mb-4">Schedule FA — Foreign Assets</h2>
-          <ScheduleFA fy={selectedFY} />
+          <ScheduleFA fy={selectedFY} viewUserId={viewUserId} />
         </div>
       )}
 
@@ -501,7 +550,7 @@ export default function TaxCentrePage() {
           <h2 className="font-semibold mb-4 hidden print:block">
             ITR-2 Schedule Overview — FY {selectedFY}
           </h2>
-          <ITR2Summary fy={selectedFY} />
+          <ITR2Summary fy={selectedFY} viewUserId={viewUserId} />
         </div>
       )}
     </div>

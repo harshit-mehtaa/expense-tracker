@@ -30,21 +30,22 @@ type EntryForm = z.infer<typeof entrySchema>;
 
 interface Props {
   fy: string;
+  viewUserId?: string;
 }
 
-export default function ScheduleHP({ fy }: Props) {
+export default function ScheduleHP({ fy, viewUserId }: Props) {
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
 
   const { data: entries = [] } = useQuery({
-    queryKey: ['hp-entries', fy],
-    queryFn: () => taxApi.listHouseProperty(fy),
+    queryKey: ['hp-entries', fy, viewUserId],
+    queryFn: () => taxApi.listHouseProperty(fy, viewUserId),
   });
 
   const { data: summary } = useQuery({
-    queryKey: ['hp-summary', fy],
-    queryFn: () => taxApi.getHousePropertySummary(fy),
+    queryKey: ['hp-summary', fy, viewUserId],
+    queryFn: () => taxApi.getHousePropertySummary(fy, viewUserId),
   });
 
   const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<EntryForm>({
@@ -55,9 +56,9 @@ export default function ScheduleHP({ fy }: Props) {
   const usage = watch('usage');
 
   const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ['hp-entries', fy] });
-    qc.invalidateQueries({ queryKey: ['hp-summary', fy] });
-    qc.invalidateQueries({ queryKey: ['itr2-summary', fy] });
+    qc.invalidateQueries({ queryKey: ['hp-entries', fy, viewUserId] });
+    qc.invalidateQueries({ queryKey: ['hp-summary', fy, viewUserId] });
+    qc.invalidateQueries({ queryKey: ['itr2-summary', fy, viewUserId] });
   };
 
   const createMutation = useMutation({
@@ -124,7 +125,7 @@ export default function ScheduleHP({ fy }: Props) {
                     {p.incomeFromHP < 0 ? '−' : ''}{formatCurrency(Math.abs(p.incomeFromHP))}
                     <span className="text-xs font-normal text-gray-400 ml-1">{p.incomeFromHP < 0 ? 'loss' : 'income'}</span>
                   </p>
-                  {raw && (
+                  {raw && !viewUserId && (
                     <div className="flex gap-2 text-xs">
                       <button onClick={() => startEdit(raw)} className="text-blue-600 hover:underline">Edit</button>
                       <button onClick={() => deleteMutation.mutate(p.id)} className="text-red-500 hover:underline">Delete</button>
@@ -163,15 +164,17 @@ export default function ScheduleHP({ fy }: Props) {
         </div>
       )}
 
-      {/* Add button */}
+      {/* Add button — hidden when viewing another member's data */}
       <div className="flex justify-between items-center">
         <h3 className="font-medium text-gray-700">House Properties</h3>
-        <button
-          onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
-          className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
-        >
-          + Add Property
-        </button>
+        {!viewUserId && (
+          <button
+            onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
+            className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+          >
+            + Add Property
+          </button>
+        )}
       </div>
 
       {/* Form */}

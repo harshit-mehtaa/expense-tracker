@@ -4,22 +4,11 @@ import { sendSuccess } from '../utils/response';
 import { requireAuth } from '../middleware/auth';
 import { computeNetWorthStatement, getProfitAndLoss } from '../services/dashboardService';
 import { prisma } from '../config/prisma';
-import { AppError } from '../utils/AppError';
 import { getFYRange, validateFY } from '../utils/financialYear';
+import { resolveTargetUserId } from '../utils/resolveTargetUserId';
 
 const router = Router();
 router.use(requireAuth);
-
-const CUID_RE = /^[a-z0-9]{20,30}$/i;
-
-async function resolveTargetUserId(req: Request): Promise<string | undefined> {
-  if (req.user!.role !== 'ADMIN' || !req.query.targetUserId) return undefined;
-  const raw = req.query.targetUserId as string;
-  if (!CUID_RE.test(raw)) throw AppError.badRequest('Invalid targetUserId format');
-  const target = await prisma.user.findFirst({ where: { id: raw, deletedAt: null } });
-  if (!target) throw AppError.notFound('User');
-  return raw;
-}
 
 router.get(
   '/spending-by-category',

@@ -6,12 +6,13 @@ const formatCurrency = formatINR;
 
 interface Props {
   fy: string;
+  viewUserId?: string;
 }
 
-export default function ITR2Summary({ fy }: Props) {
+export default function ITR2Summary({ fy, viewUserId }: Props) {
   const { data: summary, isLoading } = useQuery({
-    queryKey: ['itr2-summary', fy],
-    queryFn: () => taxApi.getITR2Summary(fy),
+    queryKey: ['itr2-summary', fy, viewUserId],
+    queryFn: () => taxApi.getITR2Summary(fy, viewUserId),
   });
 
   if (isLoading) return <div className="text-center py-8 text-gray-400">Loading ITR-2 summary...</div>;

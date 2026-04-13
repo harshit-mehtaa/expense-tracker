@@ -40,21 +40,22 @@ type EntryForm = z.infer<typeof entrySchema>;
 
 interface Props {
   fy: string;
+  viewUserId?: string;
 }
 
-export default function ScheduleCG({ fy }: Props) {
+export default function ScheduleCG({ fy, viewUserId }: Props) {
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
 
   const { data: entries = [] } = useQuery({
-    queryKey: ['cg-entries', fy],
-    queryFn: () => taxApi.listCapitalGains(fy),
+    queryKey: ['cg-entries', fy, viewUserId],
+    queryFn: () => taxApi.listCapitalGains(fy, viewUserId),
   });
 
   const { data: summary } = useQuery({
-    queryKey: ['cg-summary', fy],
-    queryFn: () => taxApi.getCapitalGainsSummary(fy),
+    queryKey: ['cg-summary', fy, viewUserId],
+    queryFn: () => taxApi.getCapitalGainsSummary(fy, viewUserId),
   });
 
   const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<EntryForm>({
@@ -65,9 +66,9 @@ export default function ScheduleCG({ fy }: Props) {
   const assetType = watch('assetType');
 
   const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ['cg-entries', fy] });
-    qc.invalidateQueries({ queryKey: ['cg-summary', fy] });
-    qc.invalidateQueries({ queryKey: ['itr2-summary', fy] });
+    qc.invalidateQueries({ queryKey: ['cg-entries', fy, viewUserId] });
+    qc.invalidateQueries({ queryKey: ['cg-summary', fy, viewUserId] });
+    qc.invalidateQueries({ queryKey: ['itr2-summary', fy, viewUserId] });
   };
 
   const createMutation = useMutation({
@@ -140,15 +141,17 @@ export default function ScheduleCG({ fy }: Props) {
         </div>
       )}
 
-      {/* Add button */}
+      {/* Add button — hidden when viewing another member's data */}
       <div className="flex justify-between items-center">
         <h3 className="font-medium text-gray-700">Capital Gain Entries</h3>
-        <button
-          onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
-          className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
-        >
-          + Add Entry
-        </button>
+        {!viewUserId && (
+          <button
+            onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
+            className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+          >
+            + Add Entry
+          </button>
+        )}
       </div>
 
       {/* Form */}
@@ -276,7 +279,7 @@ export default function ScheduleCG({ fy }: Props) {
                     </td>
                     <td className="py-2 pr-3 text-xs text-gray-500">{e.taxRate}</td>
                     <td className="py-2 flex gap-2">
-                      {raw && (
+                      {raw && !viewUserId && (
                         <>
                           <button onClick={() => startEdit(raw)} className="text-blue-600 hover:underline text-xs">Edit</button>
                           <button onClick={() => deleteMutation.mutate(e.id)} className="text-red-500 hover:underline text-xs">Delete</button>

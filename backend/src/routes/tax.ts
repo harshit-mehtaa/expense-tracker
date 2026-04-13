@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess } from '../utils/response';
 import { getCurrentFY } from '../utils/financialYear';
+import { resolveTargetUserId } from '../utils/resolveTargetUserId';
 import * as svc from '../services/taxService';
 import * as cgSvc from '../services/capitalGainsService';
 import * as osSvc from '../services/otherIncomeService';
@@ -19,9 +20,14 @@ function parseFY(raw: unknown): string {
 const router = Router();
 router.use(requireAuth);
 
+// ─── Tax Profile ──────────────────────────────────────────────────────────────
+
 router.get('/profile', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
-  const profile = await svc.getTaxProfile(req.user!.userId, fy);
+  const { userId, role } = req.user!;
+  const targetUserId = await resolveTargetUserId(req);
+  const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
+  const profile = await svc.getTaxProfile(effectiveUserId, fy);
   sendSuccess(res, profile);
 }));
 
@@ -48,23 +54,37 @@ router.post('/profile', asyncHandler(async (req, res) => {
   sendSuccess(res, profile);
 }));
 
+// ─── Tax Summary ──────────────────────────────────────────────────────────────
+
 router.get('/summary', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
-  const summary = await svc.getTaxSummary(req.user!.userId, fy);
+  const { userId, role } = req.user!;
+  const targetUserId = await resolveTargetUserId(req);
+  const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
+  const summary = await svc.getTaxSummary(effectiveUserId, fy);
   sendSuccess(res, summary);
 }));
 
+// ─── 80C Tracker ─────────────────────────────────────────────────────────────
+
 router.get('/80c-tracker', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
-  const tracker = await svc.get80CTracker(req.user!.userId, fy);
+  const { userId, role } = req.user!;
+  const targetUserId = await resolveTargetUserId(req);
+  const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
+  const tracker = await svc.get80CTracker(effectiveUserId, fy);
   sendSuccess(res, tracker);
 }));
+
+// ─── Advance Tax Calendar (not user-scoped — universal data) ─────────────────
 
 router.get('/advance-tax-calendar', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
   const calendar = await svc.getAdvanceTaxCalendar(fy);
   sendSuccess(res, calendar);
 }));
+
+// ─── HRA Calculator (pure calculation — not user-scoped) ─────────────────────
 
 router.get('/hra-calculator', asyncHandler(async (req, res) => {
   const { basicSalary, hraReceived, rentPaid, city } = z.object({
@@ -100,13 +120,19 @@ const cgEntrySchema = z.object({
 
 router.get('/capital-gains', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
-  const entries = await cgSvc.listCapitalGains(req.user!.userId, fy);
+  const { userId, role } = req.user!;
+  const targetUserId = await resolveTargetUserId(req);
+  const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
+  const entries = await cgSvc.listCapitalGains(effectiveUserId, fy);
   sendSuccess(res, entries);
 }));
 
 router.get('/capital-gains/summary', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
-  const summary = await cgSvc.calcCapitalGainsSummary(req.user!.userId, fy);
+  const { userId, role } = req.user!;
+  const targetUserId = await resolveTargetUserId(req);
+  const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
+  const summary = await cgSvc.calcCapitalGainsSummary(effectiveUserId, fy);
   sendSuccess(res, summary);
 }));
 
@@ -142,15 +168,22 @@ const osEntrySchema = z.object({
 
 router.get('/other-income', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
-  const entries = await osSvc.listOtherIncome(req.user!.userId, fy);
+  const { userId, role } = req.user!;
+  const targetUserId = await resolveTargetUserId(req);
+  const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
+  const entries = await osSvc.listOtherIncome(effectiveUserId, fy);
   sendSuccess(res, entries);
 }));
 
 router.get('/other-income/summary', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
-  const profile = await svc.getTaxProfile(req.user!.userId, fy);
+  const { userId, role } = req.user!;
+  const targetUserId = await resolveTargetUserId(req);
+  const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
+  // Use effectiveUserId for profile lookup so regime reflects the target member's election
+  const profile = await svc.getTaxProfile(effectiveUserId, fy);
   const regime = (profile?.regime ?? 'OLD') as 'OLD' | 'NEW';
-  const summary = await osSvc.calcOtherIncomeSummary(req.user!.userId, fy, regime);
+  const summary = await osSvc.calcOtherIncomeSummary(effectiveUserId, fy, regime);
   sendSuccess(res, summary);
 }));
 
@@ -189,15 +222,22 @@ const hpEntrySchema = z.object({
 
 router.get('/house-property', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
-  const entries = await hpSvc.listHouseProperties(req.user!.userId, fy);
+  const { userId, role } = req.user!;
+  const targetUserId = await resolveTargetUserId(req);
+  const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
+  const entries = await hpSvc.listHouseProperties(effectiveUserId, fy);
   sendSuccess(res, entries);
 }));
 
 router.get('/house-property/summary', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
-  const profile = await svc.getTaxProfile(req.user!.userId, fy);
+  const { userId, role } = req.user!;
+  const targetUserId = await resolveTargetUserId(req);
+  const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
+  // Use effectiveUserId for profile lookup so regime reflects the target member's election
+  const profile = await svc.getTaxProfile(effectiveUserId, fy);
   const regime = (profile?.regime ?? 'OLD') as 'OLD' | 'NEW';
-  const summary = await hpSvc.calcHousePropertyIncome(req.user!.userId, fy, regime);
+  const summary = await hpSvc.calcHousePropertyIncome(effectiveUserId, fy, regime);
   sendSuccess(res, summary);
 }));
 
@@ -236,13 +276,19 @@ const faEntrySchema = z.object({
 
 router.get('/foreign-assets', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
-  const entries = await faSvc.listForeignAssets(req.user!.userId, fy);
+  const { userId, role } = req.user!;
+  const targetUserId = await resolveTargetUserId(req);
+  const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
+  const entries = await faSvc.listForeignAssets(effectiveUserId, fy);
   sendSuccess(res, entries);
 }));
 
 router.get('/foreign-assets/summary', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
-  const summary = await faSvc.getForeignAssetSummary(req.user!.userId, fy);
+  const { userId, role } = req.user!;
+  const targetUserId = await resolveTargetUserId(req);
+  const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
+  const summary = await faSvc.getForeignAssetSummary(effectiveUserId, fy);
   sendSuccess(res, summary);
 }));
 
@@ -269,7 +315,10 @@ router.delete('/foreign-assets/:id', asyncHandler(async (req, res) => {
 
 router.get('/itr2-summary', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
-  const summary = await svc.getITR2Summary(req.user!.userId, fy);
+  const { userId, role } = req.user!;
+  const targetUserId = await resolveTargetUserId(req);
+  const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
+  const summary = await svc.getITR2Summary(effectiveUserId, fy);
   sendSuccess(res, summary);
 }));
 

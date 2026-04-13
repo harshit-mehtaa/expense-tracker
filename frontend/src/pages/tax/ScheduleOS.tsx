@@ -32,21 +32,22 @@ type EntryForm = z.infer<typeof entrySchema>;
 
 interface Props {
   fy: string;
+  viewUserId?: string;
 }
 
-export default function ScheduleOS({ fy }: Props) {
+export default function ScheduleOS({ fy, viewUserId }: Props) {
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
 
   const { data: entries = [] } = useQuery({
-    queryKey: ['os-entries', fy],
-    queryFn: () => taxApi.listOtherIncome(fy),
+    queryKey: ['os-entries', fy, viewUserId],
+    queryFn: () => taxApi.listOtherIncome(fy, viewUserId),
   });
 
   const { data: summary } = useQuery({
-    queryKey: ['os-summary', fy],
-    queryFn: () => taxApi.getOtherIncomeSummary(fy),
+    queryKey: ['os-summary', fy, viewUserId],
+    queryFn: () => taxApi.getOtherIncomeSummary(fy, viewUserId),
   });
 
   const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<EntryForm>({
@@ -55,9 +56,9 @@ export default function ScheduleOS({ fy }: Props) {
   });
 
   const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ['os-entries', fy] });
-    qc.invalidateQueries({ queryKey: ['os-summary', fy] });
-    qc.invalidateQueries({ queryKey: ['itr2-summary', fy] });
+    qc.invalidateQueries({ queryKey: ['os-entries', fy, viewUserId] });
+    qc.invalidateQueries({ queryKey: ['os-summary', fy, viewUserId] });
+    qc.invalidateQueries({ queryKey: ['itr2-summary', fy, viewUserId] });
   };
 
   const createMutation = useMutation({
@@ -158,15 +159,17 @@ export default function ScheduleOS({ fy }: Props) {
         </div>
       )}
 
-      {/* Add button */}
+      {/* Add button — hidden when viewing another member's data */}
       <div className="flex justify-between items-center">
         <h3 className="font-medium text-gray-700">Income from Other Sources</h3>
-        <button
-          onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
-          className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
-        >
-          + Add Entry
-        </button>
+        {!viewUserId && (
+          <button
+            onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
+            className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+          >
+            + Add Entry
+          </button>
+        )}
       </div>
 
       {/* Form */}
@@ -242,8 +245,12 @@ export default function ScheduleOS({ fy }: Props) {
                   <td className="py-2 pr-3 text-right">{formatCurrency(Number(e.amount))}</td>
                   <td className="py-2 pr-3 text-right text-gray-500">{e.tdsDeducted ? formatCurrency(Number(e.tdsDeducted)) : '—'}</td>
                   <td className="py-2 flex gap-2">
-                    <button onClick={() => startEdit(e)} className="text-blue-600 hover:underline text-xs">Edit</button>
-                    <button onClick={() => deleteMutation.mutate(e.id)} className="text-red-500 hover:underline text-xs">Delete</button>
+                    {!viewUserId && (
+                      <>
+                        <button onClick={() => startEdit(e)} className="text-blue-600 hover:underline text-xs">Edit</button>
+                        <button onClick={() => deleteMutation.mutate(e.id)} className="text-red-500 hover:underline text-xs">Delete</button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}

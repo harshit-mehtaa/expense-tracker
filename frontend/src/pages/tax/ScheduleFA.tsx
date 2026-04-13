@@ -33,21 +33,22 @@ type EntryForm = z.infer<typeof entrySchema>;
 
 interface Props {
   fy: string;
+  viewUserId?: string;
 }
 
-export default function ScheduleFA({ fy }: Props) {
+export default function ScheduleFA({ fy, viewUserId }: Props) {
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
 
   const { data: entries = [] } = useQuery({
-    queryKey: ['fa-entries', fy],
-    queryFn: () => taxApi.listForeignAssets(fy),
+    queryKey: ['fa-entries', fy, viewUserId],
+    queryFn: () => taxApi.listForeignAssets(fy, viewUserId),
   });
 
   const { data: summary } = useQuery({
-    queryKey: ['fa-summary', fy],
-    queryFn: () => taxApi.getForeignAssetSummary(fy),
+    queryKey: ['fa-summary', fy, viewUserId],
+    queryFn: () => taxApi.getForeignAssetSummary(fy, viewUserId),
   });
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm<EntryForm>({
@@ -56,8 +57,8 @@ export default function ScheduleFA({ fy }: Props) {
   });
 
   const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ['fa-entries', fy] });
-    qc.invalidateQueries({ queryKey: ['fa-summary', fy] });
+    qc.invalidateQueries({ queryKey: ['fa-entries', fy, viewUserId] });
+    qc.invalidateQueries({ queryKey: ['fa-summary', fy, viewUserId] });
     // Note: 'itr2-summary' is intentionally NOT invalidated here.
     // Schedule FA is disclosure-only and has no effect on ITR-2 computed tax totals.
   };
@@ -137,15 +138,17 @@ export default function ScheduleFA({ fy }: Props) {
         </div>
       )}
 
-      {/* Add button */}
+      {/* Add button — hidden when viewing another member's data */}
       <div className="flex justify-between items-center">
         <h3 className="font-medium text-gray-700">Foreign Asset Disclosures</h3>
-        <button
-          onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
-          className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
-        >
-          + Add Asset
-        </button>
+        {!viewUserId && (
+          <button
+            onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
+            className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+          >
+            + Add Asset
+          </button>
+        )}
       </div>
 
       {/* Form */}
@@ -235,8 +238,12 @@ export default function ScheduleFA({ fy }: Props) {
                     {e.incomeAccruedINR ? formatCurrency(Number(e.incomeAccruedINR)) : '—'}
                   </td>
                   <td className="py-2 flex gap-2">
-                    <button onClick={() => startEdit(e)} className="text-blue-600 hover:underline text-xs">Edit</button>
-                    <button onClick={() => deleteMutation.mutate(e.id)} className="text-red-500 hover:underline text-xs">Delete</button>
+                    {!viewUserId && (
+                      <>
+                        <button onClick={() => startEdit(e)} className="text-blue-600 hover:underline text-xs">Edit</button>
+                        <button onClick={() => deleteMutation.mutate(e.id)} className="text-red-500 hover:underline text-xs">Delete</button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}
