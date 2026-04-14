@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
+import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { investmentsApi } from '@/api/investments';
 
 const GOLD_TYPES: Record<string, string> = {
@@ -32,24 +33,32 @@ export default function GoldPage() {
   const [editingGoldId, setEditingGoldId] = useState<string | null>(null);
   const [editGoldValue, setEditGoldValue] = useState('');
 
-  const { data: goldData } = useQuery({ queryKey: ['gold'], queryFn: investmentsApi.getGold });
+  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
+  const isViewingFamilyWide = isAdmin && !viewUserId;
+
+  const { data: goldData } = useQuery({
+    queryKey: ['gold', viewUserId],
+    queryFn: () => investmentsApi.getGold(viewUserId ? { targetUserId: viewUserId } : undefined),
+  });
 
   const goldForm = useForm<GoldForm>({ resolver: zodResolver(goldSchema), defaultValues: { type: 'PHYSICAL' } });
 
+  const invalidateGold = () => qc.invalidateQueries({ queryKey: ['gold'] });
+
   const createGoldMutation = useMutation({
     mutationFn: (data: GoldForm) => investmentsApi.createGold(data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['gold'] }); setShowGoldForm(false); goldForm.reset(); },
+    onSuccess: () => { invalidateGold(); setShowGoldForm(false); goldForm.reset(); },
   });
 
   const deleteGoldMutation = useMutation({
     mutationFn: investmentsApi.deleteGold,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['gold'] }),
+    onSuccess: () => invalidateGold(),
   });
 
   const updateGoldPriceMutation = useMutation({
     mutationFn: ({ id, price }: { id: string; price: number }) =>
       investmentsApi.updateGold(id, { currentPricePerGram: price }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['gold'] }); setEditingGoldId(null); },
+    onSuccess: () => { invalidateGold(); setEditingGoldId(null); },
   });
 
   const gold = goldData?.holdings ?? [];
@@ -58,8 +67,30 @@ export default function GoldPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Gold Holdings</h1>
-        <Button size="sm" onClick={() => setShowGoldForm(true)}><Plus className="h-4 w-4 mr-1" /> Add Gold</Button>
+        <div>
+          <h1 className="text-2xl font-bold">Gold Holdings</h1>
+          {isAdmin && !isMembersLoading && (
+            <div className="flex items-center gap-2 mt-2">
+              <label htmlFor="gold-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+              {isMembersError ? (
+                <span className="text-xs text-destructive">Could not load members</span>
+              ) : (
+                <select
+                  id="gold-member-select"
+                  value={viewUserId ?? ''}
+                  onChange={(e) => setViewUserId(e.target.value || undefined)}
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
+                >
+                  <option value="">All Family</option>
+                  {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              )}
+            </div>
+          )}
+        </div>
+        {!isViewingFamilyWide && (
+          <Button size="sm" onClick={() => setShowGoldForm(true)}><Plus className="h-4 w-4 mr-1" /> Add Gold</Button>
+        )}
       </div>
 
       {goldSummary && (
@@ -93,10 +124,15 @@ export default function GoldPage() {
                   {GOLD_TYPES[h.type] ?? h.type}
                 </span>
                 {h.description && <p className="text-sm mt-1">{h.description}</p>}
+                {isViewingFamilyWide && (h as any).userName && (
+                  <p className="text-xs text-muted-foreground mt-0.5">{(h as any).userName}</p>
+                )}
               </div>
-              <Button variant="ghost" size="icon" onClick={() => deleteGoldMutation.mutate(h.id)}>
-                <Trash2 className="h-4 w-4 text-destructive" />
-              </Button>
+              {!isViewingFamilyWide && (
+                <Button variant="ghost" size="icon" onClick={() => deleteGoldMutation.mutate(h.id)}>
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div><p className="text-muted-foreground">Quantity</p><p className="font-semibold">{h.quantityGrams}g</p></div>
@@ -104,7 +140,7 @@ export default function GoldPage() {
               <div><p className="text-muted-foreground">Buy Rate</p><p>₹{h.purchasePricePerGram.toLocaleString('en-IN')}/g</p></div>
               <div>
                 <p className="text-muted-foreground">Current Rate</p>
-                {editingGoldId === h.id ? (
+                {!isViewingFamilyWide && editingGoldId === h.id ? (
                   <div className="flex items-center gap-1 mt-0.5">
                     <Input
                       type="number"
@@ -127,9 +163,11 @@ export default function GoldPage() {
                 ) : (
                   <div className="flex items-center gap-1 group">
                     <p>₹{h.currentPricePerGram.toLocaleString('en-IN')}/g</p>
-                    <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setEditingGoldId(h.id); setEditGoldValue(String(h.currentPricePerGram)); }} title="Update price">
-                      <Pencil className="h-3 w-3" />
-                    </Button>
+                    {!isViewingFamilyWide && (
+                      <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setEditingGoldId(h.id); setEditGoldValue(String(h.currentPricePerGram)); }} title="Update price">
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>

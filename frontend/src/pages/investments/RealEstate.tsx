@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
+import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { investmentsApi } from '@/api/investments';
 
 const PROPERTY_TYPES: Record<string, string> = {
@@ -33,19 +34,27 @@ export default function RealEstatePage() {
   const [editingREId, setEditingREId] = useState<string | null>(null);
   const [editREValue, setEditREValue] = useState('');
 
-  const { data: reData } = useQuery({ queryKey: ['realestate'], queryFn: investmentsApi.getRealEstate });
+  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
+  const isViewingFamilyWide = isAdmin && !viewUserId;
+
+  const { data: reData } = useQuery({
+    queryKey: ['realestate', viewUserId],
+    queryFn: () => investmentsApi.getRealEstate(viewUserId ? { targetUserId: viewUserId } : undefined),
+  });
 
   const propertyForm = useForm<PropertyForm>({ resolver: zodResolver(propertySchema), defaultValues: { propertyType: 'RESIDENTIAL' } });
+
+  const invalidateRE = () => qc.invalidateQueries({ queryKey: ['realestate'] });
 
   const updateREValueMutation = useMutation({
     mutationFn: ({ id, value }: { id: string; value: number }) =>
       investmentsApi.updateRealEstate(id, { currentValue: value }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['realestate'] }); setEditingREId(null); },
+    onSuccess: () => { invalidateRE(); setEditingREId(null); },
   });
 
   const createPropertyMutation = useMutation({
     mutationFn: (data: PropertyForm) => investmentsApi.createRealEstate(data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['realestate'] }); setShowPropertyForm(false); propertyForm.reset(); },
+    onSuccess: () => { invalidateRE(); setShowPropertyForm(false); propertyForm.reset(); },
   });
 
   const properties = reData?.properties ?? [];
@@ -54,8 +63,30 @@ export default function RealEstatePage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Real Estate</h1>
-        <Button size="sm" onClick={() => setShowPropertyForm(true)}><Plus className="h-4 w-4 mr-1" /> Add Property</Button>
+        <div>
+          <h1 className="text-2xl font-bold">Real Estate</h1>
+          {isAdmin && !isMembersLoading && (
+            <div className="flex items-center gap-2 mt-2">
+              <label htmlFor="re-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+              {isMembersError ? (
+                <span className="text-xs text-destructive">Could not load members</span>
+              ) : (
+                <select
+                  id="re-member-select"
+                  value={viewUserId ?? ''}
+                  onChange={(e) => setViewUserId(e.target.value || undefined)}
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
+                >
+                  <option value="">All Family</option>
+                  {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              )}
+            </div>
+          )}
+        </div>
+        {!isViewingFamilyWide && (
+          <Button size="sm" onClick={() => setShowPropertyForm(true)}><Plus className="h-4 w-4 mr-1" /> Add Property</Button>
+        )}
       </div>
 
       {reSummary && properties.length > 0 && (
@@ -89,13 +120,16 @@ export default function RealEstatePage() {
                 </span>
                 <h3 className="font-semibold mt-1">{p.propertyName}</h3>
                 <p className="text-sm text-muted-foreground">{p.location}</p>
+                {isViewingFamilyWide && p.userName && (
+                  <p className="text-xs text-muted-foreground mt-0.5">{p.userName}</p>
+                )}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div><p className="text-muted-foreground">Purchase Price</p><INRDisplay amount={p.purchasePrice} /></div>
               <div>
                 <p className="text-muted-foreground">Current Value</p>
-                {editingREId === p.id ? (
+                {!isViewingFamilyWide && editingREId === p.id ? (
                   <div className="flex items-center gap-1 mt-0.5">
                     <Input
                       type="number"
@@ -119,9 +153,11 @@ export default function RealEstatePage() {
                 ) : (
                   <div className="flex items-center gap-1 group">
                     <INRDisplay amount={p.currentValue} className="text-green-600 font-semibold" />
-                    <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setEditingREId(p.id); setEditREValue(String(p.currentValue)); }} title="Update value">
-                      <Pencil className="h-3 w-3" />
-                    </Button>
+                    {!isViewingFamilyWide && (
+                      <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setEditingREId(p.id); setEditREValue(String(p.currentValue)); }} title="Update value">
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>

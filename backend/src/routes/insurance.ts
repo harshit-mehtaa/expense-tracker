@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendNoContent } from '../utils/response';
+import { resolveTargetUserId } from '../utils/resolveTargetUserId';
 import * as svc from '../services/insuranceService';
 
 const router = Router();
@@ -30,7 +31,8 @@ const policySchema = z.object({
 });
 
 router.get('/', asyncHandler(async (req, res) => {
-  const policies = await svc.getInsurancePolicies(req.user!.userId);
+  const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
+  const policies = await svc.getInsurancePolicies(targetUserId, req.user!.userId, req.user!.role);
   sendSuccess(res, policies);
 }));
 
@@ -40,7 +42,8 @@ router.get('/premium-calendar', asyncHandler(async (req, res) => {
 }));
 
 router.get('/80d-summary', asyncHandler(async (req, res) => {
-  const summary = await svc.get80DSummary(req.user!.userId);
+  const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
+  const summary = await svc.get80DSummary(targetUserId ?? req.user!.userId, req.user!.userId, req.user!.role);
   sendSuccess(res, summary);
 }));
 

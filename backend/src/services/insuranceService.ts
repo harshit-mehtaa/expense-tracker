@@ -2,11 +2,19 @@ import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import type { Prisma } from '@prisma/client';
 
-export async function getInsurancePolicies(userId: string) {
-  return prisma.insurancePolicy.findMany({
-    where: { userId },
-    orderBy: { premiumDueDate: 'asc' },
+export async function getInsurancePolicies(userId: string | undefined, requesterId: string, requesterRole: string) {
+  if (requesterRole !== 'ADMIN') {
+    return prisma.insurancePolicy.findMany({ where: { userId: requesterId }, orderBy: { premiumDueDate: 'asc' } });
+  }
+  if (userId) {
+    return prisma.insurancePolicy.findMany({ where: { userId }, orderBy: { premiumDueDate: 'asc' } });
+  }
+  const rows = await prisma.insurancePolicy.findMany({
+    where: { user: { isActive: true, deletedAt: null } },
+    include: { user: { select: { name: true } } },
+    orderBy: [{ user: { name: 'asc' } }, { premiumDueDate: 'asc' }],
   });
+  return rows.map(({ user, ...rest }) => ({ ...rest, userName: user?.name ?? '' }));
 }
 
 export async function getPremiumCalendar(userId: string) {
@@ -41,8 +49,9 @@ export async function deleteInsurancePolicy(userId: string, id: string) {
   return prisma.insurancePolicy.delete({ where: { id } });
 }
 
-export async function get80DSummary(userId: string) {
-  const policies = await prisma.insurancePolicy.findMany({ where: { userId, is80dEligible: true } });
+export async function get80DSummary(userId: string, requesterId: string, requesterRole: string) {
+  const effectiveUserId = requesterRole === 'ADMIN' && userId ? userId : requesterId;
+  const policies = await prisma.insurancePolicy.findMany({ where: { userId: effectiveUserId, is80dEligible: true } });
 
   let selfFamilyPremium = 0;
   let parentsPremium = 0; // Simplified: user flags which policies are for parents via notes

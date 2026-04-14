@@ -20,6 +20,9 @@ vi.mock('../config/prisma', () => {
       update: vi.fn(),
       delete: vi.fn(),
     },
+    user: {
+      findFirst: vi.fn(),
+    },
   };
   return { default: mockPrisma, prisma: mockPrisma };
 });
@@ -66,13 +69,33 @@ beforeEach(() => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('getInsurancePolicies', () => {
-  it('queries by userId ordered by premiumDueDate', async () => {
-    const result = await getInsurancePolicies('u1');
+  it('MEMBER: scopes to requesterId, ordered by premiumDueDate', async () => {
+    const result = await getInsurancePolicies(undefined, 'u1', 'MEMBER');
     expect(policyMock.findMany).toHaveBeenCalledWith({
       where: { userId: 'u1' },
       orderBy: { premiumDueDate: 'asc' },
     });
     expect(result).toHaveLength(1);
+  });
+
+  it('ADMIN with userId: scopes to specified member', async () => {
+    await getInsurancePolicies('u2', 'admin-1', 'ADMIN');
+    expect(policyMock.findMany).toHaveBeenCalledWith({
+      where: { userId: 'u2' },
+      orderBy: { premiumDueDate: 'asc' },
+    });
+  });
+
+  it('ADMIN with undefined userId: family-wide query, includes user name', async () => {
+    policyMock.findMany.mockResolvedValueOnce([
+      { ...MOCK_POLICY, user: { name: 'Alice' } },
+    ]);
+    const result = await getInsurancePolicies(undefined, 'admin-1', 'ADMIN');
+    const call = policyMock.findMany.mock.calls[0][0];
+    expect(call.where).toEqual({ user: { isActive: true, deletedAt: null } });
+    expect(call.include).toEqual({ user: { select: { name: true } } });
+    expect((result[0] as any).userName).toBe('Alice');
+    expect((result[0] as any).user).toBeUndefined();
   });
 });
 
@@ -183,7 +206,7 @@ describe('getPremiumCalendar', () => {
 describe('get80DSummary', () => {
   it('only queries is80dEligible policies', async () => {
     policyMock.findMany.mockResolvedValue([]);
-    await get80DSummary('u1');
+    await get80DSummary('u1', 'u1', 'MEMBER');
     expect(policyMock.findMany).toHaveBeenCalledWith({
       where: { userId: 'u1', is80dEligible: true },
     });
@@ -193,7 +216,7 @@ describe('get80DSummary', () => {
     policyMock.findMany.mockResolvedValue([
       { ...MOCK_POLICY, premiumAmount: 1000, premiumFrequency: 'MONTHLY', isForParents: false },
     ]);
-    const result = await get80DSummary('u1');
+    const result = await get80DSummary('u1', 'u1', 'MEMBER');
     expect(result.selfFamily.paid).toBe(12000);
   });
 
@@ -201,7 +224,7 @@ describe('get80DSummary', () => {
     policyMock.findMany.mockResolvedValue([
       { ...MOCK_POLICY, premiumAmount: 3000, premiumFrequency: 'QUARTERLY', isForParents: false },
     ]);
-    const result = await get80DSummary('u1');
+    const result = await get80DSummary('u1', 'u1', 'MEMBER');
     expect(result.selfFamily.paid).toBe(12000);
   });
 
@@ -209,7 +232,7 @@ describe('get80DSummary', () => {
     policyMock.findMany.mockResolvedValue([
       { ...MOCK_POLICY, premiumAmount: 6000, premiumFrequency: 'HALF_YEARLY', isForParents: false },
     ]);
-    const result = await get80DSummary('u1');
+    const result = await get80DSummary('u1', 'u1', 'MEMBER');
     expect(result.selfFamily.paid).toBe(12000);
   });
 
@@ -217,7 +240,7 @@ describe('get80DSummary', () => {
     policyMock.findMany.mockResolvedValue([
       { ...MOCK_POLICY, premiumAmount: 12000, premiumFrequency: 'YEARLY', isForParents: false },
     ]);
-    const result = await get80DSummary('u1');
+    const result = await get80DSummary('u1', 'u1', 'MEMBER');
     expect(result.selfFamily.paid).toBe(12000);
   });
 
@@ -226,7 +249,7 @@ describe('get80DSummary', () => {
       { ...MOCK_POLICY, id: 'p1', premiumAmount: 10000, premiumFrequency: 'YEARLY', isForParents: false },
       { ...MOCK_POLICY, id: 'p2', premiumAmount: 8000, premiumFrequency: 'YEARLY', isForParents: true },
     ]);
-    const result = await get80DSummary('u1');
+    const result = await get80DSummary('u1', 'u1', 'MEMBER');
     expect(result.selfFamily.paid).toBe(10000);
     expect(result.parents.paid).toBe(8000);
     expect(result.total).toBe(18000);
@@ -236,7 +259,7 @@ describe('get80DSummary', () => {
     policyMock.findMany.mockResolvedValue([
       { ...MOCK_POLICY, premiumAmount: 30000, premiumFrequency: 'YEARLY', isForParents: false },
     ]);
-    const result = await get80DSummary('u1');
+    const result = await get80DSummary('u1', 'u1', 'MEMBER');
     expect(result.selfFamily.paid).toBe(30000);
     expect(result.selfFamily.deductible).toBe(25000); // capped
     expect(result.total).toBe(25000);
@@ -246,7 +269,7 @@ describe('get80DSummary', () => {
     policyMock.findMany.mockResolvedValue([
       { ...MOCK_POLICY, premiumAmount: 30000, premiumFrequency: 'YEARLY', isForParents: true },
     ]);
-    const result = await get80DSummary('u1');
+    const result = await get80DSummary('u1', 'u1', 'MEMBER');
     expect(result.parents.deductible).toBe(25000); // capped
   });
 
@@ -255,7 +278,7 @@ describe('get80DSummary', () => {
       { ...MOCK_POLICY, policyType: 'SUPER_TOP_UP',      premiumAmount: 5000, premiumFrequency: 'YEARLY', isForParents: false },
       { ...MOCK_POLICY, policyType: 'CRITICAL_ILLNESS',  premiumAmount: 3000, premiumFrequency: 'YEARLY', isForParents: false },
     ]);
-    const result = await get80DSummary('u1');
+    const result = await get80DSummary('u1', 'u1', 'MEMBER');
     expect(result.selfFamily.paid).toBe(8000);
     expect(result.total).toBe(8000);
   });
@@ -266,7 +289,7 @@ describe('get80DSummary', () => {
       { ...MOCK_POLICY, policyType: 'TERM',  premiumAmount: 10000, premiumFrequency: 'YEARLY', isForParents: false },
       { ...MOCK_POLICY, policyType: 'HEALTH',premiumAmount: 5000,  premiumFrequency: 'YEARLY', isForParents: false },
     ]);
-    const result = await get80DSummary('u1');
+    const result = await get80DSummary('u1', 'u1', 'MEMBER');
     // Only HEALTH counts
     expect(result.selfFamily.paid).toBe(5000);
     expect(result.total).toBe(5000);
@@ -274,7 +297,7 @@ describe('get80DSummary', () => {
 
   it('returns zero totals when no eligible policies', async () => {
     policyMock.findMany.mockResolvedValue([]);
-    const result = await get80DSummary('u1');
+    const result = await get80DSummary('u1', 'u1', 'MEMBER');
     expect(result.total).toBe(0);
     expect(result.selfFamily.paid).toBe(0);
     expect(result.parents.paid).toBe(0);

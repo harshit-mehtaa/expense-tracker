@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { insuranceApi, type InsurancePolicy } from '@/api/insurance';
+import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { cn } from '@/lib/utils';
 
 const POLICY_TYPE_LABELS: Record<string, string> = {
@@ -67,14 +68,17 @@ export default function InsurancePage() {
   const [editing, setEditing] = useState<InsurancePolicy | null>(null);
   const [showAmortization, setShowAmortization] = useState<string | null>(null);
 
+  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
+  const isViewingFamilyWide = isAdmin && !viewUserId;
+
   const { data: policies = [], isLoading } = useQuery({
-    queryKey: ['insurance'],
-    queryFn: insuranceApi.getAll,
+    queryKey: ['insurance', viewUserId],
+    queryFn: () => insuranceApi.getAll(viewUserId ? { targetUserId: viewUserId } : undefined),
   });
 
   const { data: deduction80D } = useQuery({
-    queryKey: ['insurance', '80d'],
-    queryFn: insuranceApi.get80D,
+    queryKey: ['insurance', '80d', viewUserId],
+    queryFn: () => insuranceApi.get80D(viewUserId ? { targetUserId: viewUserId } : undefined),
   });
 
   const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<PolicyForm>({
@@ -82,19 +86,21 @@ export default function InsurancePage() {
     defaultValues: { policyType: 'TERM_LIFE', premiumFrequency: 'ANNUALLY', is80cEligible: false, is80dEligible: false, isForParents: false },
   });
 
+  const invalidateInsurance = () => qc.invalidateQueries({ queryKey: ['insurance'] });
+
   const createMutation = useMutation({
     mutationFn: (data: PolicyForm) => insuranceApi.create(data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['insurance'] }); setShowForm(false); reset(); },
+    onSuccess: () => { invalidateInsurance(); setShowForm(false); reset(); },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: PolicyForm }) => insuranceApi.update(id, data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['insurance'] }); setEditing(null); setShowForm(false); reset(); },
+    onSuccess: () => { invalidateInsurance(); setEditing(null); setShowForm(false); reset(); },
   });
 
   const deleteMutation = useMutation({
     mutationFn: insuranceApi.delete,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['insurance'] }),
+    onSuccess: () => invalidateInsurance(),
   });
 
   function startEdit(policy: InsurancePolicy) {
@@ -121,10 +127,30 @@ export default function InsurancePage() {
           <p className="text-muted-foreground text-sm mt-1">
             {policies.length} policies · Annual premium <INRDisplay amount={totalAnnualPremium} />
           </p>
+          {isAdmin && !isMembersLoading && (
+            <div className="flex items-center gap-2 mt-2">
+              <label htmlFor="insurance-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+              {isMembersError ? (
+                <span className="text-xs text-destructive">Could not load members</span>
+              ) : (
+                <select
+                  id="insurance-member-select"
+                  value={viewUserId ?? ''}
+                  onChange={(e) => setViewUserId(e.target.value || undefined)}
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
+                >
+                  <option value="">All Family</option>
+                  {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              )}
+            </div>
+          )}
         </div>
-        <Button onClick={() => { setEditing(null); reset(); setShowForm(true); }}>
-          <Plus className="h-4 w-4 mr-2" /> Add Policy
-        </Button>
+        {!isViewingFamilyWide && (
+          <Button onClick={() => { setEditing(null); reset(); setShowForm(true); }}>
+            <Plus className="h-4 w-4 mr-2" /> Add Policy
+          </Button>
+        )}
       </div>
 
       {/* Summary Cards */}
@@ -170,15 +196,20 @@ export default function InsurancePage() {
                   </span>
                   <h3 className="font-semibold mt-2">{policy.policyName}</h3>
                   <p className="text-sm text-muted-foreground">{policy.providerName}</p>
+                  {isViewingFamilyWide && policy.userName && (
+                    <p className="text-xs text-muted-foreground mt-0.5">{policy.userName}</p>
+                  )}
                 </div>
-                <div className="flex gap-1">
-                  <Button variant="ghost" size="icon" onClick={() => startEdit(policy)}>
-                    <Edit2 className="h-4 w-4" />
-                  </Button>
-                  <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(policy.id)}>
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
-                </div>
+                {!isViewingFamilyWide && (
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="icon" onClick={() => startEdit(policy)}>
+                      <Edit2 className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(policy.id)}>
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-2 text-sm">

@@ -76,9 +76,10 @@ describe('GET /api/insurance', () => {
     expect(res.body.data[0].policyNumber).toBe('LIC-001');
   });
 
-  it('calls service with userId', async () => {
+  it('calls service with resolved targetUserId, requesterId, and role', async () => {
     await request(app).get('/api/insurance');
-    expect(getMock).toHaveBeenCalledWith('u1');
+    // No ?userId= param → resolveTargetUserId returns undefined (family-wide for ADMIN)
+    expect(getMock).toHaveBeenCalledWith(undefined, 'u1', 'ADMIN');
   });
 });
 

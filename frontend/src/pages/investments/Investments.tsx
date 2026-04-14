@@ -127,24 +127,27 @@ export default function InvestmentsPage() {
   const rdForm = useForm<RDForm>({ resolver: zodResolver(rdSchema), defaultValues: { status: 'ACTIVE' } });
   const sipForm = useForm<SIPForm>({ resolver: zodResolver(sipSchema), defaultValues: { status: 'ACTIVE', sipDate: 1 } });
 
+  const invalidateFDs = () => qc.invalidateQueries({ queryKey: ['fds'] });
+  const invalidateRDs = () => qc.invalidateQueries({ queryKey: ['rds'] });
+
   const createFDMutation = useMutation({
     mutationFn: (data: FDForm) => investmentsApi.createFD(data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['fds', viewUserId] }); setShowFDForm(false); fdForm.reset(); setEditingFD(null); },
+    onSuccess: () => { invalidateFDs(); setShowFDForm(false); fdForm.reset(); setEditingFD(null); },
   });
 
   const deleteFDMutation = useMutation({
     mutationFn: investmentsApi.deleteFD,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['fds', viewUserId] }),
+    onSuccess: () => invalidateFDs(),
   });
 
   const createRDMutation = useMutation({
     mutationFn: (data: RDForm) => investmentsApi.createRD(data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['rds', viewUserId] }); setShowRDForm(false); rdForm.reset(); },
+    onSuccess: () => { invalidateRDs(); setShowRDForm(false); rdForm.reset(); },
   });
 
   const deleteRDMutation = useMutation({
     mutationFn: (id: string) => investmentsApi.deleteRD(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['rds', viewUserId] }),
+    onSuccess: () => invalidateRDs(),
   });
 
   const createSIPMutation = useMutation({

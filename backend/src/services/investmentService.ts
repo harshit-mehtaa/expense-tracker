@@ -410,11 +410,26 @@ export async function addSIPTransaction(userId: string, sipId: string, data: { d
 
 // ─── CRUD: Gold ───────────────────────────────────────────────────────────────
 
-export async function getGoldHoldings(userId: string) {
-  const holdings = await prisma.goldHolding.findMany({ where: { userId }, orderBy: { purchaseDate: 'desc' } });
-  const totalGrams = holdings.reduce((s, h) => s + Number(h.quantityGrams), 0);
-  const totalPurchaseValue = holdings.reduce((s, h) => s + Number(h.quantityGrams) * Number(h.purchasePricePerGram), 0);
-  const totalCurrentValue = holdings.reduce((s, h) => s + Number(h.quantityGrams) * Number(h.currentPricePerGram), 0);
+export async function getGoldHoldings(userId: string | undefined, requesterId: string, requesterRole: string) {
+  let rawHoldings: any[];
+
+  if (requesterRole !== 'ADMIN') {
+    rawHoldings = await prisma.goldHolding.findMany({ where: { userId: requesterId }, orderBy: { purchaseDate: 'desc' } });
+  } else if (userId) {
+    rawHoldings = await prisma.goldHolding.findMany({ where: { userId }, orderBy: { purchaseDate: 'desc' } });
+  } else {
+    const rows = await prisma.goldHolding.findMany({
+      where: { user: { isActive: true, deletedAt: null } },
+      include: { user: { select: { name: true } } },
+      orderBy: [{ user: { name: 'asc' } }, { purchaseDate: 'desc' }],
+    });
+    rawHoldings = rows.map(({ user, ...rest }) => ({ ...rest, userName: user?.name ?? '' }));
+  }
+
+  const holdings = rawHoldings;
+  const totalGrams = holdings.reduce((s: number, h: any) => s + Number(h.quantityGrams), 0);
+  const totalPurchaseValue = holdings.reduce((s: number, h: any) => s + Number(h.quantityGrams) * Number(h.purchasePricePerGram), 0);
+  const totalCurrentValue = holdings.reduce((s: number, h: any) => s + Number(h.quantityGrams) * Number(h.currentPricePerGram), 0);
   const gain = totalCurrentValue - totalPurchaseValue;
   const gainPct = totalPurchaseValue > 0 ? (gain / totalPurchaseValue) * 100 : 0;
   return { holdings, summary: { totalGrams, totalPurchaseValue, totalCurrentValue, gain, gainPct } };
@@ -438,15 +453,33 @@ export async function deleteGoldHolding(userId: string, id: string) {
 
 // ─── CRUD: Real Estate ────────────────────────────────────────────────────────
 
-export async function getRealEstate(userId: string) {
-  const properties = await prisma.realEstate.findMany({
-    where: { userId },
-    include: { loan: true },
-    orderBy: { purchaseDate: 'desc' },
-  });
-  const totalPurchase = properties.reduce((s, p) => s + Number(p.purchasePrice), 0);
-  const totalCurrent = properties.reduce((s, p) => s + Number(p.currentValue), 0);
-  const totalRental = properties.reduce((s, p) => s + (p.rentalIncomeMonthly ? Number(p.rentalIncomeMonthly) : 0), 0);
+export async function getRealEstate(userId: string | undefined, requesterId: string, requesterRole: string) {
+  let properties: any[];
+
+  if (requesterRole !== 'ADMIN') {
+    properties = await prisma.realEstate.findMany({
+      where: { userId: requesterId },
+      include: { loan: true },
+      orderBy: { purchaseDate: 'desc' },
+    });
+  } else if (userId) {
+    properties = await prisma.realEstate.findMany({
+      where: { userId },
+      include: { loan: true },
+      orderBy: { purchaseDate: 'desc' },
+    });
+  } else {
+    const rows = await prisma.realEstate.findMany({
+      where: { user: { isActive: true, deletedAt: null } },
+      include: { loan: true, user: { select: { name: true } } },
+      orderBy: [{ user: { name: 'asc' } }, { purchaseDate: 'desc' }],
+    });
+    properties = rows.map(({ user, ...rest }) => ({ ...rest, userName: user?.name ?? '' }));
+  }
+
+  const totalPurchase = properties.reduce((s: number, p: any) => s + Number(p.purchasePrice), 0);
+  const totalCurrent = properties.reduce((s: number, p: any) => s + Number(p.currentValue), 0);
+  const totalRental = properties.reduce((s: number, p: any) => s + (p.rentalIncomeMonthly ? Number(p.rentalIncomeMonthly) : 0), 0);
   return { properties, summary: { totalPurchase, totalCurrent, unrealisedGain: totalCurrent - totalPurchase, totalMonthlyRental: totalRental } };
 }
 

@@ -79,6 +79,7 @@ export interface GoldHolding {
   currentPricePerGram: number;
   purchaseDate: string;
   notes?: string;
+  userName?: string;
 }
 
 export interface ExchangeRate {
@@ -133,11 +134,17 @@ export const investmentsApi = {
   createSIP: (data: object) => api.post<{ data: SIP }>('/investments/sip', data).then(unwrap),
   updateSIP: (id: string, data: object) => api.put<{ data: SIP }>(`/investments/sip/${id}`, data).then(unwrap),
   deleteSIP: (id: string) => api.delete(`/investments/sip/${id}`),
-  getGold: () => api.get<{ data: { holdings: GoldHolding[]; summary: any } }>('/investments/gold').then(unwrap),
+  getGold: (opts?: { targetUserId?: string }) =>
+    api.get<{ data: { holdings: GoldHolding[]; summary: any } }>('/investments/gold', {
+      params: opts?.targetUserId ? { userId: opts.targetUserId } : {},
+    }).then(unwrap),
   createGold: (data: object) => api.post('/investments/gold', data).then((r) => r.data.data),
   updateGold: (id: string, data: object) => api.put(`/investments/gold/${id}`, data).then((r) => r.data.data),
   deleteGold: (id: string) => api.delete(`/investments/gold/${id}`),
-  getRealEstate: () => api.get<{ data: any }>('/investments/real-estate').then(unwrap),
+  getRealEstate: (opts?: { targetUserId?: string }) =>
+    api.get<{ data: any }>('/investments/real-estate', {
+      params: opts?.targetUserId ? { userId: opts.targetUserId } : {},
+    }).then(unwrap),
   createRealEstate: (data: object) => api.post('/investments/real-estate', data).then((r) => r.data.data),
   updateRealEstate: (id: string, data: object) => api.put(`/investments/real-estate/${id}`, data).then((r) => r.data.data),
   deleteRealEstate: (id: string) => api.delete(`/investments/real-estate/${id}`),

@@ -863,16 +863,37 @@ describe('updateSIP / deleteSIP / addSIPTransaction', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('getGoldHoldings', () => {
-  it('aggregates gold summary metrics', async () => {
+  it('MEMBER: scopes to requesterId, aggregates summary metrics', async () => {
     goldMock.findMany.mockResolvedValue([
       { quantityGrams: 10, purchasePricePerGram: 5000, currentPricePerGram: 6000 },
       { quantityGrams: 5, purchasePricePerGram: 5500, currentPricePerGram: 6000 },
     ]);
-    const result = await getGoldHoldings('u1');
+    const result = await getGoldHoldings(undefined, 'u1', 'MEMBER');
+    const call = goldMock.findMany.mock.calls[0][0];
+    expect(call.where).toEqual({ userId: 'u1' });
     expect(result.summary.totalGrams).toBe(15);
     expect(result.summary.totalPurchaseValue).toBe(10 * 5000 + 5 * 5500);
     expect(result.summary.totalCurrentValue).toBe(15 * 6000);
     expect(result.summary.gain).toBe(result.summary.totalCurrentValue - result.summary.totalPurchaseValue);
+  });
+
+  it('ADMIN with userId: scopes to specified member', async () => {
+    goldMock.findMany.mockResolvedValue([]);
+    await getGoldHoldings('u2', 'admin-1', 'ADMIN');
+    const call = goldMock.findMany.mock.calls[0][0];
+    expect(call.where).toEqual({ userId: 'u2' });
+  });
+
+  it('ADMIN with undefined userId: family-wide query, includes user name', async () => {
+    goldMock.findMany.mockResolvedValueOnce([
+      { id: 'g-1', quantityGrams: 10, purchasePricePerGram: 5000, currentPricePerGram: 6000, user: { name: 'Alice' } },
+    ]);
+    const result = await getGoldHoldings(undefined, 'admin-1', 'ADMIN');
+    const call = goldMock.findMany.mock.calls[0][0];
+    expect(call.where).toEqual({ user: { isActive: true, deletedAt: null } });
+    expect(call.include).toEqual({ user: { select: { name: true } } });
+    expect((result.holdings[0] as any).userName).toBe('Alice');
+    expect((result.holdings[0] as any).user).toBeUndefined();
   });
 });
 
@@ -917,16 +938,37 @@ describe('updateGoldHolding / deleteGoldHolding', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('getRealEstate', () => {
-  it('aggregates real estate summary metrics', async () => {
+  it('MEMBER: scopes to requesterId, aggregates summary metrics', async () => {
     reMock.findMany.mockResolvedValue([
       { purchasePrice: 5000000, currentValue: 6000000, rentalIncomeMonthly: 25000, loan: null },
       { purchasePrice: 3000000, currentValue: 3500000, rentalIncomeMonthly: null, loan: null },
     ]);
-    const result = await getRealEstate('u1');
+    const result = await getRealEstate(undefined, 'u1', 'MEMBER');
+    const call = reMock.findMany.mock.calls[0][0];
+    expect(call.where).toEqual({ userId: 'u1' });
     expect(result.summary.totalPurchase).toBe(8000000);
     expect(result.summary.totalCurrent).toBe(9500000);
     expect(result.summary.totalMonthlyRental).toBe(25000);
     expect(result.summary.unrealisedGain).toBe(1500000);
+  });
+
+  it('ADMIN with userId: scopes to specified member', async () => {
+    reMock.findMany.mockResolvedValue([]);
+    await getRealEstate('u2', 'admin-1', 'ADMIN');
+    const call = reMock.findMany.mock.calls[0][0];
+    expect(call.where).toEqual({ userId: 'u2' });
+  });
+
+  it('ADMIN with undefined userId: family-wide query, includes user name', async () => {
+    reMock.findMany.mockResolvedValueOnce([
+      { id: 're-1', purchasePrice: 5000000, currentValue: 6000000, rentalIncomeMonthly: null, loan: null, user: { name: 'Bob' } },
+    ]);
+    const result = await getRealEstate(undefined, 'admin-1', 'ADMIN');
+    const call = reMock.findMany.mock.calls[0][0];
+    expect(call.where).toEqual({ user: { isActive: true, deletedAt: null } });
+    expect(call.include).toMatchObject({ loan: true, user: { select: { name: true } } });
+    expect((result.properties[0] as any).userName).toBe('Bob');
+    expect((result.properties[0] as any).user).toBeUndefined();
   });
 });
 

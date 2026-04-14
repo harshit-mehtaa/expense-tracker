@@ -246,7 +246,8 @@ const goldSchema = z.object({
 });
 
 router.get('/gold', asyncHandler(async (req, res) => {
-  const data = await svc.getGoldHoldings(req.user!.userId);
+  const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
+  const data = await svc.getGoldHoldings(targetUserId, req.user!.userId, req.user!.role);
   sendSuccess(res, data);
 }));
 
@@ -282,7 +283,8 @@ const reSchema = z.object({
 });
 
 router.get('/real-estate', asyncHandler(async (req, res) => {
-  const data = await svc.getRealEstate(req.user!.userId);
+  const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
+  const data = await svc.getRealEstate(targetUserId, req.user!.userId, req.user!.role);
   sendSuccess(res, data);
 }));
 
