@@ -378,7 +378,7 @@ async function fetchAssetBreakdown(userId?: string) {
     }),
     prisma.fixedDeposit.findMany({
       where: { ...where, status: 'ACTIVE' },
-      select: { bankName: true, maturityAmount: true },
+      select: { bankName: true, principalAmount: true, maturityAmount: true },
     }),
     prisma.recurringDeposit.findMany({
       where: { ...where, status: 'ACTIVE' },
@@ -386,15 +386,15 @@ async function fetchAssetBreakdown(userId?: string) {
     }),
     prisma.investment.findMany({
       where,
-      select: { name: true, type: true, unitsOrQuantity: true, currentPricePerUnit: true, currency: true },
+      select: { name: true, type: true, unitsOrQuantity: true, purchasePricePerUnit: true, purchaseExchangeRate: true, currentPricePerUnit: true, currency: true },
     }),
     prisma.goldHolding.findMany({
       where,
-      select: { type: true, description: true, quantityGrams: true, currentPricePerGram: true },
+      select: { type: true, description: true, quantityGrams: true, purchasePricePerGram: true, currentPricePerGram: true },
     }),
     prisma.realEstate.findMany({
       where,
-      select: { propertyName: true, propertyType: true, currentValue: true },
+      select: { propertyName: true, propertyType: true, purchasePrice: true, currentValue: true },
     }),
   ]);
 
@@ -411,35 +411,42 @@ async function fetchAssetBreakdown(userId?: string) {
   const bankBalances = bankAccounts.reduce((s, a) => s + a.currentBalance, 0);
 
   const fdItems = fds
-    .map((f) => ({ bankName: f.bankName, maturityAmount: Number(f.maturityAmount) }))
-    .sort((a, b) => b.maturityAmount - a.maturityAmount);
-  const fixedDeposits = fdItems.reduce((s, f) => s + f.maturityAmount, 0);
+    .map((f) => ({ bankName: f.bankName, amount: Number(f.principalAmount) }))
+    .sort((a, b) => b.amount - a.amount);
+  const fixedDeposits = fds.reduce((s, f) => s + Number(f.maturityAmount), 0);
 
   const rdItems = rds
-    .map((r) => ({ bankName: r.bankName, totalDeposited: Number(r.totalDeposited) }))
-    .sort((a, b) => b.totalDeposited - a.totalDeposited);
-  const recurringDeposits = rdItems.reduce((s, r) => s + r.totalDeposited, 0);
+    .map((r) => ({ bankName: r.bankName, amount: Number(r.totalDeposited) }))
+    .sort((a, b) => b.amount - a.amount);
+  const recurringDeposits = rdItems.reduce((s, r) => s + r.amount, 0);
 
   const investmentItems = investments
     .map((i) => {
-      const fx = i.currency === 'INR' ? 1 : (rateMap[i.currency] ?? 1);
-      return { name: i.name, type: i.type, currentValue: Number(i.unitsOrQuantity) * Number(i.currentPricePerUnit) * fx };
+      const purchaseFx = i.currency === 'INR' ? 1 : (Number(i.purchaseExchangeRate) || 1);
+      const currentFx = i.currency === 'INR' ? 1 : (rateMap[i.currency] ?? 1);
+      return {
+        name: i.name,
+        type: i.type,
+        amount: Number(i.unitsOrQuantity) * Number(i.purchasePricePerUnit) * purchaseFx,
+        currentValue: Number(i.unitsOrQuantity) * Number(i.currentPricePerUnit) * currentFx,
+      };
     })
-    .sort((a, b) => b.currentValue - a.currentValue);
+    .sort((a, b) => b.amount - a.amount);
   const investments_ = investmentItems.reduce((s, i) => s + i.currentValue, 0);
 
   const goldItems = gold
     .map((g) => ({
       type: g.type,
       description: g.description ?? null,
+      amount: Number(g.quantityGrams) * Number(g.purchasePricePerGram),
       currentValue: Number(g.quantityGrams) * Number(g.currentPricePerGram),
     }))
-    .sort((a, b) => b.currentValue - a.currentValue);
+    .sort((a, b) => b.amount - a.amount);
   const gold_ = goldItems.reduce((s, g) => s + g.currentValue, 0);
 
   const realEstateItems = realestate
-    .map((p) => ({ propertyName: p.propertyName, propertyType: p.propertyType, currentValue: Number(p.currentValue) }))
-    .sort((a, b) => b.currentValue - a.currentValue);
+    .map((p) => ({ propertyName: p.propertyName, propertyType: p.propertyType, amount: Number(p.purchasePrice), currentValue: Number(p.currentValue) }))
+    .sort((a, b) => b.amount - a.amount);
   const realEstate = realEstateItems.reduce((s, p) => s + p.currentValue, 0);
 
   return {

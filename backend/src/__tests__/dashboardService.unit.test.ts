@@ -299,71 +299,81 @@ describe('computeNetWorthStatement', () => {
   });
 
   it('applies exchange rate for non-INR investments', async () => {
-    invMock.findMany.mockResolvedValue([{ name: 'Apple', type: 'STOCKS_FOREIGN', unitsOrQuantity: 10, currentPricePerUnit: 100, currency: 'USD' }]);
+    invMock.findMany.mockResolvedValue([{ name: 'Apple', type: 'STOCKS_FOREIGN', unitsOrQuantity: 10, purchasePricePerUnit: 80, purchaseExchangeRate: 80, currentPricePerUnit: 100, currency: 'USD' }]);
     fxMock.findMany.mockResolvedValue([{ fromCurrency: 'USD', toCurrency: 'INR', rate: 84 }]);
     const r = await computeNetWorthStatement('u1');
-    // 10 * 100 * 84 = 84000
+    // currentValue aggregate: 10 * 100 * 84 = 84000
     expect(r.assets.investments).toBe(84000);
   });
 
   it('INR investment uses rate=1 (no FX lookup needed)', async () => {
-    invMock.findMany.mockResolvedValue([{ name: 'Nifty 50', type: 'MUTUAL_FUND', unitsOrQuantity: 5, currentPricePerUnit: 200, currency: 'INR' }]);
+    invMock.findMany.mockResolvedValue([{ name: 'Nifty 50', type: 'MUTUAL_FUND', unitsOrQuantity: 5, purchasePricePerUnit: 180, purchaseExchangeRate: null, currentPricePerUnit: 200, currency: 'INR' }]);
     const r = await computeNetWorthStatement('u1');
     expect(r.assets.investments).toBe(1000); // 5 * 200 * 1
   });
 
-  it('exposes fdItems as top-level array with individual FD details', async () => {
+  it('exposes fdItems as top-level array with principal as amount', async () => {
     fdMock.findMany.mockResolvedValue([
-      { bankName: 'SBI', maturityAmount: 150000 },
-      { bankName: 'HDFC', maturityAmount: 50000 },
+      { bankName: 'SBI', principalAmount: 100000, maturityAmount: 150000 },
+      { bankName: 'HDFC', principalAmount: 40000, maturityAmount: 50000 },
     ]);
     const r = await computeNetWorthStatement('u1');
     expect(r.fdItems).toHaveLength(2);
-    expect(r.fdItems[0]).toEqual({ bankName: 'SBI', maturityAmount: 150000 });
-    expect(r.fdItems[1]).toEqual({ bankName: 'HDFC', maturityAmount: 50000 });
+    // amount = principalAmount; sorted desc by amount
+    expect(r.fdItems[0]).toEqual({ bankName: 'SBI', amount: 100000 });
+    expect(r.fdItems[1]).toEqual({ bankName: 'HDFC', amount: 40000 });
+    // fixedDeposits aggregate uses maturityAmount
     expect(r.assets.fixedDeposits).toBe(200000);
     expect((r.assets as any).fdItems).toBeUndefined();
   });
 
-  it('exposes rdItems as top-level array with individual RD details', async () => {
+  it('exposes rdItems as top-level array with totalDeposited as amount', async () => {
     rdMock.findMany.mockResolvedValue([{ bankName: 'Axis', totalDeposited: 60000 }]);
     const r = await computeNetWorthStatement('u1');
     expect(r.rdItems).toHaveLength(1);
-    expect(r.rdItems[0]).toEqual({ bankName: 'Axis', totalDeposited: 60000 });
+    expect(r.rdItems[0]).toEqual({ bankName: 'Axis', amount: 60000 });
     expect(r.assets.recurringDeposits).toBe(60000);
     expect((r.assets as any).rdItems).toBeUndefined();
   });
 
-  it('exposes investmentItems as top-level array sorted by currentValue desc', async () => {
+  it('exposes investmentItems as top-level array with invested amount (purchase cost)', async () => {
     invMock.findMany.mockResolvedValue([
-      { name: 'HDFC Midcap', type: 'MUTUAL_FUND', unitsOrQuantity: 100, currentPricePerUnit: 50, currency: 'INR' },
-      { name: 'Reliance', type: 'STOCKS_INDIA', unitsOrQuantity: 10, currentPricePerUnit: 300, currency: 'INR' },
+      { name: 'HDFC Midcap', type: 'MUTUAL_FUND', unitsOrQuantity: 100, purchasePricePerUnit: 40, purchaseExchangeRate: null, currentPricePerUnit: 50, currency: 'INR' },
+      { name: 'Reliance', type: 'STOCKS_INDIA', unitsOrQuantity: 10, purchasePricePerUnit: 200, purchaseExchangeRate: null, currentPricePerUnit: 300, currency: 'INR' },
     ]);
     const r = await computeNetWorthStatement('u1');
-    // HDFC: 100*50=5000, Reliance: 10*300=3000 → sorted desc
+    // amount (cost): HDFC=100*40=4000, Reliance=10*200=2000 → sorted desc
     expect(r.investmentItems).toHaveLength(2);
-    expect(r.investmentItems[0]).toEqual({ name: 'HDFC Midcap', type: 'MUTUAL_FUND', currentValue: 5000 });
-    expect(r.investmentItems[1]).toEqual({ name: 'Reliance', type: 'STOCKS_INDIA', currentValue: 3000 });
+    expect(r.investmentItems[0]).toMatchObject({ name: 'HDFC Midcap', type: 'MUTUAL_FUND', amount: 4000 });
+    expect(r.investmentItems[1]).toMatchObject({ name: 'Reliance', type: 'STOCKS_INDIA', amount: 2000 });
+    // currentValue aggregate: HDFC=100*50=5000, Reliance=10*300=3000 → total 8000
+    expect(r.assets.investments).toBe(8000);
     expect((r.assets as any).investmentItems).toBeUndefined();
   });
 
-  it('exposes goldItems as top-level array', async () => {
+  it('exposes goldItems as top-level array with purchase cost as amount', async () => {
     goldMock.findMany.mockResolvedValue([
-      { type: 'PHYSICAL', description: 'Jewellery', quantityGrams: 10, currentPricePerGram: 7000 },
+      { type: 'PHYSICAL', description: 'Jewellery', quantityGrams: 10, purchasePricePerGram: 6000, currentPricePerGram: 7000 },
     ]);
     const r = await computeNetWorthStatement('u1');
     expect(r.goldItems).toHaveLength(1);
-    expect(r.goldItems[0]).toEqual({ type: 'PHYSICAL', description: 'Jewellery', currentValue: 70000 });
+    // amount = grams * purchasePricePerGram = 10*6000 = 60000
+    expect(r.goldItems[0]).toMatchObject({ type: 'PHYSICAL', description: 'Jewellery', amount: 60000 });
+    // gold aggregate uses currentPricePerGram: 10*7000 = 70000
+    expect(r.assets.gold).toBe(70000);
     expect((r.assets as any).goldItems).toBeUndefined();
   });
 
-  it('exposes realEstateItems as top-level array', async () => {
+  it('exposes realEstateItems as top-level array with purchase price as amount', async () => {
     reMock.findMany.mockResolvedValue([
-      { propertyName: 'Pune Flat', propertyType: 'RESIDENTIAL', currentValue: 5000000 },
+      { propertyName: 'Pune Flat', propertyType: 'RESIDENTIAL', purchasePrice: 3500000, currentValue: 5000000 },
     ]);
     const r = await computeNetWorthStatement('u1');
     expect(r.realEstateItems).toHaveLength(1);
-    expect(r.realEstateItems[0]).toEqual({ propertyName: 'Pune Flat', propertyType: 'RESIDENTIAL', currentValue: 5000000 });
+    // amount = purchasePrice
+    expect(r.realEstateItems[0]).toMatchObject({ propertyName: 'Pune Flat', propertyType: 'RESIDENTIAL', amount: 3500000 });
+    // realEstate aggregate uses currentValue
+    expect(r.assets.realEstate).toBe(5000000);
     expect((r.assets as any).realEstateItems).toBeUndefined();
   });
 });

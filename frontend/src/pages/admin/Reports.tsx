@@ -538,10 +538,10 @@ export default function ReportsPage() {
                 {Array.isArray(netWorth.fdItems) && netWorth.fdItems.length > 0 && (
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Fixed Deposits</p>
-                    {netWorth.fdItems.map((fd: { bankName: string; maturityAmount: number }, i: number) => (
+                    {netWorth.fdItems.map((fd: { bankName: string; amount: number }, i: number) => (
                       <div key={i} className="flex justify-between text-sm">
                         <span className="truncate pr-2">{fd.bankName}</span>
-                        <INRDisplay amount={fd.maturityAmount} />
+                        <INRDisplay amount={fd.amount} />
                       </div>
                     ))}
                   </div>
@@ -550,10 +550,10 @@ export default function ReportsPage() {
                 {Array.isArray(netWorth.rdItems) && netWorth.rdItems.length > 0 && (
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Recurring Deposits</p>
-                    {netWorth.rdItems.map((rd: { bankName: string; totalDeposited: number }, i: number) => (
+                    {netWorth.rdItems.map((rd: { bankName: string; amount: number }, i: number) => (
                       <div key={i} className="flex justify-between text-sm">
                         <span className="truncate pr-2">{rd.bankName}</span>
-                        <INRDisplay amount={rd.totalDeposited} />
+                        <INRDisplay amount={rd.amount} />
                       </div>
                     ))}
                   </div>
@@ -562,13 +562,13 @@ export default function ReportsPage() {
                 {Array.isArray(netWorth.investmentItems) && netWorth.investmentItems.length > 0 && (
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Investments</p>
-                    {netWorth.investmentItems.map((inv: { name: string; type: string; currentValue: number }, i: number) => (
+                    {netWorth.investmentItems.map((inv: { name: string; type: string; amount: number }, i: number) => (
                       <div key={i} className="flex justify-between text-sm">
                         <span className="truncate pr-2">
                           {inv.name}
                           <span className="text-muted-foreground ml-1">({INVESTMENT_TYPE_LABELS[inv.type] ?? inv.type})</span>
                         </span>
-                        <INRDisplay amount={inv.currentValue} />
+                        <INRDisplay amount={inv.amount} />
                       </div>
                     ))}
                   </div>
@@ -577,13 +577,13 @@ export default function ReportsPage() {
                 {Array.isArray(netWorth.goldItems) && netWorth.goldItems.length > 0 && (
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Gold</p>
-                    {netWorth.goldItems.map((g: { type: string; description: string | null; currentValue: number }, i: number) => (
+                    {netWorth.goldItems.map((g: { type: string; description: string | null; amount: number }, i: number) => (
                       <div key={i} className="flex justify-between text-sm">
                         <span className="truncate pr-2">
                           {GOLD_TYPE_LABELS[g.type] ?? g.type}
                           {g.description ? ` — ${g.description}` : ''}
                         </span>
-                        <INRDisplay amount={g.currentValue} />
+                        <INRDisplay amount={g.amount} />
                       </div>
                     ))}
                   </div>
@@ -592,10 +592,10 @@ export default function ReportsPage() {
                 {Array.isArray(netWorth.realEstateItems) && netWorth.realEstateItems.length > 0 && (
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Real Estate</p>
-                    {netWorth.realEstateItems.map((p: { propertyName: string; propertyType: string; currentValue: number }, i: number) => (
+                    {netWorth.realEstateItems.map((p: { propertyName: string; propertyType: string; amount: number }, i: number) => (
                       <div key={i} className="flex justify-between text-sm">
                         <span className="truncate pr-2">{p.propertyName}</span>
-                        <INRDisplay amount={p.currentValue} />
+                        <INRDisplay amount={p.amount} />
                       </div>
                     ))}
                   </div>
