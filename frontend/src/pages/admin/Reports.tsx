@@ -579,17 +579,20 @@ export default function ReportsPage() {
                   <INRDisplay amount={netWorth.totalAssets} />
                 </div>
               </div>
-              <div className="rounded-lg border bg-card p-5 space-y-3">
+              <div className="rounded-lg border bg-card p-5 space-y-4">
                 <h3 className="font-medium text-muted-foreground text-sm uppercase tracking-wide">Liabilities</h3>
                 {Object.keys(netWorth.liabilities).length === 0 ? (
                   <p className="text-sm text-muted-foreground">No active loans</p>
                 ) : (
-                  Object.entries(netWorth.liabilities).map(([type, amt]) => (
-                    <div key={type} className="flex justify-between text-sm">
-                      <span>{LOAN_TYPE_LABELS[type] ?? type}</span>
-                      <INRDisplay amount={amt as number} />
-                    </div>
-                  ))
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Loans</p>
+                    {Object.entries(netWorth.liabilities).map(([type, amt]) => (
+                      <div key={type} className="flex justify-between text-sm">
+                        <span>{LOAN_TYPE_LABELS[type] ?? type}</span>
+                        <INRDisplay amount={amt as number} />
+                      </div>
+                    ))}
+                  </div>
                 )}
                 <div className="border-t pt-2 flex justify-between font-semibold">
                   <span>Total Liabilities</span>
