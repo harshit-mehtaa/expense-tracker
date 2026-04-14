@@ -245,10 +245,12 @@ export default function InvestmentsPage() {
           {tab === 'rd' && !isViewingFamilyWide && (
             <Button variant="outline" onClick={() => setShowRDForm(true)}><Plus className="h-4 w-4 mr-1" /> Add RD</Button>
           )}
-          {tab === 'sip' && (
+          {tab === 'sip' && !isViewingFamilyWide && (
             <Button variant="outline" onClick={() => setShowSIPForm(true)}><Plus className="h-4 w-4 mr-1" /> Add SIP</Button>
           )}
-          <Button onClick={() => setShowInvForm(true)}><Plus className="h-4 w-4 mr-1" /> Add Investment</Button>
+          {!isViewingFamilyWide && (
+            <Button onClick={() => setShowInvForm(true)}><Plus className="h-4 w-4 mr-1" /> Add Investment</Button>
+          )}
         </div>
       </div>
 
