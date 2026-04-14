@@ -279,6 +279,12 @@ async function main() {
       startDate: d(2025, 6, 1), maturityDate: d(2027, 6, 1), maturityAmount: 258200,
       totalDeposited: 100000, status: RDStatus.ACTIVE,
     },
+    {
+      userId: arjun.id, bankName: 'Kotak Mahindra Bank',
+      monthlyInstallment: 1000, interestRate: 6.5, tenureMonths: 12,
+      startDate: d(2025, 10, 1), maturityDate: d(2026, 10, 1), maturityAmount: 12423,
+      totalDeposited: 6000, status: RDStatus.ACTIVE,
+    },
   ]});
 
   // ── Investments ───────────────────────────────────────────────────────────────
@@ -460,6 +466,11 @@ async function main() {
       purchasePricePerGram: 5200, currentPricePerGram: 7850,
       purchaseDate: d(2022, 8, 10), notes: 'Nippon India Gold ETF via Demat',
     },
+    {
+      userId: arjun.id, type: GoldType.DIGITAL, quantityGrams: 2,
+      purchasePricePerGram: 6200, currentPricePerGram: 7850,
+      purchaseDate: d(2024, 3, 15), notes: 'PhonePe digital gold — gifted for birthday',
+    },
   ]});
 
   // ── Loans ────────────────────────────────────────────────────────────────────
@@ -513,6 +524,14 @@ async function main() {
     purchasePrice: 6500000, currentValue: 9800000,
     purchaseDate: d(2020, 6, 1), loanId: homeLoan.id, rentalIncomeMonthly: 0,
     notes: 'Primary residence — under home loan',
+  }});
+
+  await prisma.realEstate.create({ data: {
+    userId: priya.id, propertyType: PropertyType.PLOT,
+    propertyName: 'Residential Plot — Devanahalli, Bangalore', location: 'Devanahalli, Bangalore North, Karnataka',
+    purchasePrice: 1800000, currentValue: 3200000,
+    purchaseDate: d(2018, 11, 10),
+    notes: 'Plot near new airport corridor — long-term appreciation hold',
   }});
 
   // ── Insurance ────────────────────────────────────────────────────────────────
@@ -913,26 +932,29 @@ async function main() {
     const priyaFDs = 200000;
     const priyaRDs = 120000 + i * 5000;
     const priyaGold = 1067600; // physical 120g × ₹7,850 + SGB 16g × ₹7,850
-    const priyaAssets = priyaBanks + priyaFDs + priyaRDs + priyaInv + priyaGold;
+    const priyaRE = 3200000;   // Devanahalli plot current value
+    const priyaAssets = priyaBanks + priyaFDs + priyaRDs + priyaInv + priyaGold + priyaRE;
     const priyaNW = priyaAssets - priyaLoans;
 
     await prisma.netWorthSnapshot.upsert({
       where: { userId_snapshotDate: { userId: priya.id, snapshotDate } },
-      create: { userId: priya.id, snapshotDate, totalAssets: priyaAssets, totalLiabilities: priyaLoans, netWorth: priyaNW, bankBalances: priyaBanks, fixedDeposits: priyaFDs, recurringDeposits: priyaRDs, investments: priyaInv, gold: priyaGold, loans: priyaLoans },
-      update: { totalAssets: priyaAssets, totalLiabilities: priyaLoans, netWorth: priyaNW, bankBalances: priyaBanks, fixedDeposits: priyaFDs, recurringDeposits: priyaRDs, investments: priyaInv, gold: priyaGold, loans: priyaLoans },
+      create: { userId: priya.id, snapshotDate, totalAssets: priyaAssets, totalLiabilities: priyaLoans, netWorth: priyaNW, bankBalances: priyaBanks, fixedDeposits: priyaFDs, recurringDeposits: priyaRDs, investments: priyaInv, gold: priyaGold, realEstate: priyaRE, loans: priyaLoans },
+      update: { totalAssets: priyaAssets, totalLiabilities: priyaLoans, netWorth: priyaNW, bankBalances: priyaBanks, fixedDeposits: priyaFDs, recurringDeposits: priyaRDs, investments: priyaInv, gold: priyaGold, realEstate: priyaRE, loans: priyaLoans },
     });
 
     // Arjun — student, small NW, growing investments
     const arjunInv = 40000 + i * 2500;
     const arjunBanks = 28000;
     const arjunFDs = 50000;
-    const arjunAssets = arjunBanks + arjunFDs + arjunInv;
+    const arjunGold = 15700; // 2g digital gold × ₹7,850/g
+    const arjunRDs = Math.max(0, i - 5) * 1000; // RD started Oct 2025 (i=6); 0 for Apr–Sep, ₹1K/month from Oct
+    const arjunAssets = arjunBanks + arjunFDs + arjunInv + arjunGold + arjunRDs;
     const arjunNW = arjunAssets;
 
     await prisma.netWorthSnapshot.upsert({
       where: { userId_snapshotDate: { userId: arjun.id, snapshotDate } },
-      create: { userId: arjun.id, snapshotDate, totalAssets: arjunAssets, totalLiabilities: 0, netWorth: arjunNW, bankBalances: arjunBanks, fixedDeposits: arjunFDs, investments: arjunInv },
-      update: { totalAssets: arjunAssets, totalLiabilities: 0, netWorth: arjunNW, bankBalances: arjunBanks, fixedDeposits: arjunFDs, investments: arjunInv },
+      create: { userId: arjun.id, snapshotDate, totalAssets: arjunAssets, totalLiabilities: 0, netWorth: arjunNW, bankBalances: arjunBanks, fixedDeposits: arjunFDs, recurringDeposits: arjunRDs, investments: arjunInv, gold: arjunGold },
+      update: { totalAssets: arjunAssets, totalLiabilities: 0, netWorth: arjunNW, bankBalances: arjunBanks, fixedDeposits: arjunFDs, recurringDeposits: arjunRDs, investments: arjunInv, gold: arjunGold },
     });
   }
 
