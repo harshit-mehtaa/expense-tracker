@@ -35,6 +35,26 @@ const LOAN_TYPE_LABELS: Record<string, string> = {
   OTHER:    'Other Loans',
 };
 
+const INVESTMENT_TYPE_LABELS: Record<string, string> = {
+  STOCKS_INDIA:   'Stocks (India)',
+  STOCKS_FOREIGN: 'Stocks (Foreign)',
+  MUTUAL_FUND:    'Mutual Fund',
+  ELSS:           'ELSS',
+  PPF:            'PPF',
+  NPS:            'NPS',
+  EPF:            'EPF',
+  SGB:            'SGB',
+  GOLD_ETF:       'Gold ETF',
+  BONDS:          'Bonds',
+};
+
+const GOLD_TYPE_LABELS: Record<string, string> = {
+  PHYSICAL:  'Physical',
+  SGB:       'SGB',
+  GOLD_ETF:  'Gold ETF',
+  DIGITAL:   'Digital',
+};
+
 export default function ReportsPage() {
   const { selectedFY } = useFY();
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
@@ -515,53 +535,69 @@ export default function ReportsPage() {
                   </div>
                 )}
                 {/* Fixed Deposits */}
-                {netWorth.assets.fixedDeposits > 0 && (
+                {Array.isArray(netWorth.fdItems) && netWorth.fdItems.length > 0 && (
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Fixed Deposits</p>
-                    <div className="flex justify-between text-sm">
-                      <span>Fixed Deposits</span>
-                      <INRDisplay amount={netWorth.assets.fixedDeposits} />
-                    </div>
+                    {netWorth.fdItems.map((fd: { bankName: string; maturityAmount: number }, i: number) => (
+                      <div key={i} className="flex justify-between text-sm">
+                        <span className="truncate pr-2">{fd.bankName}</span>
+                        <INRDisplay amount={fd.maturityAmount} />
+                      </div>
+                    ))}
                   </div>
                 )}
                 {/* Recurring Deposits */}
-                {netWorth.assets.recurringDeposits > 0 && (
+                {Array.isArray(netWorth.rdItems) && netWorth.rdItems.length > 0 && (
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Recurring Deposits</p>
-                    <div className="flex justify-between text-sm">
-                      <span>Recurring Deposits</span>
-                      <INRDisplay amount={netWorth.assets.recurringDeposits} />
-                    </div>
+                    {netWorth.rdItems.map((rd: { bankName: string; totalDeposited: number }, i: number) => (
+                      <div key={i} className="flex justify-between text-sm">
+                        <span className="truncate pr-2">{rd.bankName}</span>
+                        <INRDisplay amount={rd.totalDeposited} />
+                      </div>
+                    ))}
                   </div>
                 )}
                 {/* Investments */}
-                {netWorth.assets.investments > 0 && (
+                {Array.isArray(netWorth.investmentItems) && netWorth.investmentItems.length > 0 && (
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Investments</p>
-                    <div className="flex justify-between text-sm">
-                      <span>Investments</span>
-                      <INRDisplay amount={netWorth.assets.investments} />
-                    </div>
+                    {netWorth.investmentItems.map((inv: { name: string; type: string; currentValue: number }, i: number) => (
+                      <div key={i} className="flex justify-between text-sm">
+                        <span className="truncate pr-2">
+                          {inv.name}
+                          <span className="text-muted-foreground ml-1">({INVESTMENT_TYPE_LABELS[inv.type] ?? inv.type})</span>
+                        </span>
+                        <INRDisplay amount={inv.currentValue} />
+                      </div>
+                    ))}
                   </div>
                 )}
                 {/* Gold */}
-                {netWorth.assets.gold > 0 && (
+                {Array.isArray(netWorth.goldItems) && netWorth.goldItems.length > 0 && (
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Gold</p>
-                    <div className="flex justify-between text-sm">
-                      <span>Gold</span>
-                      <INRDisplay amount={netWorth.assets.gold} />
-                    </div>
+                    {netWorth.goldItems.map((g: { type: string; description: string | null; currentValue: number }, i: number) => (
+                      <div key={i} className="flex justify-between text-sm">
+                        <span className="truncate pr-2">
+                          {GOLD_TYPE_LABELS[g.type] ?? g.type}
+                          {g.description ? ` — ${g.description}` : ''}
+                        </span>
+                        <INRDisplay amount={g.currentValue} />
+                      </div>
+                    ))}
                   </div>
                 )}
                 {/* Real Estate */}
-                {netWorth.assets.realEstate > 0 && (
+                {Array.isArray(netWorth.realEstateItems) && netWorth.realEstateItems.length > 0 && (
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Real Estate</p>
-                    <div className="flex justify-between text-sm">
-                      <span>Real Estate</span>
-                      <INRDisplay amount={netWorth.assets.realEstate} />
-                    </div>
+                    {netWorth.realEstateItems.map((p: { propertyName: string; propertyType: string; currentValue: number }, i: number) => (
+                      <div key={i} className="flex justify-between text-sm">
+                        <span className="truncate pr-2">{p.propertyName}</span>
+                        <INRDisplay amount={p.currentValue} />
+                      </div>
+                    ))}
                   </div>
                 )}
                 {/* Fallback: no accounts and no other assets */}

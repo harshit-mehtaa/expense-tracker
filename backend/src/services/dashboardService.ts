@@ -376,11 +376,26 @@ async function fetchAssetBreakdown(userId?: string) {
       select: { bankName: true, accountNumberLast4: true, accountType: true, currentBalance: true },
       orderBy: { currentBalance: 'desc' },
     }),
-    prisma.fixedDeposit.findMany({ where: { ...where, status: 'ACTIVE' }, select: { maturityAmount: true } }),
-    prisma.recurringDeposit.findMany({ where: { ...where, status: 'ACTIVE' }, select: { totalDeposited: true } }),
-    prisma.investment.findMany({ where, select: { unitsOrQuantity: true, currentPricePerUnit: true, currency: true } }),
-    prisma.goldHolding.findMany({ where, select: { quantityGrams: true, currentPricePerGram: true } }),
-    prisma.realEstate.findMany({ where, select: { currentValue: true } }),
+    prisma.fixedDeposit.findMany({
+      where: { ...where, status: 'ACTIVE' },
+      select: { bankName: true, maturityAmount: true },
+    }),
+    prisma.recurringDeposit.findMany({
+      where: { ...where, status: 'ACTIVE' },
+      select: { bankName: true, totalDeposited: true },
+    }),
+    prisma.investment.findMany({
+      where,
+      select: { name: true, type: true, unitsOrQuantity: true, currentPricePerUnit: true, currency: true },
+    }),
+    prisma.goldHolding.findMany({
+      where,
+      select: { type: true, description: true, quantityGrams: true, currentPricePerGram: true },
+    }),
+    prisma.realEstate.findMany({
+      where,
+      select: { propertyName: true, propertyType: true, currentValue: true },
+    }),
   ]);
 
   const exchangeRates = await prisma.exchangeRate.findMany({ where: { toCurrency: 'INR' } });
@@ -394,17 +409,46 @@ async function fetchAssetBreakdown(userId?: string) {
     currentBalance: Number(a.currentBalance),
   }));
   const bankBalances = bankAccounts.reduce((s, a) => s + a.currentBalance, 0);
-  const fixedDeposits = fds.reduce((s, f) => s + Number(f.maturityAmount), 0);
-  const recurringDeposits = rds.reduce((s, r) => s + Number(r.totalDeposited), 0);
-  const investments_ = investments.reduce((s, i) => {
-    const fx = i.currency === 'INR' ? 1 : (rateMap[i.currency] ?? 1);
-    return s + Number(i.unitsOrQuantity) * Number(i.currentPricePerUnit) * fx;
-  }, 0);
-  const gold_ = gold.reduce((s, g) => s + Number(g.quantityGrams) * Number(g.currentPricePerGram), 0);
-  const realEstate = realestate.reduce((s, p) => s + Number(p.currentValue), 0);
+
+  const fdItems = fds
+    .map((f) => ({ bankName: f.bankName, maturityAmount: Number(f.maturityAmount) }))
+    .sort((a, b) => b.maturityAmount - a.maturityAmount);
+  const fixedDeposits = fdItems.reduce((s, f) => s + f.maturityAmount, 0);
+
+  const rdItems = rds
+    .map((r) => ({ bankName: r.bankName, totalDeposited: Number(r.totalDeposited) }))
+    .sort((a, b) => b.totalDeposited - a.totalDeposited);
+  const recurringDeposits = rdItems.reduce((s, r) => s + r.totalDeposited, 0);
+
+  const investmentItems = investments
+    .map((i) => {
+      const fx = i.currency === 'INR' ? 1 : (rateMap[i.currency] ?? 1);
+      return { name: i.name, type: i.type, currentValue: Number(i.unitsOrQuantity) * Number(i.currentPricePerUnit) * fx };
+    })
+    .sort((a, b) => b.currentValue - a.currentValue);
+  const investments_ = investmentItems.reduce((s, i) => s + i.currentValue, 0);
+
+  const goldItems = gold
+    .map((g) => ({
+      type: g.type,
+      description: g.description ?? null,
+      currentValue: Number(g.quantityGrams) * Number(g.currentPricePerGram),
+    }))
+    .sort((a, b) => b.currentValue - a.currentValue);
+  const gold_ = goldItems.reduce((s, g) => s + g.currentValue, 0);
+
+  const realEstateItems = realestate
+    .map((p) => ({ propertyName: p.propertyName, propertyType: p.propertyType, currentValue: Number(p.currentValue) }))
+    .sort((a, b) => b.currentValue - a.currentValue);
+  const realEstate = realEstateItems.reduce((s, p) => s + p.currentValue, 0);
 
   return {
     bankAccounts,
+    fdItems,
+    rdItems,
+    investmentItems,
+    goldItems,
+    realEstateItems,
     bankBalances,
     fixedDeposits,
     recurringDeposits,
@@ -439,10 +483,15 @@ export async function computeNetWorthStatement(userId?: string) {
       totalLiabilities += amt;
     }
   }
-  const { total: totalAssets, bankAccounts, ...assets } = assetBreakdown;
+  const { total: totalAssets, bankAccounts, fdItems, rdItems, investmentItems, goldItems, realEstateItems, ...assets } = assetBreakdown;
   return {
     assets,
     bankAccounts,
+    fdItems,
+    rdItems,
+    investmentItems,
+    goldItems,
+    realEstateItems,
     liabilities,
     totalAssets,
     totalLiabilities,
