@@ -3,13 +3,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Plus, Trash2, Pencil, Check, X } from 'lucide-react';
+import { Plus, Trash2, Pencil, Check, X, SquarePen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
-import { investmentsApi } from '@/api/investments';
+import { investmentsApi, GoldHolding } from '@/api/investments';
 
 const GOLD_TYPES: Record<string, string> = {
   PHYSICAL: 'Physical Gold', SGB: 'Sovereign Gold Bond', GOLD_ETF: 'Gold ETF', DIGITAL: 'Digital Gold',
@@ -32,6 +32,7 @@ export default function GoldPage() {
   const [showGoldForm, setShowGoldForm] = useState(false);
   const [editingGoldId, setEditingGoldId] = useState<string | null>(null);
   const [editGoldValue, setEditGoldValue] = useState('');
+  const [editingGoldHolding, setEditingGoldHolding] = useState<GoldHolding | null>(null);
 
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
   const isViewingFamilyWide = isAdmin && !viewUserId;
@@ -42,6 +43,7 @@ export default function GoldPage() {
   });
 
   const goldForm = useForm<GoldForm>({ resolver: zodResolver(goldSchema), defaultValues: { type: 'PHYSICAL' } });
+  const editGoldForm = useForm<GoldForm>({ resolver: zodResolver(goldSchema) });
 
   const invalidateGold = () => qc.invalidateQueries({ queryKey: ['gold'] });
 
@@ -60,6 +62,35 @@ export default function GoldPage() {
       investmentsApi.updateGold(id, { currentPricePerGram: price }),
     onSuccess: () => { invalidateGold(); setEditingGoldId(null); },
   });
+
+  const updateGoldMutation = useMutation({
+    mutationFn: (data: GoldForm & { id: string }) => {
+      const { id, ...rest } = data;
+      return investmentsApi.updateGold(id, rest);
+    },
+    onSuccess: () => { invalidateGold(); setEditingGoldHolding(null); editGoldForm.reset(); },
+  });
+
+  const openEditModal = (h: GoldHolding) => {
+    setEditingGoldId(null);
+    updateGoldPriceMutation.reset();
+    setEditingGoldHolding(h);
+    editGoldForm.reset({
+      type: h.type,
+      quantityGrams: h.quantityGrams,
+      purchasePricePerGram: h.purchasePricePerGram,
+      currentPricePerGram: h.currentPricePerGram,
+      purchaseDate: h.purchaseDate.slice(0, 10),
+      description: h.description ?? '',
+      notes: h.notes ?? '',
+    });
+  };
+
+  const closeEditModal = () => {
+    setEditingGoldHolding(null);
+    editGoldForm.reset();
+    updateGoldMutation.reset();
+  };
 
   const gold = goldData?.holdings ?? [];
   const goldSummary = goldData?.summary;
@@ -129,9 +160,14 @@ export default function GoldPage() {
                 )}
               </div>
               {!isViewingFamilyWide && (
-                <Button variant="ghost" size="icon" onClick={() => deleteGoldMutation.mutate(h.id)}>
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" size="icon" onClick={() => openEditModal(h)} title="Edit holding">
+                    <SquarePen className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" onClick={() => deleteGoldMutation.mutate(h.id)}>
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </div>
               )}
             </div>
             <div className="grid grid-cols-2 gap-2 text-sm">
@@ -171,7 +207,14 @@ export default function GoldPage() {
                   </div>
                 )}
               </div>
+              <div className="col-span-2">
+                <p className="text-muted-foreground">Purchased</p>
+                <p>{new Date(h.purchaseDate).toLocaleDateString('en-IN')}</p>
+              </div>
             </div>
+            {h.notes && (
+              <p className="text-xs text-muted-foreground border-t pt-2">{h.notes}</p>
+            )}
           </div>
         ))}
         {gold.length === 0 && (
@@ -198,10 +241,49 @@ export default function GoldPage() {
                 <div className="space-y-1"><Label>Current Price (₹/g)</Label><Input {...goldForm.register('currentPricePerGram')} type="number" step="0.01" /></div>
                 <div className="space-y-1"><Label>Purchase Date</Label><Input {...goldForm.register('purchaseDate')} type="date" /></div>
                 <div className="col-span-2 space-y-1"><Label>Description (optional)</Label><Input {...goldForm.register('description')} /></div>
+                <div className="col-span-2 space-y-1"><Label>Notes (optional)</Label><Input {...goldForm.register('notes')} /></div>
               </div>
+              {createGoldMutation.error && (
+                <p className="text-sm text-destructive">
+                  {(createGoldMutation.error as any)?.response?.data?.message ?? 'Failed to add gold holding'}
+                </p>
+              )}
               <div className="flex justify-end gap-3">
                 <Button type="button" variant="outline" onClick={() => { setShowGoldForm(false); goldForm.reset(); }}>Cancel</Button>
                 <Button type="submit" disabled={createGoldMutation.isPending}>Add Gold</Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {editingGoldHolding && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-background rounded-lg border shadow-xl w-full max-w-md p-6">
+            <h2 className="text-xl font-semibold mb-4">Edit Gold Holding</h2>
+            <form onSubmit={editGoldForm.handleSubmit((data) => updateGoldMutation.mutate({ id: editingGoldHolding.id, ...data }))} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1 col-span-2">
+                  <Label>Type</Label>
+                  <select {...editGoldForm.register('type')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                    {Object.entries(GOLD_TYPES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1"><Label>Quantity (grams)</Label><Input {...editGoldForm.register('quantityGrams')} type="number" step="0.001" /></div>
+                <div className="space-y-1"><Label>Buy Price (₹/g)</Label><Input {...editGoldForm.register('purchasePricePerGram')} type="number" step="0.01" /></div>
+                <div className="space-y-1"><Label>Current Price (₹/g)</Label><Input {...editGoldForm.register('currentPricePerGram')} type="number" step="0.01" /></div>
+                <div className="space-y-1"><Label>Purchase Date</Label><Input {...editGoldForm.register('purchaseDate')} type="date" /></div>
+                <div className="col-span-2 space-y-1"><Label>Description (optional)</Label><Input {...editGoldForm.register('description')} /></div>
+                <div className="col-span-2 space-y-1"><Label>Notes (optional)</Label><Input {...editGoldForm.register('notes')} /></div>
+              </div>
+              {updateGoldMutation.error && (
+                <p className="text-sm text-destructive">
+                  {(updateGoldMutation.error as any)?.response?.data?.message ?? 'Failed to update gold holding'}
+                </p>
+              )}
+              <div className="flex justify-end gap-3">
+                <Button type="button" variant="outline" onClick={closeEditModal}>Cancel</Button>
+                <Button type="submit" disabled={updateGoldMutation.isPending}>Save Changes</Button>
               </div>
             </form>
           </div>
