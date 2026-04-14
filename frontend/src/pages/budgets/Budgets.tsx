@@ -49,6 +49,7 @@ export default function BudgetsPage() {
   const { data: budgets = [], isLoading } = useBudgets(selectedFY, viewUserId);
   const { data: categories = [] } = useCategories();
   const isViewingOtherMember = isAdmin && viewUserId !== undefined;
+  const isViewingFamilyWide = isAdmin && !viewUserId;
   const expenseCategories = categories.filter((c: any) => c.type === 'EXPENSE');
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm<BudgetForm>({
@@ -101,7 +102,7 @@ export default function BudgetsPage() {
             </div>
           )}
         </div>
-        {!isViewingOtherMember && (
+        {!isViewingOtherMember && !isViewingFamilyWide && (
           <Button onClick={() => setShowForm(true)}><PlusCircle className="h-4 w-4 mr-2" /> Add Budget</Button>
         )}
       </div>
