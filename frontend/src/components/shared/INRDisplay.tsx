@@ -40,16 +40,17 @@ export function INRDisplay({
     colorCode && amount === 0 && 'text-muted-foreground',
   );
 
-  // When displaying an abbreviated amount (Cr/L), show the exact value as a tooltip.
+  // When displaying an abbreviated amount (Cr/L), also show the exact value below.
   const isAbbreviated = short && Math.abs(amount) >= 100_000;
-  const title = isAbbreviated ? formatINR(amount) : undefined;
 
-  return (
-    <span
-      className={cn(colorClass, isAbbreviated && 'cursor-help', className)}
-      title={title}
-    >
-      {formatted}
-    </span>
-  );
+  if (isAbbreviated) {
+    return (
+      <span className="inline-block">
+        <span className={cn(colorClass, className)}>{formatted}</span>
+        <span className="block text-xs font-normal text-muted-foreground">{formatINR(amount)}</span>
+      </span>
+    );
+  }
+
+  return <span className={cn(colorClass, className)}>{formatted}</span>;
 }
