@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
+import { useMemberSelector } from '@/hooks/useMemberSelector';
 import api from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -37,10 +38,11 @@ const accountSchema = z.object({
 
 type AccountForm = z.infer<typeof accountSchema>;
 
-function useAccounts() {
+function useAccounts(viewUserId?: string) {
   return useQuery({
-    queryKey: ['accounts'],
-    queryFn: () => api.get<{ data: any[] }>('/accounts').then((r) => r.data.data),
+    queryKey: ['accounts', viewUserId],
+    queryFn: () =>
+      api.get<{ data: any[] }>('/accounts', { params: viewUserId ? { userId: viewUserId } : {} }).then((r) => r.data.data),
   });
 }
 
@@ -53,33 +55,38 @@ export default function AccountsPage() {
   const [reconcileBalance, setReconcileBalance] = useState('');
   const [reconcileNote, setReconcileNote] = useState('');
 
-  const { data: accounts = [], isLoading } = useAccounts();
+  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
+  const isViewingFamilyWide = isAdmin && !viewUserId;
+
+  const { data: accounts = [], isLoading } = useAccounts(viewUserId);
 
   const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm<AccountForm>({
     resolver: zodResolver(accountSchema),
     defaultValues: { accountType: 'SAVINGS', currentBalance: 0 },
   });
 
+  const invalidateAccounts = () => qc.invalidateQueries({ queryKey: ['accounts'] });
+
   const createMutation = useMutation({
     mutationFn: (data: AccountForm) => api.post('/accounts', data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['accounts'] }); setShowForm(false); reset(); },
+    onSuccess: () => { invalidateAccounts(); setShowForm(false); reset(); },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: AccountForm }) => api.put(`/accounts/${id}`, data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['accounts'] }); setEditing(null); setShowForm(false); reset(); },
+    onSuccess: () => { invalidateAccounts(); setEditing(null); setShowForm(false); reset(); },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/accounts/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['accounts'] }),
+    onSuccess: () => invalidateAccounts(),
   });
 
   const reconcileMutation = useMutation({
     mutationFn: ({ id, actualBalance, note }: { id: string; actualBalance: number; note?: string }) =>
       api.post(`/accounts/${id}/reconcile`, { actualBalance, note }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['accounts'] });
+      invalidateAccounts();
       qc.invalidateQueries({ queryKey: ['transactions'] });
       setReconciling(null);
       setReconcileBalance('');
@@ -105,21 +112,48 @@ export default function AccountsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Accounts & Deposits</h1>
-          <p className="text-muted-foreground text-sm mt-1">{accounts.length} accounts</p>
+          <p className="text-muted-foreground text-sm mt-1">
+            {accounts.length} account{accounts.length !== 1 ? 's' : ''}
+            {isAdmin && viewUserId ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}` : isAdmin ? ' · All Family' : ''}
+          </p>
+          {isAdmin && !isMembersLoading && (
+            <div className="flex items-center gap-2 mt-2">
+              <label htmlFor="accounts-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+              {isMembersError ? (
+                <span className="text-xs text-destructive">Could not load members</span>
+              ) : (
+                <select
+                  id="accounts-member-select"
+                  value={viewUserId ?? ''}
+                  onChange={(e) => setViewUserId(e.target.value || undefined)}
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
+                >
+                  <option value="">All Family</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => setMaskedBalances(!maskedBalances)}>
             <Eye className="h-4 w-4 mr-1" /> {maskedBalances ? 'Show' : 'Hide'} Balances
           </Button>
-          <Button onClick={() => { setEditing(null); reset(); setShowForm(true); }}>
-            <Plus className="h-4 w-4 mr-2" /> Add Account
-          </Button>
+          {!isViewingFamilyWide && (
+            <Button onClick={() => { setEditing(null); reset(); setShowForm(true); }}>
+              <Plus className="h-4 w-4 mr-2" /> Add Account
+            </Button>
+          )}
         </div>
       </div>
 
       {/* Total Balance */}
       <div className="rounded-lg border bg-card p-5">
-        <p className="text-sm text-muted-foreground">Total Balance Across All Accounts</p>
+        <p className="text-sm text-muted-foreground">
+          {isViewingFamilyWide ? 'Total Balance — All Family Members' : 'Total Balance Across All Accounts'}
+        </p>
         {maskedBalances ? (
           <p className="text-3xl font-bold mt-1">₹ ••••••</p>
         ) : (
@@ -149,12 +183,17 @@ export default function AccountsPage() {
                   {account.accountNumberLast4 && (
                     <p className="text-sm text-muted-foreground">····{account.accountNumberLast4}</p>
                   )}
+                  {isViewingFamilyWide && account.userName && (
+                    <p className="text-xs text-muted-foreground mt-0.5">{account.userName}</p>
+                  )}
                 </div>
-                <div className="flex gap-1">
-                  <Button variant="ghost" size="icon" title="Reconcile balance" onClick={() => { setReconciling(account); setReconcileBalance(String(Number(account.currentBalance))); setReconcileNote(''); }}><RefreshCw className="h-4 w-4" /></Button>
-                  <Button variant="ghost" size="icon" onClick={() => startEdit(account)}><Edit2 className="h-4 w-4" /></Button>
-                  <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(account.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
-                </div>
+                {!isViewingFamilyWide && (
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="icon" title="Reconcile balance" onClick={() => { setReconciling(account); setReconcileBalance(String(Number(account.currentBalance))); setReconcileNote(''); }}><RefreshCw className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="icon" onClick={() => startEdit(account)}><Edit2 className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(account.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                  </div>
+                )}
               </div>
 
               <div>

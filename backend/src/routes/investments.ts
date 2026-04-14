@@ -4,6 +4,7 @@ import { requireAuth, requireAdmin } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendNoContent, sendPaginated } from '../utils/response';
 import { getCurrentFY } from '../utils/financialYear';
+import { resolveTargetUserId } from '../utils/resolveTargetUserId';
 import * as svc from '../services/investmentService';
 
 function parseFY(raw: unknown): string {
@@ -60,7 +61,8 @@ const fdSchema = z.object({
 
 router.get('/fd', asyncHandler(async (req, res) => {
   const status = req.query.status as any;
-  const fds = await svc.getFDs(req.user!.userId, status);
+  const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
+  const fds = await svc.getFDs(targetUserId, req.user!.userId, req.user!.role, status);
   sendSuccess(res, fds);
 }));
 
@@ -103,7 +105,8 @@ const rdSchema = z.object({
 
 router.get('/rd', asyncHandler(async (req, res) => {
   const status = req.query.status as any;
-  const rds = await svc.getRDs(req.user!.userId, status);
+  const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
+  const rds = await svc.getRDs(targetUserId, req.user!.userId, req.user!.role, status);
   sendSuccess(res, rds);
 }));
 

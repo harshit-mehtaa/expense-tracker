@@ -2,14 +2,31 @@ import { Prisma } from '@prisma/client';
 import prisma from '../config/prisma';
 import { AppError } from '../utils/AppError';
 
-export async function getAccounts(userId: string, requesterId: string, requesterRole: string) {
-  // Members can only see their own accounts; admins can query any user
-  const targetUserId = requesterRole === 'ADMIN' ? userId || requesterId : requesterId;
+export async function getAccounts(userId: string | undefined, requesterId: string, requesterRole: string) {
+  // MEMBER: always own accounts only
+  if (requesterRole !== 'ADMIN') {
+    return prisma.bankAccount.findMany({
+      where: { userId: requesterId, isActive: true },
+      orderBy: { bankName: 'asc' },
+    });
+  }
 
-  return prisma.bankAccount.findMany({
-    where: { userId: targetUserId, isActive: true },
-    orderBy: { bankName: 'asc' },
+  // ADMIN viewing a specific member
+  if (userId) {
+    return prisma.bankAccount.findMany({
+      where: { userId, isActive: true },
+      orderBy: { bankName: 'asc' },
+    });
+  }
+
+  // ADMIN family-wide: all accounts for active users, include owner name
+  const accounts = await prisma.bankAccount.findMany({
+    where: { isActive: true, user: { isActive: true, deletedAt: null } },
+    include: { user: { select: { name: true } } },
+    orderBy: [{ user: { name: 'asc' } }, { bankName: 'asc' }],
   });
+
+  return accounts.map(({ user, ...rest }) => ({ ...rest, userName: user?.name ?? '' }));
 }
 
 export async function getAccountById(accountId: string, requesterId: string, requesterRole: string) {

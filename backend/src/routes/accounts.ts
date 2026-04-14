@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendNoContent } from '../utils/response';
 import { requireAuth } from '../middleware/auth';
+import { resolveTargetUserId } from '../utils/resolveTargetUserId';
 import * as accountService from '../services/accountService';
 
 const router = Router();
@@ -23,7 +24,7 @@ const createAccountSchema = z.object({
 router.get(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
-    const userId = (req.query.userId as string) || req.user!.userId;
+    const userId = await resolveTargetUserId(req, { paramName: 'userId' });
     const accounts = await accountService.getAccounts(userId, req.user!.userId, req.user!.role);
     sendSuccess(res, accounts);
   }),

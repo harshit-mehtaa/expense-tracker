@@ -41,6 +41,7 @@ export interface FD {
   isTaxSaver: boolean;
   status: 'ACTIVE' | 'MATURED' | 'BROKEN';
   notes?: string;
+  userName?: string;
 }
 
 export interface RD {
@@ -55,6 +56,7 @@ export interface RD {
   totalDeposited: number;
   installmentsPaid: number;
   status: 'ACTIVE' | 'MATURED' | 'CLOSED';
+  userName?: string;
 }
 
 export interface SIP {
@@ -113,11 +115,17 @@ export const investmentsApi = {
   create: (data: object) => api.post<{ data: Investment }>('/investments', data).then(unwrap),
   update: (id: string, data: object) => api.put<{ data: Investment }>(`/investments/${id}`, data).then(unwrap),
   delete: (id: string) => api.delete(`/investments/${id}`),
-  getFDs: (status?: string) => api.get<{ data: FD[] }>('/investments/fd', { params: status ? { status } : {} }).then(unwrap),
+  getFDs: (opts?: { status?: string; targetUserId?: string }) =>
+    api.get<{ data: FD[] }>('/investments/fd', {
+      params: { ...(opts?.status ? { status: opts.status } : {}), ...(opts?.targetUserId ? { userId: opts.targetUserId } : {}) },
+    }).then(unwrap),
   createFD: (data: object) => api.post<{ data: FD }>('/investments/fd', data).then(unwrap),
   updateFD: (id: string, data: object) => api.put<{ data: FD }>(`/investments/fd/${id}`, data).then(unwrap),
   deleteFD: (id: string) => api.delete(`/investments/fd/${id}`),
-  getRDs: (status?: string) => api.get<{ data: RD[] }>('/investments/rd', { params: status ? { status } : {} }).then(unwrap),
+  getRDs: (opts?: { status?: string; targetUserId?: string }) =>
+    api.get<{ data: RD[] }>('/investments/rd', {
+      params: { ...(opts?.status ? { status: opts.status } : {}), ...(opts?.targetUserId ? { userId: opts.targetUserId } : {}) },
+    }).then(unwrap),
   createRD: (data: object) => api.post<{ data: RD }>('/investments/rd', data).then(unwrap),
   updateRD: (id: string, data: object) => api.put<{ data: RD }>(`/investments/rd/${id}`, data).then(unwrap),
   deleteRD: (id: string) => api.delete(`/investments/rd/${id}`),

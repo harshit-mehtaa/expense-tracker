@@ -76,12 +76,24 @@ describe('getAccounts', () => {
     );
   });
 
-  it('ADMIN without userId: falls back to requesterId', async () => {
+  it('ADMIN with undefined userId: family-wide query (no userId filter), includes user name', async () => {
+    acctMock.findMany.mockResolvedValue([
+      { id: 'acct-1', bankName: 'HDFC', userId: 'u1', isActive: true, user: { name: 'Alice' } },
+    ]);
+    const result = await getAccounts(undefined, 'admin-1', 'ADMIN');
+    const call = acctMock.findMany.mock.calls[0][0];
+    expect(call.where).not.toHaveProperty('userId');
+    expect(call.where).toEqual({ isActive: true, user: { isActive: true, deletedAt: null } });
+    expect(call.include).toEqual({ user: { select: { name: true } } });
+    expect((result[0] as any).userName).toBe('Alice');
+    expect((result[0] as any).user).toBeUndefined();
+  });
+
+  it('ADMIN with empty string userId: family-wide (treated same as undefined)', async () => {
     acctMock.findMany.mockResolvedValue([]);
-    await getAccounts('', 'admin-1', 'ADMIN'); // empty userId
-    expect(acctMock.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { userId: 'admin-1', isActive: true } }),
-    );
+    await getAccounts('' as any, 'admin-1', 'ADMIN');
+    const call = acctMock.findMany.mock.calls[0][0];
+    expect(call.where).not.toHaveProperty('userId');
   });
 });
 

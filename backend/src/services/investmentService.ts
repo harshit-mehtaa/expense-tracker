@@ -235,11 +235,31 @@ export async function deleteInvestment(userId: string, id: string) {
 
 // ─── CRUD: FDs ────────────────────────────────────────────────────────────────
 
-export async function getFDs(userId: string, status?: FDStatus) {
-  return prisma.fixedDeposit.findMany({
-    where: { userId, ...(status ? { status } : {}) },
-    orderBy: { maturityDate: 'asc' },
+export async function getFDs(userId: string | undefined, requesterId: string, requesterRole: string, status?: FDStatus) {
+  // MEMBER: always own FDs only (ignore any passed userId)
+  if (requesterRole !== 'ADMIN') {
+    return prisma.fixedDeposit.findMany({
+      where: { userId: requesterId, ...(status ? { status } : {}) },
+      orderBy: { maturityDate: 'asc' },
+    });
+  }
+
+  // ADMIN viewing a specific member
+  if (userId) {
+    return prisma.fixedDeposit.findMany({
+      where: { userId, ...(status ? { status } : {}) },
+      orderBy: { maturityDate: 'asc' },
+    });
+  }
+
+  // ADMIN family-wide: all FDs for active users, include owner name
+  const fds = await prisma.fixedDeposit.findMany({
+    where: { ...(status ? { status } : {}), user: { isActive: true, deletedAt: null } },
+    include: { user: { select: { name: true } } },
+    orderBy: [{ user: { name: 'asc' } }, { maturityDate: 'asc' }],
   });
+
+  return fds.map(({ user, ...rest }) => ({ ...rest, userName: user?.name ?? '' }));
 }
 
 export async function getFDsMaturing(userId: string, days: number) {
@@ -277,11 +297,31 @@ export async function deleteFD(userId: string, id: string) {
 
 // ─── CRUD: RDs ────────────────────────────────────────────────────────────────
 
-export async function getRDs(userId: string, status?: RDStatus) {
-  return prisma.recurringDeposit.findMany({
-    where: { userId, ...(status ? { status } : {}) },
-    orderBy: { maturityDate: 'asc' },
+export async function getRDs(userId: string | undefined, requesterId: string, requesterRole: string, status?: RDStatus) {
+  // MEMBER: always own RDs only (ignore any passed userId)
+  if (requesterRole !== 'ADMIN') {
+    return prisma.recurringDeposit.findMany({
+      where: { userId: requesterId, ...(status ? { status } : {}) },
+      orderBy: { maturityDate: 'asc' },
+    });
+  }
+
+  // ADMIN viewing a specific member
+  if (userId) {
+    return prisma.recurringDeposit.findMany({
+      where: { userId, ...(status ? { status } : {}) },
+      orderBy: { maturityDate: 'asc' },
+    });
+  }
+
+  // ADMIN family-wide: all RDs for active users, include owner name
+  const rds = await prisma.recurringDeposit.findMany({
+    where: { ...(status ? { status } : {}), user: { isActive: true, deletedAt: null } },
+    include: { user: { select: { name: true } } },
+    orderBy: [{ user: { name: 'asc' } }, { maturityDate: 'asc' }],
   });
+
+  return rds.map(({ user, ...rest }) => ({ ...rest, userName: user?.name ?? '' }));
 }
 
 export async function createRD(userId: string, data: Omit<Prisma.RecurringDepositCreateInput, 'user'>) {

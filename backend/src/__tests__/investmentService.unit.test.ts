@@ -520,17 +520,37 @@ describe('deleteInvestment', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('getFDs', () => {
-  it('queries by userId, optionally with status filter', async () => {
-    await getFDs('u1', 'ACTIVE' as any);
+  it('MEMBER: scopes to requesterId, ignores passed userId', async () => {
+    await getFDs('other-user', 'u1', 'MEMBER', 'ACTIVE' as any);
     expect(fdMock.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { userId: 'u1', status: 'ACTIVE' } }),
     );
   });
 
-  it('queries without status filter when not provided', async () => {
-    await getFDs('u1');
+  it('MEMBER: queries without status filter when not provided', async () => {
+    await getFDs(undefined, 'u1', 'MEMBER');
     const call = fdMock.findMany.mock.calls[0][0];
+    expect(call.where.userId).toBe('u1');
     expect(call.where.status).toBeUndefined();
+  });
+
+  it('ADMIN with userId: scopes to specified member', async () => {
+    await getFDs('u2', 'admin-1', 'ADMIN');
+    expect(fdMock.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'u2' } }),
+    );
+  });
+
+  it('ADMIN with undefined userId: family-wide query (no userId filter), includes user name', async () => {
+    fdMock.findMany.mockResolvedValueOnce([
+      { id: 'fd-1', bankName: 'HDFC', user: { name: 'Alice' } },
+    ]);
+    const result = await getFDs(undefined, 'admin-1', 'ADMIN');
+    const call = fdMock.findMany.mock.calls[0][0];
+    expect(call.where).not.toHaveProperty('userId');
+    expect(call.include).toEqual({ user: { select: { name: true } } });
+    expect((result[0] as any).userName).toBe('Alice');
+    expect((result[0] as any).user).toBeUndefined();
   });
 });
 
@@ -602,11 +622,30 @@ describe('deleteFD', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('getRDs', () => {
-  it('queries by userId with optional status', async () => {
-    await getRDs('u1', 'ACTIVE' as any);
+  it('MEMBER: scopes to requesterId, ignores passed userId', async () => {
+    await getRDs('other-user', 'u1', 'MEMBER', 'ACTIVE' as any);
     expect(rdMock.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { userId: 'u1', status: 'ACTIVE' } }),
     );
+  });
+
+  it('ADMIN with userId: scopes to specified member', async () => {
+    await getRDs('u2', 'admin-1', 'ADMIN');
+    expect(rdMock.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'u2' } }),
+    );
+  });
+
+  it('ADMIN with undefined userId: family-wide query (no userId filter), includes user name', async () => {
+    rdMock.findMany.mockResolvedValueOnce([
+      { id: 'rd-1', bankName: 'SBI', user: { name: 'Bob' } },
+    ]);
+    const result = await getRDs(undefined, 'admin-1', 'ADMIN');
+    const call = rdMock.findMany.mock.calls[0][0];
+    expect(call.where).not.toHaveProperty('userId');
+    expect(call.include).toEqual({ user: { select: { name: true } } });
+    expect((result[0] as any).userName).toBe('Bob');
+    expect((result[0] as any).user).toBeUndefined();
   });
 });
 

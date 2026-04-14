@@ -13,6 +13,7 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { TablePagination } from '@/components/shared/TablePagination';
 import { investmentsApi, type Investment, type FD, type RD, type SIP } from '@/api/investments';
 import { useFY } from '@/contexts/FYContext';
+import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { cn } from '@/lib/utils';
 
 const INV_TYPES: Record<string, string> = {
@@ -86,6 +87,8 @@ export default function InvestmentsPage() {
   const { selectedFY } = useFY();
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabType>('portfolio');
+  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
+  const isViewingFamilyWide = isAdmin && !viewUserId;
   const [showInvForm, setShowInvForm] = useState(false);
   const [editingInvId, setEditingInvId] = useState<string | null>(null);
   const [editInvValue, setEditInvValue] = useState('');
@@ -102,8 +105,14 @@ export default function InvestmentsPage() {
   });
   const investments = invData?.items ?? [];
   const invPagination = invData?.pagination;
-  const { data: fds = [] } = useQuery({ queryKey: ['fds'], queryFn: () => investmentsApi.getFDs() });
-  const { data: rds = [] } = useQuery({ queryKey: ['rds'], queryFn: () => investmentsApi.getRDs() });
+  const { data: fds = [] } = useQuery({
+    queryKey: ['fds', viewUserId],
+    queryFn: () => investmentsApi.getFDs(viewUserId ? { targetUserId: viewUserId } : undefined),
+  });
+  const { data: rds = [] } = useQuery({
+    queryKey: ['rds', viewUserId],
+    queryFn: () => investmentsApi.getRDs(viewUserId ? { targetUserId: viewUserId } : undefined),
+  });
   const { data: sips = [] } = useQuery({ queryKey: ['sips'], queryFn: investmentsApi.getSIPs });
   const { data: tracker80C } = useQuery({ queryKey: ['tax-80c', selectedFY], queryFn: () => investmentsApi.get80CSummary(selectedFY) });
   // Fetch all investments (unpaginated) for the SIP investmentId dropdown
@@ -120,22 +129,22 @@ export default function InvestmentsPage() {
 
   const createFDMutation = useMutation({
     mutationFn: (data: FDForm) => investmentsApi.createFD(data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['fds'] }); setShowFDForm(false); fdForm.reset(); setEditingFD(null); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['fds', viewUserId] }); setShowFDForm(false); fdForm.reset(); setEditingFD(null); },
   });
 
   const deleteFDMutation = useMutation({
     mutationFn: investmentsApi.deleteFD,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['fds'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['fds', viewUserId] }),
   });
 
   const createRDMutation = useMutation({
     mutationFn: (data: RDForm) => investmentsApi.createRD(data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['rds'] }); setShowRDForm(false); rdForm.reset(); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['rds', viewUserId] }); setShowRDForm(false); rdForm.reset(); },
   });
 
   const deleteRDMutation = useMutation({
     mutationFn: (id: string) => investmentsApi.deleteRD(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['rds'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['rds', viewUserId] }),
   });
 
   const createSIPMutation = useMutation({
@@ -203,12 +212,34 @@ export default function InvestmentsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Investments & Portfolio</h1>
+        <div>
+          <h1 className="text-2xl font-bold">Investments & Portfolio</h1>
+          {isAdmin && !isMembersLoading && (
+            <div className="flex items-center gap-2 mt-2">
+              <label htmlFor="investments-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+              {isMembersError ? (
+                <span className="text-xs text-destructive">Could not load members</span>
+              ) : (
+                <select
+                  id="investments-member-select"
+                  value={viewUserId ?? ''}
+                  onChange={(e) => setViewUserId(e.target.value || undefined)}
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
+                >
+                  <option value="">All Family</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
+        </div>
         <div className="flex gap-2">
-          {tab === 'fd' && (
+          {tab === 'fd' && !isViewingFamilyWide && (
             <Button variant="outline" onClick={() => setShowFDForm(true)}><Plus className="h-4 w-4 mr-1" /> Add FD</Button>
           )}
-          {tab === 'rd' && (
+          {tab === 'rd' && !isViewingFamilyWide && (
             <Button variant="outline" onClick={() => setShowRDForm(true)}><Plus className="h-4 w-4 mr-1" /> Add RD</Button>
           )}
           {tab === 'sip' && (
@@ -458,10 +489,15 @@ export default function InvestmentsPage() {
                   <div>
                     <p className="font-semibold">{fd.bankName}</p>
                     <p className="text-sm text-muted-foreground">{fd.interestRate}% · {fd.tenureMonths}M · {fd.interestPayoutType}</p>
+                    {isViewingFamilyWide && fd.userName && (
+                      <p className="text-xs text-muted-foreground mt-0.5">{fd.userName}</p>
+                    )}
                   </div>
-                  <Button variant="ghost" size="icon" onClick={() => deleteFDMutation.mutate(fd.id)}>
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+                  {!isViewingFamilyWide && (
+                    <Button variant="ghost" size="icon" onClick={() => deleteFDMutation.mutate(fd.id)}>
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div><p className="text-muted-foreground">Principal</p><INRDisplay amount={fd.principalAmount} className="font-semibold" /></div>
@@ -490,10 +526,17 @@ export default function InvestmentsPage() {
           ) : rds.map((rd) => (
             <div key={rd.id} className="rounded-lg border bg-card p-5 space-y-3">
               <div className="flex items-start justify-between">
-                <p className="font-semibold">{rd.bankName}</p>
-                <Button variant="ghost" size="icon" onClick={() => deleteRDMutation.mutate(rd.id)}>
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
+                <div>
+                  <p className="font-semibold">{rd.bankName}</p>
+                  {isViewingFamilyWide && rd.userName && (
+                    <p className="text-xs text-muted-foreground mt-0.5">{rd.userName}</p>
+                  )}
+                </div>
+                {!isViewingFamilyWide && (
+                  <Button variant="ghost" size="icon" onClick={() => deleteRDMutation.mutate(rd.id)}>
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-2 text-sm">
                 <div><p className="text-muted-foreground">Monthly</p><INRDisplay amount={rd.monthlyInstallment} className="font-semibold" /></div>
