@@ -240,11 +240,26 @@ describe('computeNetWorthStatement', () => {
   });
 
   it('includes bank balance in totalAssets', async () => {
-    bankMock.findMany.mockResolvedValue([{ currentBalance: 100000 }]);
+    bankMock.findMany.mockResolvedValue([{ bankName: 'HDFC', accountNumberLast4: '1234', accountType: 'SAVINGS', currentBalance: 100000 }]);
     const r = await computeNetWorthStatement('u1');
     expect(r.assets.bankBalances).toBe(100000);
     expect(r.totalAssets).toBe(100000);
     expect(r.netWorth).toBe(100000);
+  });
+
+  it('exposes bankAccounts as top-level array with individual account details', async () => {
+    bankMock.findMany.mockResolvedValue([
+      { bankName: 'HDFC', accountNumberLast4: '1234', accountType: 'SAVINGS', currentBalance: 60000 },
+      { bankName: 'SBI', accountNumberLast4: null, accountType: 'CURRENT', currentBalance: 40000 },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+    expect(r.bankAccounts).toHaveLength(2);
+    expect(r.bankAccounts[0]).toEqual({ bankName: 'HDFC', accountNumberLast4: '1234', accountType: 'SAVINGS', currentBalance: 60000 });
+    expect(r.bankAccounts[1]).toEqual({ bankName: 'SBI', accountNumberLast4: null, accountType: 'CURRENT', currentBalance: 40000 });
+    // bankBalances aggregate stays in assets for snapshot compatibility
+    expect(r.assets.bankBalances).toBe(100000);
+    // bankAccounts must NOT appear inside assets
+    expect((r.assets as any).bankAccounts).toBeUndefined();
   });
 
   it('includes loan outstanding balance in totalLiabilities', async () => {
@@ -304,7 +319,7 @@ describe('computeNetWorthStatement', () => {
 
 describe('upsertNetWorthSnapshot', () => {
   it('calls netWorthSnapshot.upsert with correct shape', async () => {
-    bankMock.findMany.mockResolvedValue([{ currentBalance: 200000 }]);
+    bankMock.findMany.mockResolvedValue([{ bankName: 'HDFC', accountNumberLast4: '5678', accountType: 'SAVINGS', currentBalance: 200000 }]);
     await upsertNetWorthSnapshot('u1');
     expect(snapshotMock.upsert).toHaveBeenCalledWith(
       expect.objectContaining({

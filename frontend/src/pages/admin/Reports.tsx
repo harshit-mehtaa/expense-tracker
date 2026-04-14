@@ -498,19 +498,39 @@ export default function ReportsPage() {
             <div className="grid md:grid-cols-3 gap-4">
               <div className="md:col-span-1 rounded-lg border bg-card p-5 space-y-3">
                 <h3 className="font-medium text-muted-foreground text-sm uppercase tracking-wide">Assets</h3>
-                {Object.entries(netWorth.assets).map(([key, val]) => {
-                  const labels: Record<string, string> = {
-                    bankBalances: 'Bank Balances', fixedDeposits: 'Fixed Deposits',
-                    recurringDeposits: 'Recurring Deposits', investments: 'Investments',
-                    gold: 'Gold', realEstate: 'Real Estate',
-                  };
-                  return (
-                    <div key={key} className="flex justify-between text-sm">
-                      <span>{labels[key] ?? key}</span>
-                      <INRDisplay amount={val as number} />
+                {/* Individual bank accounts */}
+                {Array.isArray(netWorth.bankAccounts) && netWorth.bankAccounts.length > 0 ? (
+                  netWorth.bankAccounts.map((acct: { bankName: string; accountNumberLast4: string | null; accountType: string; currentBalance: number }, i: number) => (
+                    <div key={i} className="flex justify-between text-sm">
+                      <span className="truncate pr-2">
+                        {acct.bankName}
+                        {acct.accountNumberLast4 ? ` ···${acct.accountNumberLast4}` : ''}
+                        <span className="text-muted-foreground ml-1 capitalize">({acct.accountType.toLowerCase()})</span>
+                      </span>
+                      <INRDisplay amount={acct.currentBalance} />
                     </div>
-                  );
-                })}
+                  ))
+                ) : (
+                  <div className="flex justify-between text-sm">
+                    <span>Bank Balances</span>
+                    <INRDisplay amount={netWorth.assets.bankBalances} />
+                  </div>
+                )}
+                {/* Other asset categories */}
+                {Object.entries(netWorth.assets)
+                  .filter(([key]) => key !== 'bankBalances')
+                  .map(([key, val]) => {
+                    const labels: Record<string, string> = {
+                      fixedDeposits: 'Fixed Deposits', recurringDeposits: 'Recurring Deposits',
+                      investments: 'Investments', gold: 'Gold', realEstate: 'Real Estate',
+                    };
+                    return (
+                      <div key={key} className="flex justify-between text-sm">
+                        <span>{labels[key] ?? key}</span>
+                        <INRDisplay amount={val as number} />
+                      </div>
+                    );
+                  })}
                 <div className="border-t pt-2 flex justify-between font-semibold">
                   <span>Total Assets</span>
                   <INRDisplay amount={netWorth.totalAssets} />

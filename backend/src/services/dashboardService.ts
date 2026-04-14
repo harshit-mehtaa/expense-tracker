@@ -371,7 +371,11 @@ async function fetchAssetBreakdown(userId?: string) {
   const where = userId ? { userId } : {};
 
   const [accounts, fds, rds, investments, gold, realestate] = await Promise.all([
-    prisma.bankAccount.findMany({ where: { ...where, isActive: true }, select: { currentBalance: true } }),
+    prisma.bankAccount.findMany({
+      where: { ...where, isActive: true },
+      select: { bankName: true, accountNumberLast4: true, accountType: true, currentBalance: true },
+      orderBy: { currentBalance: 'desc' },
+    }),
     prisma.fixedDeposit.findMany({ where: { ...where, status: 'ACTIVE' }, select: { maturityAmount: true } }),
     prisma.recurringDeposit.findMany({ where: { ...where, status: 'ACTIVE' }, select: { totalDeposited: true } }),
     prisma.investment.findMany({ where, select: { unitsOrQuantity: true, currentPricePerUnit: true, currency: true } }),
@@ -383,7 +387,13 @@ async function fetchAssetBreakdown(userId?: string) {
   const rateMap: Record<string, number> = {};
   exchangeRates.forEach((r) => { rateMap[r.fromCurrency] = Number(r.rate); });
 
-  const bankBalances = accounts.reduce((s, a) => s + Number(a.currentBalance), 0);
+  const bankAccounts = accounts.map((a) => ({
+    bankName: a.bankName,
+    accountNumberLast4: a.accountNumberLast4 ?? null,
+    accountType: a.accountType,
+    currentBalance: Number(a.currentBalance),
+  }));
+  const bankBalances = bankAccounts.reduce((s, a) => s + a.currentBalance, 0);
   const fixedDeposits = fds.reduce((s, f) => s + Number(f.maturityAmount), 0);
   const recurringDeposits = rds.reduce((s, r) => s + Number(r.totalDeposited), 0);
   const investments_ = investments.reduce((s, i) => {
@@ -394,6 +404,7 @@ async function fetchAssetBreakdown(userId?: string) {
   const realEstate = realestate.reduce((s, p) => s + Number(p.currentValue), 0);
 
   return {
+    bankAccounts,
     bankBalances,
     fixedDeposits,
     recurringDeposits,
@@ -428,9 +439,10 @@ export async function computeNetWorthStatement(userId?: string) {
       totalLiabilities += amt;
     }
   }
-  const { total: totalAssets, ...assets } = assetBreakdown;
+  const { total: totalAssets, bankAccounts, ...assets } = assetBreakdown;
   return {
     assets,
+    bankAccounts,
     liabilities,
     totalAssets,
     totalLiabilities,
