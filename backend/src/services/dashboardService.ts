@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, LoanType } from '@prisma/client';
 import prisma from '../config/prisma';
 import { getFYRange, getCurrentFY, getPreviousFY, getMonthStart } from '../utils/financialYear';
 import { generateDueRecurringTransactions } from './recurringService';
@@ -410,17 +410,31 @@ export async function computeNetWorthAssets(userId?: string): Promise<number> {
 }
 
 export async function computeNetWorthStatement(userId?: string) {
-  const [assetBreakdown, loans] = await Promise.all([
+  const where = userId ? { userId } : {};
+  const [assetBreakdown, loanBreakdown] = await Promise.all([
     fetchAssetBreakdown(userId),
-    computeTotalLiabilities(userId),
+    prisma.loan.groupBy({
+      by: ['loanType'],
+      where: { ...where, endDate: { gte: new Date() } },
+      _sum: { outstandingBalance: true },
+    }),
   ]);
+  const liabilities: Partial<Record<LoanType, number>> = {};
+  let totalLiabilities = 0;
+  for (const entry of loanBreakdown) {
+    const amt = Number(entry._sum.outstandingBalance ?? 0);
+    if (amt > 0) {
+      liabilities[entry.loanType] = amt;
+      totalLiabilities += amt;
+    }
+  }
   const { total: totalAssets, ...assets } = assetBreakdown;
   return {
     assets,
-    liabilities: { loans },
+    liabilities,
     totalAssets,
-    totalLiabilities: loans,
-    netWorth: totalAssets - loans,
+    totalLiabilities,
+    netWorth: totalAssets - totalLiabilities,
   };
 }
 
@@ -448,7 +462,7 @@ export async function upsertNetWorthSnapshot(userId: string) {
       investments: statement.assets.investments,
       gold: statement.assets.gold,
       realEstate: statement.assets.realEstate,
-      loans: statement.liabilities.loans,
+      loans: statement.totalLiabilities,
     },
     create: {
       userId,
@@ -462,7 +476,7 @@ export async function upsertNetWorthSnapshot(userId: string) {
       investments: statement.assets.investments,
       gold: statement.assets.gold,
       realEstate: statement.assets.realEstate,
-      loans: statement.liabilities.loans,
+      loans: statement.totalLiabilities,
     },
   });
 }

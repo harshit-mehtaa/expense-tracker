@@ -30,7 +30,7 @@ vi.mock('../config/prisma', () => {
     goldHolding: { findMany: vi.fn() },
     realEstate: { findMany: vi.fn() },
     exchangeRate: { findMany: vi.fn() },
-    loan: { findMany: vi.fn(), aggregate: vi.fn() },
+    loan: { findMany: vi.fn(), aggregate: vi.fn(), groupBy: vi.fn() },
     netWorthSnapshot: { upsert: vi.fn(), findMany: vi.fn() },
     user: { findMany: vi.fn() },
     category: { findMany: vi.fn() },
@@ -96,6 +96,7 @@ function resetAllMocks() {
   fxMock.findMany.mockResolvedValue([]);
   loanMock.findMany.mockResolvedValue([]);
   loanMock.aggregate.mockResolvedValue(ZERO_LOAN_AGGREGATE);
+  loanMock.groupBy.mockResolvedValue([]);
   snapshotMock.upsert.mockResolvedValue({});
   snapshotMock.findMany.mockResolvedValue([]);
   userMock.findMany.mockResolvedValue([]);
@@ -247,10 +248,39 @@ describe('computeNetWorthStatement', () => {
   });
 
   it('includes loan outstanding balance in totalLiabilities', async () => {
-    loanMock.aggregate.mockResolvedValue({ _sum: { outstandingBalance: 500000 } });
+    loanMock.groupBy.mockResolvedValue([
+      { loanType: 'HOME', _sum: { outstandingBalance: 500000 } },
+    ]);
     const r = await computeNetWorthStatement('u1');
     expect(r.totalLiabilities).toBe(500000);
     expect(r.netWorth).toBe(-500000);
+  });
+
+  it('breaks down liabilities by loanType', async () => {
+    loanMock.groupBy.mockResolvedValue([
+      { loanType: 'HOME', _sum: { outstandingBalance: 4000000 } },
+      { loanType: 'AUTO', _sum: { outstandingBalance: 200000 } },
+      { loanType: 'PERSONAL', _sum: { outstandingBalance: 100000 } },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+    expect(r.liabilities).toEqual({ HOME: 4000000, AUTO: 200000, PERSONAL: 100000 });
+    expect(r.totalLiabilities).toBe(4300000);
+  });
+
+  it('excludes zero-balance loan types from liabilities', async () => {
+    loanMock.groupBy.mockResolvedValue([
+      { loanType: 'HOME', _sum: { outstandingBalance: 500000 } },
+      { loanType: 'PERSONAL', _sum: { outstandingBalance: 0 } },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+    expect(r.liabilities).toEqual({ HOME: 500000 });
+    expect(r.totalLiabilities).toBe(500000);
+  });
+
+  it('returns empty liabilities object when no active loans', async () => {
+    const r = await computeNetWorthStatement('u1');
+    expect(r.liabilities).toEqual({});
+    expect(r.totalLiabilities).toBe(0);
   });
 
   it('applies exchange rate for non-INR investments', async () => {
@@ -279,8 +309,22 @@ describe('upsertNetWorthSnapshot', () => {
     expect(snapshotMock.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ userId_snapshotDate: expect.objectContaining({ userId: 'u1' }) }),
-        create: expect.objectContaining({ userId: 'u1', totalAssets: 200000 }),
-        update: expect.objectContaining({ totalAssets: 200000 }),
+        create: expect.objectContaining({ userId: 'u1', totalAssets: 200000, loans: 0 }),
+        update: expect.objectContaining({ totalAssets: 200000, loans: 0 }),
+      }),
+    );
+  });
+
+  it('persists totalLiabilities as loans in snapshot', async () => {
+    loanMock.groupBy.mockResolvedValue([
+      { loanType: 'HOME', _sum: { outstandingBalance: 3000000 } },
+      { loanType: 'AUTO', _sum: { outstandingBalance: 150000 } },
+    ]);
+    await upsertNetWorthSnapshot('u1');
+    expect(snapshotMock.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ loans: 3150000 }),
+        update: expect.objectContaining({ loans: 3150000 }),
       }),
     );
   });

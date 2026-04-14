@@ -24,6 +24,17 @@ import {
 
 type TabId = 'pl' | 'spending' | 'networth' | 'trialbalance';
 
+const LOAN_TYPE_LABELS: Record<string, string> = {
+  HOME:     'Home Loan',
+  AUTO:     'Car Loan',
+  PERSONAL: 'Personal Loan',
+  EDUCATION:'Education Loan',
+  GOLD:     'Gold Loan',
+  LAP:      'Loan Against Property',
+  BUSINESS: 'Business Loan',
+  OTHER:    'Other Loans',
+};
+
 export default function ReportsPage() {
   const { selectedFY } = useFY();
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
@@ -507,10 +518,16 @@ export default function ReportsPage() {
               </div>
               <div className="rounded-lg border bg-card p-5 space-y-3">
                 <h3 className="font-medium text-muted-foreground text-sm uppercase tracking-wide">Liabilities</h3>
-                <div className="flex justify-between text-sm">
-                  <span>Loans Outstanding</span>
-                  <INRDisplay amount={netWorth.liabilities.loans} />
-                </div>
+                {Object.keys(netWorth.liabilities).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No active loans</p>
+                ) : (
+                  Object.entries(netWorth.liabilities).map(([type, amt]) => (
+                    <div key={type} className="flex justify-between text-sm">
+                      <span>{LOAN_TYPE_LABELS[type] ?? type}</span>
+                      <INRDisplay amount={amt as number} />
+                    </div>
+                  ))
+                )}
                 <div className="border-t pt-2 flex justify-between font-semibold">
                   <span>Total Liabilities</span>
                   <INRDisplay amount={netWorth.totalLiabilities} />
