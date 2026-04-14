@@ -117,6 +117,25 @@ async function main() {
     { name: 'Other Income', icon: '💰', color: '#16a34a' },
   ];
 
+  const assetCats = [
+    { name: 'Bank & Cash', icon: '🏦', color: '#3b82f6' },
+    { name: 'Mutual Funds & Stocks', icon: '📈', color: '#8b5cf6' },
+    { name: 'Fixed Deposits', icon: '📄', color: '#0284c7' },
+    { name: 'Provident Fund', icon: '🛡️', color: '#0369a1' },
+    { name: 'Gold', icon: '🪙', color: '#f59e0b' },
+    { name: 'Real Estate', icon: '🏠', color: '#10b981' },
+    { name: 'Vehicle', icon: '🚗', color: '#64748b' },
+    { name: 'Other Assets', icon: '💼', color: '#94a3b8' },
+  ];
+  const liabilityCats = [
+    { name: 'Home Loan', icon: '🏡', color: '#ef4444' },
+    { name: 'Car Loan', icon: '🚘', color: '#f97316' },
+    { name: 'Personal Loan', icon: '💳', color: '#f43f5e' },
+    { name: 'Education Loan', icon: '🎓', color: '#f59e0b' },
+    { name: 'Credit Card', icon: '💲', color: '#dc2626' },
+    { name: 'Other Liabilities', icon: '📋', color: '#94a3b8' },
+  ];
+
   const catMap: Record<string, string> = {};
   for (const cat of expenseCats) {
     const c = await prisma.category.upsert({
@@ -133,6 +152,20 @@ async function main() {
       create: { ...cat, type: CategoryType.INCOME, isDefault: true, userId: null },
     });
     catMap[cat.name] = c.id;
+  }
+  for (const cat of assetCats) {
+    await prisma.category.upsert({
+      where: { name_type: { name: cat.name, type: CategoryType.ASSET } },
+      update: { icon: cat.icon, color: cat.color, isDefault: true, userId: null },
+      create: { ...cat, type: CategoryType.ASSET, isDefault: true, userId: null },
+    });
+  }
+  for (const cat of liabilityCats) {
+    await prisma.category.upsert({
+      where: { name_type: { name: cat.name, type: CategoryType.LIABILITY } },
+      update: { icon: cat.icon, color: cat.color, isDefault: true, userId: null },
+      create: { ...cat, type: CategoryType.LIABILITY, isDefault: true, userId: null },
+    });
   }
 
   // ── Users ────────────────────────────────────────────────────────────────────

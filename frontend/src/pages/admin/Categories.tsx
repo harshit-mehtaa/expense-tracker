@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils';
 interface Category {
   id: string;
   name: string;
-  type: 'INCOME' | 'EXPENSE';
+  type: 'INCOME' | 'EXPENSE' | 'ASSET' | 'LIABILITY';
   icon?: string | null;
   color?: string | null;
   isDefault: boolean;
@@ -26,7 +26,7 @@ interface Category {
 
 const categorySchema = z.object({
   name: z.string().min(1, 'Name is required').max(50, 'Maximum 50 characters'),
-  type: z.enum(['INCOME', 'EXPENSE'], { required_error: 'Type is required' }),
+  type: z.enum(['INCOME', 'EXPENSE', 'ASSET', 'LIABILITY'], { required_error: 'Type is required' }),
   icon: z.string().max(10).optional(),
   color: z
     .string()
@@ -156,6 +156,8 @@ export default function CategoriesPage() {
   // Group by type
   const expenseCategories = categories.filter((c) => c.type === 'EXPENSE');
   const incomeCategories = categories.filter((c) => c.type === 'INCOME');
+  const assetCategories = categories.filter((c) => c.type === 'ASSET');
+  const liabilityCategories = categories.filter((c) => c.type === 'LIABILITY');
 
   const addColor = watch('color');
   const editColor = editWatch('color');
@@ -168,7 +170,7 @@ export default function CategoriesPage() {
         <div>
           <h1 className="text-2xl font-bold">Categories</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Manage income and expense categories shared across your family.
+            Manage categories shared across your family.
           </p>
         </div>
         <Button onClick={() => { setAddError(null); reset(); setShowAdd(true); }} className="flex items-center gap-2">
@@ -207,6 +209,26 @@ export default function CategoriesPage() {
             onEdit={openEdit}
             onDelete={openDelete}
           />
+          {/* Asset categories */}
+          <CategoryGroup
+            title="Asset Categories"
+            type="ASSET"
+            categories={assetCategories}
+            activeMenu={activeMenu}
+            setActiveMenu={setActiveMenu}
+            onEdit={openEdit}
+            onDelete={openDelete}
+          />
+          {/* Liability categories */}
+          <CategoryGroup
+            title="Liability Categories"
+            type="LIABILITY"
+            categories={liabilityCategories}
+            activeMenu={activeMenu}
+            setActiveMenu={setActiveMenu}
+            onEdit={openEdit}
+            onDelete={openDelete}
+          />
         </div>
       )}
 
@@ -239,6 +261,8 @@ export default function CategoriesPage() {
                 >
                   <option value="EXPENSE">Expense</option>
                   <option value="INCOME">Income</option>
+                  <option value="ASSET">Asset</option>
+                  <option value="LIABILITY">Liability</option>
                 </select>
                 {errors.type && <p className="text-xs text-destructive">{errors.type.message}</p>}
               </div>
@@ -315,6 +339,8 @@ export default function CategoriesPage() {
                 >
                   <option value="EXPENSE">Expense</option>
                   <option value="INCOME">Income</option>
+                  <option value="ASSET">Asset</option>
+                  <option value="LIABILITY">Liability</option>
                 </select>
               </div>
 
@@ -405,7 +431,7 @@ export default function CategoriesPage() {
 
 interface CategoryGroupProps {
   title: string;
-  type: 'INCOME' | 'EXPENSE';
+  type: 'INCOME' | 'EXPENSE' | 'ASSET' | 'LIABILITY';
   categories: Category[];
   activeMenu: string | null;
   setActiveMenu: (id: string | null) => void;
@@ -413,11 +439,15 @@ interface CategoryGroupProps {
   onDelete: (cat: Category) => void;
 }
 
+const TYPE_STYLES: Record<'INCOME' | 'EXPENSE' | 'ASSET' | 'LIABILITY', { color: string; badge: string }> = {
+  INCOME:    { color: 'text-green-600 dark:text-green-400',  badge: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
+  EXPENSE:   { color: 'text-rose-600 dark:text-rose-400',    badge: 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400' },
+  ASSET:     { color: 'text-blue-600 dark:text-blue-400',    badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
+  LIABILITY: { color: 'text-amber-600 dark:text-amber-400',  badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
+};
+
 function CategoryGroup({ title, type, categories, activeMenu, setActiveMenu, onEdit, onDelete }: CategoryGroupProps) {
-  const typeColor = type === 'INCOME' ? 'text-green-600 dark:text-green-400' : 'text-rose-600 dark:text-rose-400';
-  const typeBadge = type === 'INCOME'
-    ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-    : 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400';
+  const { color: typeColor, badge: typeBadge } = TYPE_STYLES[type];
 
   return (
     <section className="space-y-3">

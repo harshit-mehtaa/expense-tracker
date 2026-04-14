@@ -21,7 +21,7 @@ router.get('/', asyncHandler(async (_req, res) => {
 
 const categorySchema = z.object({
   name: z.string().min(1).max(50),
-  type: z.enum(['INCOME', 'EXPENSE']),
+  type: z.enum(['INCOME', 'EXPENSE', 'ASSET', 'LIABILITY']),
   icon: z.string().max(10).optional(),
   color: z
     .string()

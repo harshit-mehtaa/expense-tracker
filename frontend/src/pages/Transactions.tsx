@@ -152,7 +152,9 @@ type EditTxForm = z.infer<typeof editTxSchema>;
 function useCategories() {
   return useQuery({
     queryKey: ['categories'],
-    queryFn: () => api.get<{ data: any[] }>('/categories').then((r) => r.data.data),
+    queryFn: () =>
+      api.get<{ data: any[] }>('/categories')
+        .then((r) => r.data.data.filter((c: any) => c.type === 'INCOME' || c.type === 'EXPENSE')),
   });
 }
 

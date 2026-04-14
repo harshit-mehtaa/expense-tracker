@@ -46,7 +46,9 @@ type RuleForm = z.infer<typeof ruleSchema>;
 function useCategories() {
   return useQuery({
     queryKey: ['categories'],
-    queryFn: () => api.get<{ data: { id: string; name: string; type: string }[] }>('/categories').then((r) => r.data.data),
+    queryFn: () =>
+      api.get<{ data: { id: string; name: string; type: string }[] }>('/categories')
+        .then((r) => r.data.data.filter((c) => c.type === 'INCOME' || c.type === 'EXPENSE')),
   });
 }
 

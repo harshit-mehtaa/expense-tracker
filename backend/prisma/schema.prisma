@@ -187,6 +187,8 @@ enum TaxRegime {
 enum CategoryType {
   INCOME
   EXPENSE
+  ASSET
+  LIABILITY
 }
 
 enum CapitalGainAssetType {
