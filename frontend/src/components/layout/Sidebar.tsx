@@ -14,6 +14,7 @@ import {
   Gem,
   IndianRupee,
   Home,
+  Tag,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -30,6 +31,7 @@ const NAV_ITEMS = [
   { to: '/loans', icon: CreditCard, label: 'Loans & EMIs' },
   { to: '/tax', icon: IndianRupee, label: 'Tax Centre' },
   { to: '/reports', icon: FileText, label: 'Reports' },
+  { to: '/categories', icon: Tag, label: 'Categories' },
 ];
 
 const ADMIN_NAV_ITEMS = [

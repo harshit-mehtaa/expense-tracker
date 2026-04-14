@@ -260,7 +260,7 @@ model User {
   auditLogs              AuditLog[]
   documents              Document[]
   bankImports            BankStatementImport[]
-  categories             Category[]
+  // categories removed — now family-shared (see Category model)
   capitalGains           CapitalGainEntry[]
   otherIncomes           OtherSourceIncome[]
   houseProperties        HousePropertyDetail[]
@@ -564,7 +564,7 @@ model InsurancePolicy {
 
 model Category {
   id        String       @id @default(cuid())
-  userId    String?      // null = system default; set = user custom
+  userId    String?      // kept nullable for migration compatibility; always null going forward
   name      String
   type      CategoryType
   icon      String?      // Emoji or icon name
@@ -572,11 +572,10 @@ model Category {
   isDefault Boolean      @default(false)
   createdAt DateTime     @default(now())
 
-  user         User?         @relation(fields: [userId], references: [id])
   transactions Transaction[]
   budgets      Budget[]
 
-  @@unique([userId, name, type])
+  @@unique([name, type])  // family-shared: one category per name+type globally
   @@index([type])
   @@index([isDefault])
 }
@@ -607,7 +606,7 @@ model Transaction {
 
   user         User            @relation(fields: [userId], references: [id])
   bankAccount  BankAccount?    @relation(fields: [bankAccountId], references: [id])
-  category     Category?       @relation(fields: [categoryId], references: [id])
+  category     Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   loan         Loan?           @relation(fields: [loanId], references: [id], onDelete: SetNull)
   recurringRule RecurringRule?
   documents    Document[]
@@ -656,7 +655,7 @@ model Budget {
   createdAt  DateTime     @default(now())
 
   user     User     @relation(fields: [userId], references: [id])
-  category Category @relation(fields: [categoryId], references: [id])
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
 
   @@index([userId])
   @@index([fyYear])

@@ -13,6 +13,7 @@ import LoansPage from '@/pages/loans/Loans';
 import TaxCentrePage from '@/pages/tax/TaxCentre';
 import FamilyMembersPage from '@/pages/admin/FamilyMembers';
 import ReportsPage from '@/pages/admin/Reports';
+import CategoriesPage from '@/pages/admin/Categories';
 import SettingsPage from '@/pages/Settings';
 import GoldPage from '@/pages/investments/Gold';
 import RealEstatePage from '@/pages/investments/RealEstate';
@@ -64,6 +65,7 @@ export default function App() {
         <Route path="tax/*" element={<TaxCentrePage />} />
         <Route path="profit-loss" element={<Navigate to="/reports" replace />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="categories" element={<CategoriesPage />} />
 
         {/* Admin-only routes */}
         <Route

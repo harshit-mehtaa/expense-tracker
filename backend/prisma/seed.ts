@@ -119,11 +119,19 @@ async function main() {
 
   const catMap: Record<string, string> = {};
   for (const cat of expenseCats) {
-    const c = await prisma.category.create({ data: { ...cat, type: CategoryType.EXPENSE, isDefault: true, userId: null } });
+    const c = await prisma.category.upsert({
+      where: { name_type: { name: cat.name, type: CategoryType.EXPENSE } },
+      update: { icon: cat.icon, color: cat.color, isDefault: true, userId: null },
+      create: { ...cat, type: CategoryType.EXPENSE, isDefault: true, userId: null },
+    });
     catMap[cat.name] = c.id;
   }
   for (const cat of incomeCats) {
-    const c = await prisma.category.create({ data: { ...cat, type: CategoryType.INCOME, isDefault: true, userId: null } });
+    const c = await prisma.category.upsert({
+      where: { name_type: { name: cat.name, type: CategoryType.INCOME } },
+      update: { icon: cat.icon, color: cat.color, isDefault: true, userId: null },
+      create: { ...cat, type: CategoryType.INCOME, isDefault: true, userId: null },
+    });
     catMap[cat.name] = c.id;
   }
 
