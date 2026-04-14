@@ -496,41 +496,84 @@ export default function ReportsPage() {
             <div className="text-center py-8 border rounded-lg text-muted-foreground">Loading net worth data...</div>
           ) : (
             <div className="grid md:grid-cols-3 gap-4">
-              <div className="md:col-span-1 rounded-lg border bg-card p-5 space-y-3">
+              <div className="md:col-span-1 rounded-lg border bg-card p-5 space-y-4">
                 <h3 className="font-medium text-muted-foreground text-sm uppercase tracking-wide">Assets</h3>
-                {/* Individual bank accounts */}
-                {Array.isArray(netWorth.bankAccounts) && netWorth.bankAccounts.length > 0 ? (
-                  netWorth.bankAccounts.map((acct: { bankName: string; accountNumberLast4: string | null; accountType: string; currentBalance: number }, i: number) => (
-                    <div key={i} className="flex justify-between text-sm">
-                      <span className="truncate pr-2">
-                        {acct.bankName}
-                        {acct.accountNumberLast4 ? ` ···${acct.accountNumberLast4}` : ''}
-                        <span className="text-muted-foreground ml-1 capitalize">({acct.accountType.toLowerCase()})</span>
-                      </span>
-                      <INRDisplay amount={acct.currentBalance} />
-                    </div>
-                  ))
-                ) : (
-                  <div className="flex justify-between text-sm">
-                    <span>Bank Balances</span>
-                    <INRDisplay amount={netWorth.assets.bankBalances} />
+                {/* Accounts */}
+                {Array.isArray(netWorth.bankAccounts) && netWorth.bankAccounts.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Accounts</p>
+                    {netWorth.bankAccounts.map((acct: { bankName: string; accountNumberLast4: string | null; accountType: string; currentBalance: number }, i: number) => (
+                      <div key={i} className="flex justify-between text-sm">
+                        <span className="truncate pr-2">
+                          {acct.bankName}
+                          {acct.accountNumberLast4 ? ` ···${acct.accountNumberLast4}` : ''}
+                          <span className="text-muted-foreground ml-1 capitalize">({acct.accountType.toLowerCase()})</span>
+                        </span>
+                        <INRDisplay amount={acct.currentBalance} />
+                      </div>
+                    ))}
                   </div>
                 )}
-                {/* Other asset categories */}
-                {Object.entries(netWorth.assets)
-                  .filter(([key]) => key !== 'bankBalances')
-                  .map(([key, val]) => {
-                    const labels: Record<string, string> = {
-                      fixedDeposits: 'Fixed Deposits', recurringDeposits: 'Recurring Deposits',
-                      investments: 'Investments', gold: 'Gold', realEstate: 'Real Estate',
-                    };
-                    return (
-                      <div key={key} className="flex justify-between text-sm">
-                        <span>{labels[key] ?? key}</span>
-                        <INRDisplay amount={val as number} />
-                      </div>
-                    );
-                  })}
+                {/* Fixed Deposits */}
+                {netWorth.assets.fixedDeposits > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Fixed Deposits</p>
+                    <div className="flex justify-between text-sm">
+                      <span>Fixed Deposits</span>
+                      <INRDisplay amount={netWorth.assets.fixedDeposits} />
+                    </div>
+                  </div>
+                )}
+                {/* Recurring Deposits */}
+                {netWorth.assets.recurringDeposits > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Recurring Deposits</p>
+                    <div className="flex justify-between text-sm">
+                      <span>Recurring Deposits</span>
+                      <INRDisplay amount={netWorth.assets.recurringDeposits} />
+                    </div>
+                  </div>
+                )}
+                {/* Investments */}
+                {netWorth.assets.investments > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Investments</p>
+                    <div className="flex justify-between text-sm">
+                      <span>Investments</span>
+                      <INRDisplay amount={netWorth.assets.investments} />
+                    </div>
+                  </div>
+                )}
+                {/* Gold */}
+                {netWorth.assets.gold > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Gold</p>
+                    <div className="flex justify-between text-sm">
+                      <span>Gold</span>
+                      <INRDisplay amount={netWorth.assets.gold} />
+                    </div>
+                  </div>
+                )}
+                {/* Real Estate */}
+                {netWorth.assets.realEstate > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Real Estate</p>
+                    <div className="flex justify-between text-sm">
+                      <span>Real Estate</span>
+                      <INRDisplay amount={netWorth.assets.realEstate} />
+                    </div>
+                  </div>
+                )}
+                {/* Fallback: no accounts and no other assets */}
+                {(!Array.isArray(netWorth.bankAccounts) || netWorth.bankAccounts.length === 0) && netWorth.assets.bankBalances > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Accounts</p>
+                    <div className="flex justify-between text-sm">
+                      <span>Bank Balances</span>
+                      <INRDisplay amount={netWorth.assets.bankBalances} />
+                    </div>
+                  </div>
+                )}
                 <div className="border-t pt-2 flex justify-between font-semibold">
                   <span>Total Assets</span>
                   <INRDisplay amount={netWorth.totalAssets} />
