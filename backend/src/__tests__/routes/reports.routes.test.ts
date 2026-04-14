@@ -28,6 +28,7 @@ vi.mock('../../config/prisma', () => {
 vi.mock('../../services/dashboardService', () => ({
   computeNetWorthStatement: vi.fn(),
   getProfitAndLoss: vi.fn(),
+  getTrialBalance: vi.fn(),
 }));
 
 import express from 'express';
@@ -43,6 +44,7 @@ const txGroupByMock = (prisma as any).transaction.groupBy as ReturnType<typeof v
 const categoryFindManyMock = (prisma as any).category.findMany as ReturnType<typeof vi.fn>;
 const computeNetWorthMock = dashboardService.computeNetWorthStatement as ReturnType<typeof vi.fn>;
 const getPnLMock = dashboardService.getProfitAndLoss as ReturnType<typeof vi.fn>;
+const getTBMock = dashboardService.getTrialBalance as ReturnType<typeof vi.fn>;
 
 function makeAdminApp() {
   return makeApp(reportsRouter, '/api/reports');
@@ -68,6 +70,7 @@ beforeEach(() => {
   categoryFindManyMock.mockResolvedValue(MOCK_CATEGORY);
   computeNetWorthMock.mockResolvedValue(MOCK_NET_WORTH);
   getPnLMock.mockResolvedValue({ summary: {}, monthly: [], expenseCategories: [], incomeCategories: [] });
+  getTBMock.mockResolvedValue({ fy: '2025-26', entries: [], totals: { totalDebits: 0, totalCredits: 0, netSavings: 0 } });
   userFindFirstMock.mockResolvedValue({ id: 'other-user-id' });
 });
 
@@ -221,5 +224,59 @@ describe('GET /api/reports/profit-and-loss', () => {
       '/api/reports/profit-and-loss?fy=2025-26&targetUserId=not-a-cuid',
     );
     expect(res.status).toBe(400);
+  });
+});
+
+// ─── GET /api/reports/trial-balance ──────────────────────────────────────────
+
+describe('GET /api/reports/trial-balance', () => {
+  it('MEMBER — returns 200, service called with memberId, MEMBER role, undefined targetUserId', async () => {
+    const res = await request(makeMemberApp()).get('/api/reports/trial-balance?fy=2025-26');
+    expect(res.status).toBe(200);
+    expect(getTBMock).toHaveBeenCalledWith('member-id', 'MEMBER', expect.any(String), undefined);
+  });
+
+  it('MEMBER cannot override with targetUserId — service still called with undefined targetUserId', async () => {
+    const res = await request(makeMemberApp()).get(
+      '/api/reports/trial-balance?fy=2025-26&targetUserId=clm1234567890abcdefghij',
+    );
+    expect(res.status).toBe(200);
+    expect(getTBMock).toHaveBeenCalledWith('member-id', 'MEMBER', expect.any(String), undefined);
+  });
+
+  it('ADMIN without targetUserId — returns 200 family-wide', async () => {
+    const res = await request(makeAdminApp()).get('/api/reports/trial-balance?fy=2025-26');
+    expect(res.status).toBe(200);
+    expect(getTBMock).toHaveBeenCalledWith('admin-id', 'ADMIN', expect.any(String), undefined);
+  });
+
+  it('ADMIN with valid targetUserId — scoped to that user', async () => {
+    const res = await request(makeAdminApp()).get(
+      '/api/reports/trial-balance?fy=2025-26&targetUserId=clm1234567890abcdefghij',
+    );
+    expect(res.status).toBe(200);
+    expect(getTBMock).toHaveBeenCalledWith(
+      'admin-id', 'ADMIN', expect.any(String), 'clm1234567890abcdefghij',
+    );
+  });
+
+  it('returns 400 for invalid targetUserId format', async () => {
+    const res = await request(makeAdminApp()).get(
+      '/api/reports/trial-balance?fy=2025-26&targetUserId=not-a-cuid',
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 for non-existent targetUserId', async () => {
+    userFindFirstMock.mockResolvedValue(null);
+    const res = await request(makeAdminApp()).get(
+      '/api/reports/trial-balance?fy=2025-26&targetUserId=clm1234567890abcdefghij',
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('invalid fy param falls back to current FY without 400', async () => {
+    const res = await request(makeAdminApp()).get('/api/reports/trial-balance?fy=invalid-fy');
+    expect(res.status).toBe(200);
   });
 });

@@ -9,7 +9,7 @@ import {
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
 import { useFY } from '@/contexts/FYContext';
-import { fetchProfitAndLoss } from '@/api/dashboard';
+import { fetchProfitAndLoss, fetchTrialBalance } from '@/api/dashboard';
 import api from '@/lib/api';
 import { formatINRShort } from '@/lib/indianFormat';
 import { cn } from '@/lib/utils';
@@ -22,7 +22,7 @@ import {
   GRID_STYLE,
 } from '@/lib/chartUtils';
 
-type TabId = 'pl' | 'spending' | 'networth';
+type TabId = 'pl' | 'spending' | 'networth' | 'trialbalance';
 
 export default function ReportsPage() {
   const { selectedFY } = useFY();
@@ -35,6 +35,7 @@ export default function ReportsPage() {
     { id: 'pl', label: 'P&L' },
     { id: 'spending', label: 'Spending Analysis' },
     { id: 'networth', label: 'Net Worth' },
+    { id: 'trialbalance', label: 'Trial Balance' },
   ];
 
   // ── P&L query (all users) ────────────────────────────────────────────────────
@@ -62,6 +63,13 @@ export default function ReportsPage() {
       const qs = params.toString();
       return api.get<{ data: any }>(`/reports/net-worth-statement${qs ? `?${qs}` : ''}`).then((r) => r.data.data);
     },
+  });
+
+  // ── Trial Balance query — lazy: only fetches when tab is active ───────────────
+  const { data: trialBalance, isLoading: isTBLoading, isError: isTBError, refetch: refetchTB } = useQuery({
+    queryKey: ['trial-balance', selectedFY, viewUserId],
+    queryFn: () => fetchTrialBalance(selectedFY, isAdmin ? viewUserId : undefined),
+    enabled: activeTab === 'trialbalance',
   });
 
   const isLoading = isPnLLoading || (isAdmin && isMembersLoading);
@@ -366,6 +374,105 @@ export default function ReportsPage() {
                 </div>
               </div>
             </div>
+          )}
+        </section>
+      )}
+
+      {/* ── Trial Balance Tab ────────────────────────────────────────────────────── */}
+      {activeTab === 'trialbalance' && (
+        <section className="space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold">Trial Balance — FY {selectedFY}</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Income and expense accounts for the financial year. Total debits always equal total credits.
+            </p>
+          </div>
+
+          {isTBError ? (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-8 text-center space-y-3">
+              <p className="text-sm font-medium text-destructive">Failed to load Trial Balance</p>
+              <p className="text-xs text-muted-foreground">Check that the backend is running and try again.</p>
+              <button
+                onClick={() => refetchTB()}
+                className="mt-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                Retry
+              </button>
+            </div>
+          ) : isTBLoading ? (
+            <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
+              Loading trial balance…
+            </div>
+          ) : !trialBalance || trialBalance.entries.length === 0 ? (
+            <div className="text-center py-8 border rounded-xl text-muted-foreground text-sm">
+              No transactions for this financial year
+            </div>
+          ) : (
+            <>
+              {/* Summary cards */}
+              <div className="grid grid-cols-3 gap-4">
+                <div className="rounded-xl border bg-card p-5 space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total Income</p>
+                  <INRDisplay amount={trialBalance.totals.rawTotalIncome} short className="text-2xl font-bold text-green-600 dark:text-green-400" />
+                </div>
+                <div className="rounded-xl border bg-card p-5 space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total Expenses</p>
+                  <INRDisplay amount={trialBalance.totals.rawTotalExpenses} short className="text-2xl font-bold text-rose-600 dark:text-rose-400" />
+                </div>
+                <div className="rounded-xl border bg-card p-5 space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Net Savings</p>
+                  <INRDisplay amount={trialBalance.totals.netSavings} short colorCode className="text-2xl font-bold" />
+                </div>
+              </div>
+
+              {/* Trial balance table */}
+              <div className="rounded-xl border bg-card overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="text-left px-4 py-3 font-medium text-muted-foreground">Account Name</th>
+                      <th className="text-right px-4 py-3 font-medium text-muted-foreground w-40">Debit (₹)</th>
+                      <th className="text-right px-4 py-3 font-medium text-muted-foreground w-40">Credit (₹)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trialBalance.entries.map((entry) => {
+                      const isBalancingRow = entry.accountName === 'Net Savings (Surplus)' || entry.accountName === 'Net Loss (Deficit)';
+                      return (
+                        <tr
+                          key={`${entry.type}-${entry.accountName}`}
+                          className={cn(
+                            'border-b last:border-0 transition-colors',
+                            isBalancingRow
+                              ? 'bg-muted/30 italic text-muted-foreground'
+                              : 'hover:bg-muted/20',
+                          )}
+                        >
+                          <td className="px-4 py-2.5">{entry.accountName}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">
+                            {entry.debit > 0 ? <INRDisplay amount={entry.debit} /> : <span className="text-muted-foreground">—</span>}
+                          </td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">
+                            {entry.credit > 0 ? <INRDisplay amount={entry.credit} /> : <span className="text-muted-foreground">—</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 bg-muted/50">
+                      <td className="px-4 py-3 font-semibold">Total</td>
+                      <td className="px-4 py-3 text-right font-semibold tabular-nums">
+                        <INRDisplay amount={trialBalance.totals.totalDebits} />
+                      </td>
+                      <td className="px-4 py-3 text-right font-semibold tabular-nums">
+                        <INRDisplay amount={trialBalance.totals.totalCredits} />
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </>
           )}
         </section>
       )}

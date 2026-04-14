@@ -608,6 +608,89 @@ export async function getProfitAndLoss(
   };
 }
 
+export async function getTrialBalance(
+  userId: string,
+  requesterRole: string,
+  fy?: string,
+  targetUserId?: string,
+) {
+  const currentFY = fy ?? getCurrentFY();
+  const { start, end } = getFYRange(currentFY);
+  const effectiveUserId = requesterRole === 'ADMIN' ? targetUserId : userId;
+  const userFilter: Prisma.TransactionWhereInput = effectiveUserId ? { userId: effectiveUserId } : {};
+
+  const dateFilter = { date: { gte: start, lte: end } };
+
+  // Expense categories (debit side) and income categories (credit side) — no take limit (full trial balance)
+  const [expenseRows, incomeRows] = await Promise.all([
+    prisma.transaction.groupBy({
+      by: ['categoryId'],
+      where: { ...userFilter, deletedAt: null, type: 'EXPENSE', ...dateFilter },
+      _sum: { amount: true },
+      orderBy: { _sum: { amount: 'desc' } },
+    }),
+    prisma.transaction.groupBy({
+      by: ['categoryId'],
+      where: { ...userFilter, deletedAt: null, type: 'INCOME', ...dateFilter },
+      _sum: { amount: true },
+      orderBy: { _sum: { amount: 'desc' } },
+    }),
+  ]);
+
+  // Resolve category names — deduplicate IDs to avoid duplicate DB rows in the IN query
+  const allCategoryIds = [
+    ...new Set(
+      [...expenseRows.map((r) => r.categoryId), ...incomeRows.map((r) => r.categoryId)].filter(
+        (id): id is string => id !== null,
+      ),
+    ),
+  ];
+
+  const categories = await prisma.category.findMany({ where: { id: { in: allCategoryIds } } });
+  const catMap = Object.fromEntries(categories.map((c) => [c.id, c.name]));
+
+  const resolveName = (categoryId: string | null) =>
+    categoryId ? (catMap[categoryId] ?? 'Uncategorized') : 'Uncategorized';
+
+  // Build entries: EXPENSE rows → debit side, INCOME rows → credit side
+  const entries = [
+    ...expenseRows.map((r) => ({
+      accountName: resolveName(r.categoryId),
+      type: 'DEBIT' as const,
+      debit: Number(r._sum.amount ?? 0),
+      credit: 0,
+    })),
+    ...incomeRows.map((r) => ({
+      accountName: resolveName(r.categoryId),
+      type: 'CREDIT' as const,
+      debit: 0,
+      credit: Number(r._sum.amount ?? 0),
+    })),
+  ];
+
+  const rawTotalExpenses = entries.filter((e) => e.type === 'DEBIT').reduce((s, e) => s + e.debit, 0);
+  const rawTotalIncome = entries.filter((e) => e.type === 'CREDIT').reduce((s, e) => s + e.credit, 0);
+  const netSavings = rawTotalIncome - rawTotalExpenses;
+
+  // Add balancing entry so Total Debits === Total Credits (real trial balance property)
+  if (netSavings > 0) {
+    // Surplus: add Net Savings on the debit side to balance
+    entries.push({ accountName: 'Net Savings (Surplus)', type: 'DEBIT' as const, debit: netSavings, credit: 0 });
+  } else if (netSavings < 0) {
+    // Deficit: add Net Loss on the credit side to balance
+    entries.push({ accountName: 'Net Loss (Deficit)', type: 'CREDIT' as const, debit: 0, credit: -netSavings });
+  }
+
+  const totalDebits = entries.filter((e) => e.type === 'DEBIT').reduce((s, e) => s + e.debit, 0);
+  const totalCredits = entries.filter((e) => e.type === 'CREDIT').reduce((s, e) => s + e.credit, 0);
+
+  return {
+    fy: currentFY,
+    entries,
+    totals: { totalDebits, totalCredits, netSavings, rawTotalIncome, rawTotalExpenses },
+  };
+}
+
 export async function getNetWorthHistory(userId: string) {
   return prisma.netWorthSnapshot.findMany({
     where: { userId },

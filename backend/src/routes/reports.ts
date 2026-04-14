@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess } from '../utils/response';
 import { requireAuth } from '../middleware/auth';
-import { computeNetWorthStatement, getProfitAndLoss } from '../services/dashboardService';
+import { computeNetWorthStatement, getProfitAndLoss, getTrialBalance } from '../services/dashboardService';
 import { prisma } from '../config/prisma';
 import { getFYRange, validateFY } from '../utils/financialYear';
 import { resolveTargetUserId } from '../utils/resolveTargetUserId';
@@ -60,6 +60,17 @@ router.get(
     const { userId, role } = req.user!;
     const targetUserId = await resolveTargetUserId(req);
     const data = await getProfitAndLoss(userId, role, fy, targetUserId);
+    sendSuccess(res, data);
+  }),
+);
+
+router.get(
+  '/trial-balance',
+  asyncHandler(async (req: Request, res: Response) => {
+    const fy = validateFY(req.query.fy);
+    const { userId, role } = req.user!;
+    const targetUserId = await resolveTargetUserId(req);
+    const data = await getTrialBalance(userId, role, fy, targetUserId);
     sendSuccess(res, data);
   }),
 );

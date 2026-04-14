@@ -57,6 +57,7 @@ import {
   getFamilyOverview,
   getProfitAndLoss,
   getNetWorthHistory,
+  getTrialBalance,
 } from '../services/dashboardService';
 
 const txMock = (prisma as any).transaction;
@@ -362,6 +363,155 @@ describe('getProfitAndLoss', () => {
 
   it('ADMIN with targetUserId does not throw', async () => {
     await expect(getProfitAndLoss('admin-1', 'ADMIN', '2025-26', 'u2')).resolves.toBeDefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// getTrialBalance
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('getTrialBalance', () => {
+  it('returns correct shape: fy, entries, totals', async () => {
+    const r = await getTrialBalance('u1', 'MEMBER', '2025-26');
+    expect(r.fy).toBe('2025-26');
+    expect(Array.isArray(r.entries)).toBe(true);
+    expect(r.totals).toMatchObject({ totalDebits: expect.any(Number), totalCredits: expect.any(Number), netSavings: expect.any(Number) });
+  });
+
+  it('empty FY → entries is [] before balancing, totals all 0', async () => {
+    const r = await getTrialBalance('u1', 'MEMBER', '2025-26');
+    // With no transactions, netSavings = 0 → no balancing row added
+    expect(r.entries).toHaveLength(0);
+    expect(r.totals.totalDebits).toBe(0);
+    expect(r.totals.totalCredits).toBe(0);
+    expect(r.totals.netSavings).toBe(0);
+  });
+
+  it('EXPENSE row has debit > 0 and credit = 0', async () => {
+    txMock.groupBy
+      .mockResolvedValueOnce([{ categoryId: 'cat-1', _sum: { amount: 5000 } }]) // expense
+      .mockResolvedValueOnce([]); // income
+    catMock.findMany.mockResolvedValue([{ id: 'cat-1', name: 'Groceries' }]);
+    const r = await getTrialBalance('u1', 'MEMBER', '2025-26');
+    const expenseEntry = r.entries.find((e) => e.type === 'DEBIT' && e.accountName === 'Groceries');
+    expect(expenseEntry).toBeDefined();
+    expect(expenseEntry!.debit).toBe(5000);
+    expect(expenseEntry!.credit).toBe(0);
+  });
+
+  it('INCOME row has credit > 0 and debit = 0', async () => {
+    txMock.groupBy
+      .mockResolvedValueOnce([]) // expense
+      .mockResolvedValueOnce([{ categoryId: 'cat-2', _sum: { amount: 80000 } }]); // income
+    catMock.findMany.mockResolvedValue([{ id: 'cat-2', name: 'Salary' }]);
+    const r = await getTrialBalance('u1', 'MEMBER', '2025-26');
+    const incomeEntry = r.entries.find((e) => e.type === 'CREDIT' && e.accountName === 'Salary');
+    expect(incomeEntry).toBeDefined();
+    expect(incomeEntry!.credit).toBe(80000);
+    expect(incomeEntry!.debit).toBe(0);
+  });
+
+  it('totalDebits equals sum of all debit entries', async () => {
+    txMock.groupBy
+      .mockResolvedValueOnce([
+        { categoryId: 'cat-1', _sum: { amount: 3000 } },
+        { categoryId: 'cat-2', _sum: { amount: 7000 } },
+      ])
+      .mockResolvedValueOnce([{ categoryId: 'cat-3', _sum: { amount: 20000 } }]);
+    catMock.findMany.mockResolvedValue([
+      { id: 'cat-1', name: 'Rent' },
+      { id: 'cat-2', name: 'Food' },
+      { id: 'cat-3', name: 'Salary' },
+    ]);
+    const r = await getTrialBalance('u1', 'MEMBER', '2025-26');
+    const debitSum = r.entries.filter((e) => e.type === 'DEBIT').reduce((s, e) => s + e.debit, 0);
+    expect(r.totals.totalDebits).toBe(debitSum);
+  });
+
+  it('netSavings = totalIncome - totalExpenses', async () => {
+    txMock.groupBy
+      .mockResolvedValueOnce([{ categoryId: null, _sum: { amount: 10000 } }]) // expense
+      .mockResolvedValueOnce([{ categoryId: null, _sum: { amount: 30000 } }]); // income
+    const r = await getTrialBalance('u1', 'MEMBER', '2025-26');
+    expect(r.totals.netSavings).toBe(20000);
+  });
+
+  it('totalDebits === totalCredits (balancing property holds)', async () => {
+    txMock.groupBy
+      .mockResolvedValueOnce([{ categoryId: null, _sum: { amount: 10000 } }]) // expense
+      .mockResolvedValueOnce([{ categoryId: null, _sum: { amount: 30000 } }]); // income
+    const r = await getTrialBalance('u1', 'MEMBER', '2025-26');
+    expect(r.totals.totalDebits).toBe(r.totals.totalCredits);
+  });
+
+  it('deficit case: expense > income — Net Loss entry added on credit side', async () => {
+    txMock.groupBy
+      .mockResolvedValueOnce([{ categoryId: null, _sum: { amount: 50000 } }]) // expense
+      .mockResolvedValueOnce([{ categoryId: null, _sum: { amount: 30000 } }]); // income
+    const r = await getTrialBalance('u1', 'MEMBER', '2025-26');
+    expect(r.totals.netSavings).toBe(-20000);
+    expect(r.totals.totalDebits).toBe(r.totals.totalCredits);
+    const deficitEntry = r.entries.find((e) => e.accountName === 'Net Loss (Deficit)');
+    expect(deficitEntry).toBeDefined();
+    expect(deficitEntry!.credit).toBe(20000);
+  });
+
+  it('resolves category names from category.findMany', async () => {
+    txMock.groupBy
+      .mockResolvedValueOnce([{ categoryId: 'cat-x', _sum: { amount: 1500 } }])
+      .mockResolvedValueOnce([]);
+    catMock.findMany.mockResolvedValue([{ id: 'cat-x', name: 'Utilities' }]);
+    const r = await getTrialBalance('u1', 'MEMBER', '2025-26');
+    expect(r.entries[0].accountName).toBe('Utilities');
+  });
+
+  it('null categoryId maps to "Uncategorized"', async () => {
+    txMock.groupBy
+      .mockResolvedValueOnce([{ categoryId: null, _sum: { amount: 2000 } }])
+      .mockResolvedValueOnce([]);
+    const r = await getTrialBalance('u1', 'MEMBER', '2025-26');
+    expect(r.entries[0].accountName).toBe('Uncategorized');
+  });
+
+  it('MEMBER role — groupBy called with userId filter', async () => {
+    await getTrialBalance('u1', 'MEMBER', '2025-26');
+    const firstCall = txMock.groupBy.mock.calls[0][0];
+    expect(firstCall.where.userId).toBe('u1');
+  });
+
+  it('ADMIN without targetUserId — groupBy called without userId filter (family-wide)', async () => {
+    await getTrialBalance('admin-1', 'ADMIN', '2025-26');
+    const firstCall = txMock.groupBy.mock.calls[0][0];
+    expect(firstCall.where.userId).toBeUndefined();
+  });
+
+  it('ADMIN with targetUserId — groupBy called with targetUserId', async () => {
+    await getTrialBalance('admin-1', 'ADMIN', '2025-26', 'member-2');
+    const firstCall = txMock.groupBy.mock.calls[0][0];
+    expect(firstCall.where.userId).toBe('member-2');
+  });
+
+  it('more than 15 categories are all returned (no take limit)', async () => {
+    const manyExpenses = Array.from({ length: 18 }, (_, i) => ({
+      categoryId: `cat-${i}`,
+      _sum: { amount: 100 * (i + 1) },
+    }));
+    txMock.groupBy
+      .mockResolvedValueOnce(manyExpenses)
+      .mockResolvedValueOnce([]);
+    catMock.findMany.mockResolvedValue(manyExpenses.map((r) => ({ id: r.categoryId, name: `Cat ${r.categoryId}` })));
+    const r = await getTrialBalance('u1', 'MEMBER', '2025-26');
+    const debitEntries = r.entries.filter((e) => e.type === 'DEBIT');
+    // 18 expense entries + 1 balancing row (all expenses, no income → Net Loss)
+    expect(debitEntries.length + r.entries.filter((e) => e.type === 'CREDIT').length).toBeGreaterThanOrEqual(18);
+  });
+
+  it('TRANSFER transactions are excluded — only INCOME and EXPENSE are queried', async () => {
+    await getTrialBalance('u1', 'MEMBER', '2025-26');
+    const firstCall = txMock.groupBy.mock.calls[0][0];
+    const secondCall = txMock.groupBy.mock.calls[1][0];
+    expect(firstCall.where.type).toBe('EXPENSE');
+    expect(secondCall.where.type).toBe('INCOME');
   });
 });
 

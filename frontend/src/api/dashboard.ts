@@ -120,3 +120,32 @@ export async function fetchProfitAndLoss(fy?: string, targetUserId?: string): Pr
   const res = await api.get<{ data: ProfitAndLoss }>('/reports/profit-and-loss', { params });
   return res.data.data;
 }
+
+export interface TrialBalanceEntry {
+  accountName: string;
+  type: 'DEBIT' | 'CREDIT';
+  debit: number;
+  credit: number;
+}
+
+export interface TrialBalanceTotals {
+  totalDebits: number;
+  totalCredits: number;
+  netSavings: number;
+  rawTotalIncome: number;
+  rawTotalExpenses: number;
+}
+
+export interface TrialBalance {
+  fy: string;
+  entries: TrialBalanceEntry[];
+  totals: TrialBalanceTotals;
+}
+
+export async function fetchTrialBalance(fy?: string, targetUserId?: string): Promise<TrialBalance> {
+  const params: Record<string, string> = {};
+  if (fy) params.fy = fy;
+  if (targetUserId) params.targetUserId = targetUserId;
+  const res = await api.get<{ data: TrialBalance }>('/reports/trial-balance', { params });
+  return res.data.data;
+}
