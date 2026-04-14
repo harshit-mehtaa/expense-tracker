@@ -31,12 +31,24 @@ export interface AmortizationRow {
 
 const unwrap = <T>(res: { data: { data: T } }): T => res.data.data;
 
+// Prisma Decimal fields serialize as strings in JSON; coerce to number at the API boundary.
+export function normalizeLoan(l: Loan): Loan {
+  return {
+    ...l,
+    principalAmount: Number(l.principalAmount),
+    outstandingBalance: Number(l.outstandingBalance),
+    interestRate: Number(l.interestRate),
+    emiAmount: Number(l.emiAmount),
+    prepaymentChargesPct: Number(l.prepaymentChargesPct),
+  };
+}
+
 export const loansApi = {
-  getAll: (targetUserId?: string) => api.get<{ data: Loan[] }>('/loans', { params: targetUserId ? { targetUserId } : {} }).then(unwrap),
-  create: (data: object) => api.post<{ data: Loan }>('/loans', data).then(unwrap),
-  update: (id: string, data: object) => api.put<{ data: Loan }>(`/loans/${id}`, data).then(unwrap),
+  getAll: (targetUserId?: string) => api.get<{ data: Loan[] }>('/loans', { params: targetUserId ? { targetUserId } : {} }).then(unwrap).then((loans) => loans.map(normalizeLoan)),
+  create: (data: object) => api.post<{ data: Loan }>('/loans', data).then(unwrap).then(normalizeLoan),
+  update: (id: string, data: object) => api.put<{ data: Loan }>(`/loans/${id}`, data).then(unwrap).then(normalizeLoan),
   delete: (id: string) => api.delete(`/loans/${id}`),
-  getAmortization: (id: string) => api.get<{ data: { loan: Loan; schedule: AmortizationRow[]; summary: any } }>(`/loans/${id}/amortization-schedule`).then(unwrap),
+  getAmortization: (id: string) => api.get<{ data: { loan: Loan; schedule: AmortizationRow[]; summary: any } }>(`/loans/${id}/amortization-schedule`).then(unwrap).then((r) => ({ ...r, loan: normalizeLoan(r.loan) })),
   simulatePrepayment: (id: string, data: { prepaymentAmount: number; mode: string }) =>
     api.post<{ data: any }>(`/loans/${id}/prepayment-simulation`, data).then(unwrap),
 };
