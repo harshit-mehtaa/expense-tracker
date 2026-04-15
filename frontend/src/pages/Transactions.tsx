@@ -292,6 +292,46 @@ function loadRules(): CategoryRule[] {
 }
 function saveRules(rules: CategoryRule[]) { localStorage.setItem(RULES_KEY, JSON.stringify(rules)); }
 
+// ─── Import auto-detect helpers ───────────────────────────────────────────────
+
+const AUTO_DETECT = '__auto__';
+
+interface AutoDetectResult { account: any | null; ambiguous: boolean }
+
+const BANK_FILENAME_KEYWORDS: Record<string, string> = {
+  hdfc: 'HDFC', sbi: 'SBI', icici: 'ICICI', axis: 'AXIS', kotak: 'KOTAK',
+};
+
+// Account bankName search patterns per bank key.
+// Handles full official names (e.g. "State Bank of India" doesn't contain "sbi").
+const BANK_ACCOUNT_PATTERNS: Record<string, string[]> = {
+  HDFC: ['hdfc'],
+  SBI: ['sbi', 'state bank'],
+  ICICI: ['icici'],
+  AXIS: ['axis'],
+  KOTAK: ['kotak'],
+};
+
+function detectBankFromFilename(filename: string): string | null {
+  const lower = filename.toLowerCase();
+  for (const [kw, bank] of Object.entries(BANK_FILENAME_KEYWORDS)) {
+    if (lower.includes(kw)) return bank;
+  }
+  return null;
+}
+
+function resolveAccountForBank(bankKey: string | null, accounts: any[]): AutoDetectResult {
+  if (!bankKey || accounts.length === 0) return { account: null, ambiguous: false };
+  const patterns = BANK_ACCOUNT_PATTERNS[bankKey.toUpperCase()] ?? [bankKey.toLowerCase()];
+  const matches = accounts.filter((a: any) => {
+    const name = a.bankName?.toLowerCase() ?? '';
+    return patterns.some((p) => name.includes(p));
+  });
+  if (matches.length === 0) return { account: null, ambiguous: false };
+  if (matches.length === 1) return { account: matches[0], ambiguous: false };
+  return { account: null, ambiguous: true };
+}
+
 function ImportModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -300,7 +340,8 @@ function ImportModal({ onClose }: { onClose: () => void }) {
   // Bank imports produce INCOME/EXPENSE transactions — filter out ASSET/LIABILITY categories
   const importCategories = categories.filter((c: any) => c.type === 'INCOME' || c.type === 'EXPENSE');
   const [file, setFile] = useState<File | null>(null);
-  const [bankAccountId, setBankAccountId] = useState('');
+  const [bankAccountId, setBankAccountId] = useState(AUTO_DETECT);
+  const [autoDetectResult, setAutoDetectResult] = useState<AutoDetectResult>({ account: null, ambiguous: false });
   const [bank, setBank] = useState('');
   const [pdfPassword, setPdfPassword] = useState('');
   const [result, setResult] = useState<any>(null);
@@ -316,12 +357,43 @@ function ImportModal({ onClose }: { onClose: () => void }) {
 
   const isPDF = file?.name.toLowerCase().endsWith('.pdf') ?? false;
 
+  // Derived: resolves AUTO_DETECT sentinel to a real account ID (or '') before any API call.
+  // Computed at render time so the closure in mutationFn always captures the correct value.
+  const resolvedAccountId = bankAccountId === AUTO_DETECT
+    ? (autoDetectResult.ambiguous ? '' : autoDetectResult.account?.id ?? '')
+    : bankAccountId;
+
+  // Hint used for preview text — file detection takes priority over manual bank dropdown.
+  const detectedBankHint = file ? (detectBankFromFilename(file.name) ?? bank || null) : null;
+
+  // Re-run auto-detection when bank hint, mode, or accounts list changes.
+  // accounts is included so detection re-runs correctly if accounts finish loading after file selection.
+  // file is intentionally omitted — file changes are handled eagerly by handleFileSelected.
+  useEffect(() => {
+    if (bankAccountId === AUTO_DETECT && file) {
+      const hint = detectBankFromFilename(file.name) ?? bank || null;
+      setAutoDetectResult(resolveAccountForBank(hint, accounts));
+    }
+  }, [bank, bankAccountId, accounts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Shared handler for file selection (click + drag-drop).
+  function handleFileSelected(f: File | null | undefined) {
+    const selected = f ?? null;
+    setFile(selected);
+    setPdfPassword('');
+    if (selected && bankAccountId === AUTO_DETECT) {
+      const hint = detectBankFromFilename(selected.name) ?? bank || null;
+      setAutoDetectResult(resolveAccountForBank(hint, accounts));
+    }
+  }
+
   const importMutation = useMutation({
     mutationFn: async () => {
       if (!file) throw new Error('No file selected');
       const formData = new FormData();
       formData.append('file', file);
-      if (bankAccountId) formData.append('bankAccountId', bankAccountId);
+      // resolvedAccountId is derived at render time — never sends the '__auto__' sentinel to the API
+      if (resolvedAccountId) formData.append('bankAccountId', resolvedAccountId);
       if (bank) formData.append('bank', bank);
       if (isPDF && pdfPassword) formData.append('pdfPassword', pdfPassword);
       return api.post<{ data: any }>('/transactions/import', formData, {
@@ -398,12 +470,35 @@ function ImportModal({ onClose }: { onClose: () => void }) {
             </div>
             <div className="space-y-1">
               <Label>Link to Account (optional)</Label>
-              <select value={bankAccountId} onChange={(e) => setBankAccountId(e.target.value)} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+              <select
+                value={bankAccountId}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setBankAccountId(val);
+                  // Clear detection result when user manually picks an account (or no account)
+                  if (val !== AUTO_DETECT) setAutoDetectResult({ account: null, ambiguous: false });
+                }}
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              >
+                <option value={AUTO_DETECT}>Auto-detect (match by bank name)</option>
                 <option value="">— Don't link to account —</option>
                 {accounts.map((a: any) => (
                   <option key={a.id} value={a.id}>{a.bankName} ····{a.accountNumberLast4 ?? ''}</option>
                 ))}
               </select>
+              {/* Auto-detect preview — shown only when a file is selected and auto-detect is active */}
+              {bankAccountId === AUTO_DETECT && file && (
+                <p className="text-xs mt-1">
+                  {autoDetectResult.ambiguous
+                    ? <span className="text-amber-600">Multiple {detectedBankHint} accounts found — please select one manually</span>
+                    : autoDetectResult.account
+                      ? <span className="text-muted-foreground">→ will link to {autoDetectResult.account.bankName} ····{autoDetectResult.account.accountNumberLast4 ?? ''}</span>
+                      : detectedBankHint
+                        ? <span className="text-muted-foreground">No {detectedBankHint} account found — will import unlinked</span>
+                        : <span className="text-muted-foreground">Could not detect bank from filename — will import unlinked</span>
+                  }
+                </p>
+              )}
             </div>
             <div
               className={cn(
@@ -423,8 +518,7 @@ function ImportModal({ onClose }: { onClose: () => void }) {
               onDrop={(e) => {
                 e.preventDefault();
                 setIsDragging(false);
-                const dropped = e.dataTransfer.files[0];
-                if (dropped) { setFile(dropped); setPdfPassword(''); }
+                handleFileSelected(e.dataTransfer.files[0]);
               }}
             >
               <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
@@ -442,10 +536,7 @@ function ImportModal({ onClose }: { onClose: () => void }) {
                 type="file"
                 accept=".csv,.pdf"
                 className="hidden"
-                onChange={(e) => {
-                  setFile(e.target.files?.[0] ?? null);
-                  setPdfPassword('');
-                }}
+                onChange={(e) => handleFileSelected(e.target.files?.[0])}
               />
             </div>
             {isPDF && (
@@ -536,8 +627,8 @@ function ImportModal({ onClose }: { onClose: () => void }) {
                 </div>
               )}
             </div>
-            {/* Balance update — only shown when an account was linked */}
-            {bankAccountId && (
+            {/* Balance update — only shown when an account was actually linked (resolvedAccountId is a real ID) */}
+            {resolvedAccountId && (
               <div className="space-y-1">
                 <Label>Update account balance (optional)</Label>
                 <p className="text-xs text-muted-foreground">Enter the current balance shown in your bank app to keep it in sync.</p>
@@ -556,7 +647,7 @@ function ImportModal({ onClose }: { onClose: () => void }) {
                       onClick={async () => {
                         setSavingBalance(true);
                         try {
-                          await api.put(`/accounts/${bankAccountId}`, { currentBalance: Number(newBalance) });
+                          await api.put(`/accounts/${resolvedAccountId}`, { currentBalance: Number(newBalance) });
                           qc.invalidateQueries({ queryKey: ['accounts'] });
                           toast({ title: 'Account balance updated', variant: 'success' });
                           setNewBalance('');
