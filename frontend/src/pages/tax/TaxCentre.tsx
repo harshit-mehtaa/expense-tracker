@@ -13,6 +13,8 @@ import { taxApi } from '@/api/tax';
 import { loansApi } from '@/api/loans';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { cn } from '@/lib/utils';
+import InsightsTab from './InsightsTab';
+import FYHistoryTab from './FYHistoryTab';
 import ScheduleCG from './ScheduleCG';
 import ScheduleOS from './ScheduleOS';
 import ScheduleHP from './ScheduleHP';
@@ -52,10 +54,12 @@ const profileSchema = z.object({
 type ProfileForm = z.infer<typeof profileSchema>;
 
 export default function TaxCentrePage() {
-  const { selectedFY } = useFY();
+  const { selectedFY, fyOptions } = useFY();
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'summary' | '80c' | 'advance' | 'hra' | 'cg' | 'os' | 'hp' | 'fa' | 'itr2'>('summary');
+  const [activeTab, setActiveTab] = useState<'summary' | '80c' | 'insights' | 'advance' | 'fyhistory' | 'hra' | 'cg' | 'os' | 'hp' | 'fa' | 'itr2'>('summary');
   const [hraParams, setHraParams] = useState({ basicSalary: '', hraReceived: '', rentPaid: '', city: 'METRO' });
+  // Projected tax override for advance tax installment calculator (null = use profile tax)
+  const [projectedTax, setProjectedTax] = useState<number | null>(null);
   const [hraResult, setHraResult] = useState<{ exempt: number; taxable: number } | null>(null);
   const [hraError, setHraError] = useState<string | null>(null);
 
@@ -119,6 +123,15 @@ export default function TaxCentrePage() {
     return () => clearTimeout(timer);
   }, [saveMutation.isSuccess, resetSaveMutation]);
 
+  // Reset projected tax override when FY or member changes
+  useEffect(() => { setProjectedTax(null); }, [selectedFY, viewUserId]);
+
+  // Effective tax for advance installment cards: user override or live summary tax
+  const advanceSummaryTax = summary
+    ? (summary.electedRegime === 'NEW' ? summary.newRegime.tax : summary.oldRegime.tax)
+    : 0;
+  const effectiveTaxForAdvance = projectedTax ?? advanceSummaryTax;
+
   // Tracks which profile ID has already been pre-filled into the HRA calculator
   const hraHydratedForProfileId = useRef<string | null>(null);
 
@@ -160,7 +173,9 @@ export default function TaxCentrePage() {
   const tabs = [
     { id: 'summary', label: 'Tax Summary' },
     { id: '80c', label: '80C Tracker' },
+    { id: 'insights', label: 'Insights' },
     { id: 'advance', label: 'Advance Tax' },
+    { id: 'fyhistory', label: 'FY History' },
     { id: 'hra', label: 'HRA Calculator' },
     { id: 'cg', label: 'Capital Gains' },
     { id: 'os', label: 'Other Sources' },
@@ -190,7 +205,7 @@ export default function TaxCentrePage() {
             FY {selectedFY} · {isViewingOther ? `Viewing: ${selectedMemberName}` : 'Indian Tax Planning'}
           </p>
           {isAdmin && !isMembersLoading && (
-            <div className="flex items-center gap-2 mt-2">
+            <div className="flex items-center gap-2 mt-2 print:hidden">
               <label htmlFor="tax-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
               <select
                 id="tax-member-select"
@@ -209,7 +224,7 @@ export default function TaxCentrePage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b">
+      <div className="flex gap-1 border-b print:hidden overflow-x-auto">
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -227,6 +242,12 @@ export default function TaxCentrePage() {
       {/* Tax Summary Tab */}
       {activeTab === 'summary' && (
         <div className="space-y-6">
+          <div className="flex justify-end print:hidden">
+            <Button variant="outline" size="sm" onClick={() => window.print()}>
+              <FileText className="h-4 w-4 mr-2" /> Print / Save PDF
+            </Button>
+          </div>
+          <h1 className="hidden print:block text-xl font-bold">Tax Summary — FY {selectedFY}</h1>
           {/* Effective tax rate + refund/due banner */}
           {effectiveTaxRate && bannerRegime && (
             <div className="flex flex-wrap gap-3">
@@ -502,10 +523,37 @@ export default function TaxCentrePage() {
         </div>
       )}
 
+      {/* Insights Tab */}
+      {activeTab === 'insights' && (
+        <InsightsTab summary={summary} tracker80C={tracker80C} profile={profile} />
+      )}
+
       {/* Advance Tax Tab */}
       {activeTab === 'advance' && (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">Advance tax installments for FY {selectedFY}. Pay on time to avoid interest under Sec 234B/234C.</p>
+
+          {/* Projected tax override — useful for mid-year income changes */}
+          <div className="rounded-lg border bg-card p-4 flex flex-wrap items-end gap-4">
+            <div className="space-y-1 flex-1 min-w-[200px]">
+              <Label>Projected Annual Tax (₹)</Label>
+              <Input
+                type="number"
+                value={projectedTax ?? ''}
+                onChange={(e) => setProjectedTax(e.target.value ? Number(e.target.value) : null)}
+                placeholder={`${Math.round(advanceSummaryTax).toLocaleString('en-IN')} (from profile)`}
+              />
+            </div>
+            <div className="pb-1 space-y-1">
+              <p className="text-xs text-muted-foreground">Override to recalculate installments for mid-year income changes.</p>
+              {projectedTax !== null && (
+                <button type="button" onClick={() => setProjectedTax(null)} className="text-xs text-primary hover:underline">
+                  Reset to profile tax
+                </button>
+              )}
+            </div>
+          </div>
+
           <div className="grid md:grid-cols-2 gap-4">
             {advanceTax.map((event: any) => {
               const due = new Date(event.dueDate);
@@ -528,10 +576,10 @@ export default function TaxCentrePage() {
                   </div>
                   <p className="text-2xl font-bold">{event.percentageDue}%</p>
                   <p className="text-sm text-muted-foreground">Due: {due.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
-                  {summary && (
+                  {(summary || projectedTax !== null) && (
                     <p className="text-sm">
                       Est. amount: <INRDisplay
-                        amount={(summary.electedRegime === 'NEW' ? summary.newRegime.tax : summary.oldRegime.tax) * event.percentageDue / 100}
+                        amount={effectiveTaxForAdvance * event.percentageDue / 100}
                         className="font-semibold"
                       />
                     </p>
@@ -541,6 +589,11 @@ export default function TaxCentrePage() {
             })}
           </div>
         </div>
+      )}
+
+      {/* FY History Tab */}
+      {activeTab === 'fyhistory' && (
+        <FYHistoryTab fyOptions={fyOptions} viewUserId={viewUserId} />
       )}
 
       {/* HRA Calculator Tab */}
