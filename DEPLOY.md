@@ -54,51 +54,14 @@ services:
     image: ghcr.io/harshit-mehtaa/expense-tracker-frontend:latest
     restart: unless-stopped
 
-  nginx:
-    image: nginx:alpine
+  # Frontend — serves static files and proxies /api/ to backend
+  frontend:
+    image: ghcr.io/harshit-mehtaa/expense-tracker-frontend:latest
     restart: unless-stopped
     ports:
       - "8080:80"
     depends_on:
       - backend
-      - frontend
-    configs:
-      - source: nginx_conf
-        target: /etc/nginx/conf.d/default.conf
-
-configs:
-  nginx_conf:
-    content: |
-      upstream backend {
-          server backend:3000;
-      }
-      upstream frontend {
-          server frontend:80;
-      }
-      server {
-          listen 80;
-          server_name localhost;
-          client_max_body_size 20M;
-
-          location /api/ {
-              proxy_pass http://backend;
-              proxy_http_version 1.1;
-              proxy_set_header Upgrade $$http_upgrade;
-              proxy_set_header Connection 'upgrade';
-              proxy_set_header Host $$host;
-              proxy_set_header X-Real-IP $$remote_addr;
-              proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
-              proxy_set_header X-Forwarded-Proto $$scheme;
-              proxy_read_timeout 300s;
-              proxy_connect_timeout 75s;
-          }
-
-          location / {
-              proxy_pass http://frontend;
-              proxy_http_version 1.1;
-              proxy_set_header Host $$host;
-          }
-      }
 
 volumes:
   postgres_data:
