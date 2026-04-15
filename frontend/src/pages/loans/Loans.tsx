@@ -325,6 +325,7 @@ export default function LoansPage() {
   const [editing, setEditing] = useState<Loan | null>(null);
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
   const isViewingOtherMember = isAdmin && viewUserId !== undefined;
+  const isViewingFamilyWide = isAdmin && !viewUserId;
 
   const { data: loans = [], isLoading } = useQuery({
     queryKey: ['loans', viewUserId],
@@ -394,7 +395,7 @@ export default function LoansPage() {
             </div>
           )}
         </div>
-        {!isViewingOtherMember && (
+        {!isViewingOtherMember && !isViewingFamilyWide && (
           <Button onClick={() => { setEditing(null); reset(); setShowForm(true); }}>
             <Plus className="h-4 w-4 mr-2" /> Add Loan
           </Button>
@@ -435,7 +436,7 @@ export default function LoansPage() {
               loan={loan}
               onEdit={() => startEdit(loan)}
               onDelete={() => deleteMutation.mutate(loan.id)}
-              readOnly={isViewingOtherMember}
+              readOnly={isViewingOtherMember || isViewingFamilyWide}
             />
           ))}
         </div>
