@@ -45,10 +45,10 @@ type RuleForm = z.infer<typeof ruleSchema>;
 
 function useCategories() {
   return useQuery({
-    queryKey: ['categories'],
+    queryKey: ['categories', 'all'],
     queryFn: () =>
       api.get<{ data: { id: string; name: string; type: string }[] }>('/categories')
-        .then((r) => r.data.data.filter((c) => c.type === 'INCOME' || c.type === 'EXPENSE')),
+        .then((r) => r.data.data),
   });
 }
 
@@ -75,6 +75,7 @@ export default function RecurringRulesPage() {
   });
 
   const { data: categories = [] } = useCategories();
+  const ruleCategories = categories.filter((c) => c.type === 'INCOME' || c.type === 'EXPENSE');
   const { data: accounts = [] } = useBankAccounts();
 
   const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm<RuleForm>({
@@ -284,7 +285,7 @@ export default function RecurringRulesPage() {
                   <select id="categoryId" {...register('categoryId')}
                     className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                     <option value="">— None —</option>
-                    {categories.map((c) => (
+                    {ruleCategories.map((c) => (
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
