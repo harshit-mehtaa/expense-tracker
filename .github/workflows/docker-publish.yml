@@ -123,6 +123,8 @@ jobs:
     name: Make packages public
     runs-on: ubuntu-latest
     needs: [build-backend, build-frontend, mirror-postgres]
+    # Requires a PAT with write:packages scope stored as PACKAGES_TOKEN secret.
+    # GITHUB_TOKEN cannot change package visibility — add this secret to enable.
     permissions:
       packages: write
 
@@ -131,12 +133,12 @@ jobs:
         run: |
           for pkg in expense-tracker-backend expense-tracker-frontend postgres; do
             echo "Setting ${pkg} to public..."
-            curl -s -o /dev/null -w "%{http_code}" \
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               -X PATCH \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Authorization: Bearer ${{ secrets.PACKAGES_TOKEN }}" \
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
               -d '{"visibility":"public"}' \
-              https://api.github.com/user/packages/container/${pkg}
-            echo " → done"
+              "https://api.github.com/user/packages/container/${pkg}")
+            echo " → HTTP ${STATUS}"
           done
