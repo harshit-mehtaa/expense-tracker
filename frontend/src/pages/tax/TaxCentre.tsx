@@ -132,30 +132,29 @@ export default function TaxCentrePage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Tax Centre</h1>
           <p className="text-muted-foreground text-sm mt-1">
             FY {selectedFY} · {isViewingOther ? `Viewing: ${selectedMemberName}` : 'Indian Tax Planning'}
           </p>
+          {isAdmin && !isMembersLoading && (
+            <div className="flex items-center gap-2 mt-2">
+              <label htmlFor="tax-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+              <select
+                id="tax-member-select"
+                value={viewUserId ?? ''}
+                onChange={(e) => setViewUserId(e.target.value || undefined)}
+                className="rounded-md border bg-background px-3 py-1.5 text-sm"
+              >
+                <option value="">My Data</option>
+                {members.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
-
-        {/* Member selector — visible to ADMIN only */}
-        {isAdmin && !isMembersLoading && members.length > 0 && (
-          <div className="flex items-center gap-2 shrink-0">
-            <Label className="text-sm text-muted-foreground whitespace-nowrap">Viewing:</Label>
-            <select
-              value={viewUserId ?? ''}
-              onChange={(e) => setViewUserId(e.target.value || undefined)}
-              className="rounded-md border bg-background px-3 py-1.5 text-sm min-w-[160px]"
-            >
-              <option value="">My Data</option>
-              {members.map((m) => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
       </div>
 
       {/* Tabs */}
