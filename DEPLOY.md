@@ -1,36 +1,161 @@
 # Deployment Guide
 
-Deploy on any machine with Docker installed. No repo clone needed — just two files.
+Deploy on any machine with Docker installed. No repo clone needed — just create two files below.
 
-## First-time setup
+---
 
-```bash
-# 1. Download the two required files
-curl -O https://raw.githubusercontent.com/harshit-mehtaa/expense-tracker/main/docker-compose.deploy.yml
-curl -O https://raw.githubusercontent.com/harshit-mehtaa/expense-tracker/main/.env.deploy.example
+## Step 1 — Create `docker-compose.deploy.yml`
 
-# 2. Create your .env from the template
-cp .env.deploy.example .env
-# Edit .env — change passwords, DATABASE_URL, and JWT secrets
+Create a file called `docker-compose.deploy.yml` and paste this content:
+
+```yaml
+version: '3.9'
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  migrate:
+    image: ghcr.io/harshit-mehtaa/expense-tracker-backend:latest
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["npx", "prisma", "migrate", "deploy"]
+    restart: "no"
+
+  backend:
+    image: ghcr.io/harshit-mehtaa/expense-tracker-backend:latest
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - uploads_data:/app/uploads
+
+  frontend:
+    image: ghcr.io/harshit-mehtaa/expense-tracker-frontend:latest
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+      - frontend
+    configs:
+      - source: nginx_conf
+        target: /etc/nginx/conf.d/default.conf
+
+configs:
+  nginx_conf:
+    content: |
+      upstream backend {
+          server backend:3000;
+      }
+      upstream frontend {
+          server frontend:80;
+      }
+      server {
+          listen 80;
+          server_name localhost;
+          client_max_body_size 20M;
+
+          location /api/ {
+              proxy_pass http://backend;
+              proxy_http_version 1.1;
+              proxy_set_header Upgrade $$http_upgrade;
+              proxy_set_header Connection 'upgrade';
+              proxy_set_header Host $$host;
+              proxy_set_header X-Real-IP $$remote_addr;
+              proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $$scheme;
+              proxy_read_timeout 300s;
+              proxy_connect_timeout 75s;
+          }
+
+          location / {
+              proxy_pass http://frontend;
+              proxy_http_version 1.1;
+              proxy_set_header Host $$host;
+          }
+      }
+
+volumes:
+  postgres_data:
+  uploads_data:
 ```
 
-Generate JWT secrets:
-```bash
-node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+---
+
+## Step 2 — Create `.env`
+
+Create a file called `.env` in the same folder and paste this, filling in your own values:
+
+```env
+# PostgreSQL
+POSTGRES_DB=familyfinance
+POSTGRES_USER=familyfinance
+POSTGRES_PASSWORD=your_strong_password
+
+# Must match the values above
+DATABASE_URL=postgresql://familyfinance:your_strong_password@db:5432/familyfinance
+
+# JWT — generate each with:
+# node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+JWT_SECRET=your_64_byte_hex_secret
+JWT_REFRESH_SECRET=your_other_64_byte_hex_secret
+
+# App
+NODE_ENV=production
+PORT=3000
+FRONTEND_URL=http://localhost:8080
+COOKIE_DOMAIN=localhost
+VITE_API_URL=http://localhost:8080/api
 ```
 
+---
+
+## Step 3 — Log in to GitHub Container Registry
+
+Create a GitHub Personal Access Token with `read:packages` scope at:
+`github.com → Settings → Developer settings → Personal access tokens`
+
 ```bash
-# 3. Log in to GitHub Container Registry
-#    Use a GitHub Personal Access Token with read:packages scope
-#    (github.com → Settings → Developer settings → Personal access tokens)
 echo "<YOUR_GITHUB_TOKEN>" | docker login ghcr.io -u harshit-mehtaa --password-stdin
+```
 
-# 4. Pull images and start
+---
+
+## Step 4 — Start the app
+
+```bash
 docker compose -f docker-compose.deploy.yml pull
 docker compose -f docker-compose.deploy.yml up -d
 ```
 
 App runs at **http://localhost:8080**
+
+---
 
 ## Updating to a new version
 
