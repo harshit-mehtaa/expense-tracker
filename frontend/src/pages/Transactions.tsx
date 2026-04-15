@@ -151,10 +151,8 @@ type EditTxForm = z.infer<typeof editTxSchema>;
 
 function useCategories() {
   return useQuery({
-    queryKey: ['categories'],
-    queryFn: () =>
-      api.get<{ data: any[] }>('/categories')
-        .then((r) => r.data.data.filter((c: any) => c.type === 'INCOME' || c.type === 'EXPENSE')),
+    queryKey: ['categories', 'all'],
+    queryFn: () => api.get<{ data: any[] }>('/categories').then((r) => r.data.data),
   });
 }
 
@@ -177,7 +175,7 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
   const { toast } = useToast();
   const { data: categories = [] } = useCategories();
 
-  const { register, handleSubmit, formState: { errors } } = useForm<EditTxForm>({
+  const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<EditTxForm>({
     resolver: zodResolver(editTxSchema),
     defaultValues: {
       description: tx.description,
@@ -187,6 +185,21 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
       paymentMode: tx.paymentMode ?? '',
       categoryId: tx.categoryId ?? '',
     },
+  });
+
+  const selectedType = watch('type');
+  const isFirstRender = useRef(true);
+
+  // Reset categoryId when transaction type changes — skip on mount to preserve the pre-populated value
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return; }
+    setValue('categoryId', '');
+  }, [selectedType, setValue]);
+
+  const transactionCategories = categories.filter((c: any) => {
+    if (selectedType === 'INCOME') return c.type === 'INCOME';
+    if (selectedType === 'EXPENSE') return c.type === 'EXPENSE';
+    return false; // TRANSFER — no categories
   });
 
   const editMutation = useMutation({
@@ -254,7 +267,7 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
               <Label>Category</Label>
               <select {...register('categoryId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                 <option value="">— Uncategorized —</option>
-                {categories.map((c: any) => (
+                {transactionCategories.map((c: any) => (
                   <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ` : ''}{c.name}</option>
                 ))}
               </select>
@@ -590,7 +603,7 @@ function AddTransactionModal({ onClose, budgetActuals }: { onClose: () => void; 
   const { data: accounts = [] } = useAccounts();
   const { data: loans = [] } = useLoans();
 
-  const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<TxForm>({
+  const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<TxForm>({
     resolver: zodResolver(txSchema),
     defaultValues: { type: 'EXPENSE', date: new Date().toISOString().slice(0, 10) },
   });
@@ -598,6 +611,17 @@ function AddTransactionModal({ onClose, budgetActuals }: { onClose: () => void; 
   const amount = watch('amount');
   const selectedType = watch('type');
   const selectedCategoryId = watch('categoryId');
+
+  // Reset categoryId when transaction type changes so a stale cross-type category is never submitted
+  useEffect(() => {
+    setValue('categoryId', '');
+  }, [selectedType, setValue]);
+
+  const transactionCategories = categories.filter((c: any) => {
+    if (selectedType === 'INCOME') return c.type === 'INCOME';
+    if (selectedType === 'EXPENSE') return c.type === 'EXPENSE';
+    return false; // TRANSFER — no categories
+  });
 
   const createMutation = useMutation({
     mutationFn: (data: TxForm) => api.post('/transactions', {
@@ -680,7 +704,7 @@ function AddTransactionModal({ onClose, budgetActuals }: { onClose: () => void; 
               <Label>Category</Label>
               <select {...register('categoryId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                 <option value="">— Uncategorized —</option>
-                {categories.map((c: any) => <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ` : ''}{c.name}</option>)}
+                {transactionCategories.map((c: any) => <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ` : ''}{c.name}</option>)}
               </select>
             </div>
             <div className="col-span-2 space-y-1">
