@@ -4,6 +4,7 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { FileText, TrendingDown, Calendar, CheckCircle, AlertCircle } from 'lucide-react';
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -13,8 +14,11 @@ import { taxApi } from '@/api/tax';
 import { loansApi } from '@/api/loans';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { cn } from '@/lib/utils';
+import { CHART_PALETTE, CustomTooltip } from '@/lib/chartUtils';
 import InsightsTab from './InsightsTab';
 import FYHistoryTab from './FYHistoryTab';
+import Tracker80DTab from './Tracker80DTab';
+import TaxCalendarTab from './TaxCalendarTab';
 import ScheduleCG from './ScheduleCG';
 import ScheduleOS from './ScheduleOS';
 import ScheduleHP from './ScheduleHP';
@@ -56,7 +60,7 @@ type ProfileForm = z.infer<typeof profileSchema>;
 export default function TaxCentrePage() {
   const { selectedFY, fyOptions } = useFY();
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'summary' | '80c' | 'insights' | 'advance' | 'fyhistory' | 'hra' | 'cg' | 'os' | 'hp' | 'fa' | 'itr2'>('summary');
+  const [activeTab, setActiveTab] = useState<'summary' | '80c' | 'insights' | 'advance' | 'fyhistory' | 'hra' | 'cg' | 'os' | 'hp' | 'fa' | 'itr2' | '80dtracker' | 'taxcalendar'>('summary');
   const [hraParams, setHraParams] = useState({ basicSalary: '', hraReceived: '', rentPaid: '', city: 'METRO' });
   // Projected tax override for advance tax installment calculator (null = use profile tax)
   const [projectedTax, setProjectedTax] = useState<number | null>(null);
@@ -82,6 +86,26 @@ export default function TaxCentrePage() {
   const { data: advanceTax = [] } = useQuery({
     queryKey: ['advance-tax', selectedFY],
     queryFn: () => taxApi.getAdvanceTaxCalendar(selectedFY),
+  });
+
+  // Income breakdown chart queries — only fetched when the Tax Summary tab is active
+  const { data: cgSummary } = useQuery({
+    queryKey: ['cg-summary', selectedFY, viewUserId],
+    queryFn: () => taxApi.getCapitalGainsSummary(selectedFY, viewUserId),
+    enabled: activeTab === 'summary',
+    staleTime: 5 * 60 * 1000,
+  });
+  const { data: osSummary } = useQuery({
+    queryKey: ['os-summary', selectedFY, viewUserId],
+    queryFn: () => taxApi.getOtherIncomeSummary(selectedFY, viewUserId),
+    enabled: activeTab === 'summary',
+    staleTime: 5 * 60 * 1000,
+  });
+  const { data: hpSummary } = useQuery({
+    queryKey: ['hp-summary', selectedFY, viewUserId],
+    queryFn: () => taxApi.getHousePropertySummary(selectedFY, viewUserId),
+    enabled: activeTab === 'summary',
+    staleTime: 5 * 60 * 1000,
   });
 
   const { data: profile } = useQuery({
@@ -173,8 +197,10 @@ export default function TaxCentrePage() {
   const tabs = [
     { id: 'summary', label: 'Tax Summary' },
     { id: '80c', label: '80C Tracker' },
+    { id: '80dtracker', label: '80D Tracker' },
     { id: 'insights', label: 'Insights' },
     { id: 'advance', label: 'Advance Tax' },
+    { id: 'taxcalendar', label: 'Tax Calendar' },
     { id: 'fyhistory', label: 'FY History' },
     { id: 'hra', label: 'HRA Calculator' },
     { id: 'cg', label: 'Capital Gains' },
@@ -195,6 +221,15 @@ export default function TaxCentrePage() {
   const effectiveTaxRate = summary && bannerRegime && summary.grossSalary > 0
     ? ((bannerRegime.tax / summary.grossSalary) * 100).toFixed(1)
     : null;
+
+  // Income breakdown chart: filter out zero-value segments
+  const incomeSegments = summary ? [
+    { name: 'Salary', value: summary.grossSalary, color: CHART_PALETTE.categorical[0] },
+    { name: 'Capital Gains', value: cgSummary?.totalTaxableGain ?? 0, color: CHART_PALETTE.categorical[1] },
+    { name: 'House Property', value: hpSummary?.taxableHPIncome ?? 0, color: CHART_PALETTE.categorical[2] },
+    { name: 'Other Sources', value: osSummary?.grossTotal ?? 0, color: CHART_PALETTE.categorical[3] },
+  ].filter((s) => s.value > 0) : [];
+  const incomeTotal = incomeSegments.reduce((s, r) => s + r.value, 0);
 
   return (
     <div className="space-y-6">
@@ -335,6 +370,15 @@ export default function TaxCentrePage() {
                       <div className="space-y-1">
                         <Label>80C — Investments &amp; Ins. (₹)</Label>
                         <Input {...register('deduction80C')} type="number" max={150000} placeholder="Max ₹1,50,000" />
+                        {tracker80C && tracker80C.utilized > 0 && !isViewingOther && (
+                          <button
+                            type="button"
+                            onClick={() => setValue('deduction80C', Math.min(tracker80C.utilized, 150000), { shouldDirty: true })}
+                            className="text-xs text-primary underline-offset-2 hover:underline mt-0.5"
+                          >
+                            Detected from investments: ₹{Math.min(tracker80C.utilized, 150000).toLocaleString('en-IN')} — use this?
+                          </button>
+                        )}
                       </div>
                       <div className="space-y-1">
                         <Label>80D — Health Insurance (₹)</Label>
@@ -468,6 +512,46 @@ export default function TaxCentrePage() {
                 <INRDisplay amount={summary.savings} className="text-3xl font-bold text-green-600" />
                 <p className="text-sm text-muted-foreground mt-1">by choosing the {summary.recommendedRegime === 'OLD' ? 'Old' : 'New'} Regime</p>
               </div>
+            </div>
+          )}
+
+          {/* Gross Income Components chart — rendered when at least one income source is loaded */}
+          {incomeSegments.length > 0 && (
+            <div className="rounded-lg border bg-card p-6 space-y-4">
+              <h2 className="font-semibold">Gross Income Components</h2>
+              <div className="flex flex-col md:flex-row items-center gap-6">
+                <div className="w-full md:w-52 h-52 shrink-0">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={incomeSegments} dataKey="value" cx="50%" cy="50%" outerRadius={80} innerRadius={35}>
+                        {incomeSegments.map((entry, i) => (
+                          <Cell key={i} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip content={<CustomTooltip formatter={(v) => `₹${v.toLocaleString('en-IN')}`} />} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="flex-1 space-y-2.5 w-full">
+                  {incomeSegments.map((seg) => (
+                    <div key={seg.name} className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: seg.color }} />
+                        <span>{seg.name}</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <INRDisplay amount={seg.value} className="font-medium" />
+                        <span className="text-xs text-muted-foreground w-10 text-right">
+                          {incomeTotal > 0 ? `${((seg.value / incomeTotal) * 100).toFixed(1)}%` : '—'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Salary shown is gross CTC. Capital gains, house property, and other sources reflect gross amounts for FY {selectedFY}.
+              </p>
             </div>
           )}
         </div>
@@ -694,6 +778,16 @@ export default function TaxCentrePage() {
           <h2 className="font-semibold mb-4">Schedule FA — Foreign Assets</h2>
           <ScheduleFA fy={selectedFY} viewUserId={viewUserId} />
         </div>
+      )}
+
+      {/* 80D Tracker Tab */}
+      {activeTab === '80dtracker' && (
+        <Tracker80DTab viewUserId={viewUserId} selectedRegime={selectedRegime} />
+      )}
+
+      {/* Tax Calendar Tab */}
+      {activeTab === 'taxcalendar' && (
+        <TaxCalendarTab fyYear={selectedFY} advanceTax={advanceTax} />
       )}
 
       {/* ITR-2 Overview Tab */}
