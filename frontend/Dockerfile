@@ -13,7 +13,7 @@ EXPOSE 5173
 # ── Stage 2: production (static build served by nginx) ───────────────────
 FROM builder AS production
 
-RUN npm run build
+RUN npx vite build
 
 FROM nginx:alpine AS production-server
 COPY --from=production /app/dist /usr/share/nginx/html
