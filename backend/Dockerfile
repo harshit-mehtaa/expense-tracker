@@ -16,8 +16,8 @@ COPY . .
 # Generate Prisma client
 RUN npx prisma generate
 
-# Compile TypeScript
-RUN npm run build
+# Compile TypeScript (exclude test files)
+RUN npx tsc -p tsconfig.build.json
 
 # ── Stage 2: production ───────────────────────────────────────────────────
 FROM node:20-alpine AS production

@@ -274,7 +274,7 @@ export async function updateTransaction(
   userId: string,
   requesterRole: string,
   data: Partial<{
-    categoryId: string;
+    categoryId: string | null;
     amount: number;
     type: string;
     paymentMode: string;

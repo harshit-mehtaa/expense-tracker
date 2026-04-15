@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
-import { sendSuccess } from '../utils/response';
+import { sendSuccess, sendCreated } from '../utils/response';
 import { getCurrentFY } from '../utils/financialYear';
 import { resolveTargetUserId } from '../utils/resolveTargetUserId';
 import * as svc from '../services/taxService';
@@ -139,7 +139,7 @@ router.get('/capital-gains/summary', asyncHandler(async (req, res) => {
 router.post('/capital-gains', asyncHandler(async (req, res) => {
   const data = cgEntrySchema.parse(req.body);
   const entry = await cgSvc.createCapitalGain(req.user!.userId, data as any);
-  sendSuccess(res, entry, 201);
+  sendCreated(res, entry);
 }));
 
 router.put('/capital-gains/:id', asyncHandler(async (req, res) => {
@@ -190,7 +190,7 @@ router.get('/other-income/summary', asyncHandler(async (req, res) => {
 router.post('/other-income', asyncHandler(async (req, res) => {
   const data = osEntrySchema.parse(req.body);
   const entry = await osSvc.createOtherIncome(req.user!.userId, data as any);
-  sendSuccess(res, entry, 201);
+  sendCreated(res, entry);
 }));
 
 router.put('/other-income/:id', asyncHandler(async (req, res) => {
@@ -244,7 +244,7 @@ router.get('/house-property/summary', asyncHandler(async (req, res) => {
 router.post('/house-property', asyncHandler(async (req, res) => {
   const data = hpEntrySchema.parse(req.body);
   const entry = await hpSvc.createHouseProperty(req.user!.userId, data as any);
-  sendSuccess(res, entry, 201);
+  sendCreated(res, entry);
 }));
 
 router.put('/house-property/:id', asyncHandler(async (req, res) => {
@@ -295,7 +295,7 @@ router.get('/foreign-assets/summary', asyncHandler(async (req, res) => {
 router.post('/foreign-assets', asyncHandler(async (req, res) => {
   const data = faEntrySchema.parse(req.body);
   const entry = await faSvc.createForeignAsset(req.user!.userId, data as any);
-  sendSuccess(res, entry, 201);
+  sendCreated(res, entry);
 }));
 
 router.put('/foreign-assets/:id', asyncHandler(async (req, res) => {
