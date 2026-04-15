@@ -13,7 +13,7 @@ version: '3.9'
 services:
   # ── PostgreSQL ──────────────────────────────────────────────────────────────
   db:
-    image: postgres:16-alpine
+    image: ghcr.io/harshit-mehtaa/postgres:16-alpine
     restart: unless-stopped
     env_file: .env
     environment:
