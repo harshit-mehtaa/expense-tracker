@@ -37,7 +37,7 @@ import snapshotsRouter from './routes/snapshots';
 import reportsRouter from './routes/reports';
 
 // Import service
-import { parseCSV, makeImportHash } from './services/importService';
+import { parseCSV, parsePDF, makeImportHash } from './services/importService';
 import { prisma } from './config/prisma';
 import { AppError } from './utils/AppError';
 
@@ -77,13 +77,16 @@ if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
 const upload = multer({
   dest: uploadsDir,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB — PDF bank statements can be larger than CSV
   fileFilter: (_req, file, cb) => {
-    if (['text/csv', 'application/csv', 'text/plain', 'application/vnd.ms-excel'].includes(file.mimetype)
-      || file.originalname.endsWith('.csv')) {
+    const isCSV = ['text/csv', 'application/csv', 'text/plain', 'application/vnd.ms-excel'].includes(file.mimetype)
+      || file.originalname.endsWith('.csv');
+    const isPDF = ['application/pdf', 'application/x-pdf'].includes(file.mimetype)
+      || file.originalname.endsWith('.pdf');
+    if (isCSV || isPDF) {
       cb(null, true);
     } else {
-      cb(new AppError('Only CSV files are allowed', 400));
+      cb(new AppError('Only CSV or PDF files are allowed', 400));
     }
   },
 });
@@ -115,6 +118,11 @@ app.post(
 
     const accountId = req.body.bankAccountId as string | undefined;
     const bankHint = req.body.bank as string | undefined;
+    const pdfPassword = req.body.pdfPassword as string | undefined;
+
+    const isPDF = req.file.mimetype === 'application/pdf'
+      || req.file.mimetype === 'application/x-pdf'
+      || req.file.originalname.endsWith('.pdf');
 
     let buffer: Buffer;
     try {
@@ -124,7 +132,9 @@ app.post(
       try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
     }
 
-    const result = parseCSV(buffer, bankHint);
+    const result = isPDF
+      ? await parsePDF(buffer, bankHint, pdfPassword)
+      : parseCSV(buffer, bankHint);
 
     if (result.transactions.length === 0) {
       throw AppError.badRequest(`No transactions parsed. Errors: ${result.errors.slice(0, 3).map((e) => e.message).join(', ')}`);
@@ -138,22 +148,25 @@ app.post(
       if (!account) throw AppError.notFound('Bank account');
     }
 
-    // Compute import hashes upfront
+    // Compute import hashes upfront.
+    // scopeId = accountId when linked to an account; userId otherwise.
+    // This ensures deduplication works even without a linked account (re-import is always safe).
+    const scopeId = accountId ?? req.user!.userId;
     const txsWithHash = result.transactions.map((tx) => ({
       ...tx,
-      hash: accountId ? makeImportHash(tx.date, tx.amount, tx.type, tx.description, accountId) : null,
+      hash: makeImportHash(tx.date, tx.amount, tx.type, tx.description, scopeId),
     }));
 
     // Batch dedup check: fetch all existing hashes in one query
-    const hashes = txsWithHash.map((t) => t.hash).filter((h): h is string => h !== null);
-    const existingHashes = hashes.length > 0
-      ? new Set((await prisma.transaction.findMany({
-          where: { importHash: { in: hashes } },
-          select: { importHash: true },
-        })).map((r) => r.importHash!))
-      : new Set<string>();
+    const hashes = txsWithHash.map((t) => t.hash);
+    const existingHashes = new Set(
+      (await prisma.transaction.findMany({
+        where: { importHash: { in: hashes } },
+        select: { importHash: true },
+      })).map((r) => r.importHash!),
+    );
 
-    const toCreate = txsWithHash.filter((t) => !t.hash || !existingHashes.has(t.hash));
+    const toCreate = txsWithHash.filter((t) => !existingHashes.has(t.hash));
     const duplicates = txsWithHash.length - toCreate.length;
 
     // Atomic batch insert + balance sync — all succeed or all fail

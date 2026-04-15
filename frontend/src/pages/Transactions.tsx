@@ -302,6 +302,7 @@ function ImportModal({ onClose }: { onClose: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [bankAccountId, setBankAccountId] = useState('');
   const [bank, setBank] = useState('');
+  const [pdfPassword, setPdfPassword] = useState('');
   const [result, setResult] = useState<any>(null);
   const [showRules, setShowRules] = useState(false);
   const [rules, setRules] = useState<CategoryRule[]>(loadRules);
@@ -310,7 +311,10 @@ function ImportModal({ onClose }: { onClose: () => void }) {
   const [applying, setApplying] = useState(false);
   const [newBalance, setNewBalance] = useState('');
   const [savingBalance, setSavingBalance] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const isPDF = file?.name.toLowerCase().endsWith('.pdf') ?? false;
 
   const importMutation = useMutation({
     mutationFn: async () => {
@@ -319,6 +323,7 @@ function ImportModal({ onClose }: { onClose: () => void }) {
       formData.append('file', file);
       if (bankAccountId) formData.append('bankAccountId', bankAccountId);
       if (bank) formData.append('bank', bank);
+      if (isPDF && pdfPassword) formData.append('pdfPassword', pdfPassword);
       return api.post<{ data: any }>('/transactions/import', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
@@ -404,26 +409,57 @@ function ImportModal({ onClose }: { onClose: () => void }) {
               className={cn(
                 'border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:bg-muted/50 transition-colors',
                 file && 'border-green-500 bg-green-50 dark:bg-green-950',
+                isDragging && !file && 'border-primary bg-primary/5',
               )}
               onClick={() => fileRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragEnter={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={(e) => {
+                // Only clear the drag state when leaving the drop zone itself, not a child element
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                  setIsDragging(false);
+                }
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDragging(false);
+                const dropped = e.dataTransfer.files[0];
+                if (dropped) { setFile(dropped); setPdfPassword(''); }
+              }}
             >
               <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
               {file ? (
                 <p className="text-sm font-medium text-green-600">{file.name}</p>
               ) : (
                 <>
-                  <p className="text-sm font-medium">Drop CSV file here or click to browse</p>
-                  <p className="text-xs text-muted-foreground mt-1">Supports HDFC, SBI, ICICI, Axis, Kotak exports</p>
+                  <p className="text-sm font-medium">Drop CSV or PDF here, or click to browse</p>
+                  <p className="text-xs text-muted-foreground mt-1">Supports HDFC, SBI, ICICI, Axis, Kotak exports (CSV or PDF)</p>
+                  <p className="text-xs text-muted-foreground">PDF must be a digital statement — scanned images are not supported</p>
                 </>
               )}
               <input
                 ref={fileRef}
                 type="file"
-                accept=".csv"
+                accept=".csv,.pdf"
                 className="hidden"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                onChange={(e) => {
+                  setFile(e.target.files?.[0] ?? null);
+                  setPdfPassword('');
+                }}
               />
             </div>
+            {isPDF && (
+              <div className="space-y-1">
+                <Label>PDF Password (if protected)</Label>
+                <Input
+                  type="password"
+                  placeholder="Leave blank if not password-protected"
+                  value={pdfPassword}
+                  onChange={(e) => setPdfPassword(e.target.value)}
+                  autoComplete="off"
+                />
+              </div>
+            )}
             {importMutation.error && (
               <p className="text-sm text-destructive">{(importMutation.error as any)?.response?.data?.message ?? 'Import failed'}</p>
             )}
@@ -473,7 +509,9 @@ function ImportModal({ onClose }: { onClose: () => void }) {
             <div className="flex justify-end gap-3">
               <Button variant="outline" onClick={onClose}>Cancel</Button>
               <Button onClick={() => importMutation.mutate()} disabled={!file || importMutation.isPending}>
-                {importMutation.isPending ? 'Importing…' : 'Import'}
+                {importMutation.isPending
+                  ? (isPDF ? 'Parsing PDF…' : 'Importing…')
+                  : 'Import'}
               </Button>
             </div>
           </>

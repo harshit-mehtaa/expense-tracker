@@ -2,8 +2,21 @@
  * Tests for importService — makeImportHash (pure crypto) and parseCSV
  * (uses real iconv-lite + papaparse but no DB access).
  */
-import { describe, it, expect } from 'vitest';
-import { makeImportHash, parseCSV } from '../services/importService';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { makeImportHash, parseCSV, parsePDF } from '../services/importService';
+
+// Mock pdf-parse so tests don't need real PDF binary fixtures
+vi.mock('pdf-parse', () => {
+  return {
+    default: vi.fn(),
+  };
+});
+
+// Helper: import the mock after vi.mock is hoisted
+async function getPdfParseMock() {
+  const mod = await import('pdf-parse');
+  return mod.default as ReturnType<typeof vi.fn>;
+}
 
 // ─── makeImportHash ───────────────────────────────────────────────────────────
 
@@ -359,5 +372,208 @@ describe('parseCSV — Kotak format', () => {
     const result = parseCSV(Buffer.from(csv), 'KOTAK');
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.transactions.some((t) => t.amount === 75000)).toBe(true);
+  });
+});
+
+// ─── parsePDF — error cases ───────────────────────────────────────────────────
+
+describe('parsePDF — error cases', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('returns an error when pdf-parse throws a password error', async () => {
+    pdfParseMock.mockRejectedValueOnce(new Error('password required'));
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions).toHaveLength(0);
+    expect(result.errors[0].message).toMatch(/password/i);
+  });
+
+  it('returns an error when pdf-parse throws an encrypted error', async () => {
+    pdfParseMock.mockRejectedValueOnce(new Error('File encrypted'));
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions).toHaveLength(0);
+    expect(result.errors[0].message).toMatch(/password/i);
+  });
+
+  it('returns an error for non-password pdf-parse failure', async () => {
+    pdfParseMock.mockRejectedValueOnce(new Error('Corrupt PDF stream'));
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions).toHaveLength(0);
+    expect(result.errors[0].message).toMatch(/Failed to read PDF/i);
+  });
+
+  it('returns a clear error when extracted text is empty (scanned PDF)', async () => {
+    pdfParseMock.mockResolvedValueOnce({ text: '', numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions).toHaveLength(0);
+    expect(result.errors[0].message).toMatch(/no extractable text/i);
+  });
+
+  it('returns a clear error when extracted text is too short', async () => {
+    pdfParseMock.mockResolvedValueOnce({ text: 'short', numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions).toHaveLength(0);
+    expect(result.errors[0].message).toMatch(/no extractable text/i);
+  });
+
+  it('returns an error when no transaction rows can be extracted from valid text', async () => {
+    const boilerplateText = 'Account Statement\nHDFC Bank\nAccount Holder: John Doe\nBranch: Mumbai\n'.repeat(5);
+    pdfParseMock.mockResolvedValueOnce({ text: boilerplateText, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions).toHaveLength(0);
+    expect(result.errors.length).toBeGreaterThan(0);
+  });
+});
+
+// ─── parsePDF — HDFC text layout ─────────────────────────────────────────────
+
+describe('parsePDF — HDFC text layout', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  // Simulated pdf-parse output for a typical HDFC statement
+  // Format: Date  Narration  Ref  Value Dt  Withdrawal  Deposit  Balance
+  const HDFC_PDF_TEXT = [
+    'HDFC Bank Statement of Account',
+    'Account Number: 12345678901234',
+    'Period: 01 Apr 2025 To 30 Apr 2025',
+    '',
+    'Date         Narration              Chq/Ref    Value Dt  Withdrawal  Deposit    Balance',
+    '01/04/25     NEFT CR-SALARY-CORP    REF001     01/04/25              50,000.00  1,50,000.00',
+    '05/04/25     UPI/SWIGGY FOOD        REF002     05/04/25  450.00                 1,49,550.00',
+    '10/04/25     ELECTRICITY BILL       REF003     10/04/25  1,200.00               1,48,350.00',
+    '15/04/25     INTEREST CREDIT        REF004     15/04/25              250.00     1,48,600.00',
+  ].join('\n');
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+    pdfParseMock.mockResolvedValue({ text: HDFC_PDF_TEXT, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+  });
+
+  it('detects bank as HDFC', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.bank).toBe('HDFC');
+  });
+
+  it('parses income rows (NEFT CR, INTEREST) as INCOME type', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    const income = result.transactions.filter((t) => t.type === 'INCOME');
+    expect(income.length).toBeGreaterThanOrEqual(1);
+    expect(income.some((t) => t.description.includes('SALARY'))).toBe(true);
+  });
+
+  it('parses expense rows (UPI, ELECTRICITY) as EXPENSE type', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    const expenses = result.transactions.filter((t) => t.type === 'EXPENSE');
+    expect(expenses.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('parses dates as valid Date objects', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    result.transactions.forEach((t) => {
+      expect(t.date).toBeInstanceOf(Date);
+      expect(isNaN(t.date.getTime())).toBe(false);
+    });
+  });
+
+  it('skips header/footer rows that have no date', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    // Header rows "HDFC Bank Statement of Account", "Account Number:", etc. should not appear
+    result.transactions.forEach((t) => {
+      expect(t.description).not.toMatch(/account number/i);
+    });
+  });
+
+  it('uses the bank hint to override auto-detection', async () => {
+    const result = await parsePDF(Buffer.from('fake'), 'SBI');
+    expect(result.bank).toBe('SBI');
+  });
+
+  it('passes the password option to pdf-parse', async () => {
+    await parsePDF(Buffer.from('fake'), undefined, 'secret123');
+    expect(pdfParseMock).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      expect.objectContaining({ password: 'secret123' }),
+    );
+  });
+
+  it('includes a warning about PDF parsing accuracy', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    if (result.transactions.length > 0) {
+      expect(result.warnings.length).toBeGreaterThan(0);
+      expect(result.warnings[0]).toMatch(/review/i);
+    }
+  });
+});
+
+// ─── parsePDF — SBI text layout ──────────────────────────────────────────────
+
+describe('parsePDF — SBI text layout', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  // SBI dates: DD-MMM-YYYY
+  const SBI_PDF_TEXT = [
+    'State Bank of India - Account Statement',
+    'Account: XXXXX5678',
+    '',
+    'Txn Date    Value Date    Description           Ref No     Debit        Credit       Balance',
+    '01-Apr-2025 01-Apr-2025   SALARY CREDIT         NEFT0001                50,000.00    1,50,000.00',
+    '07-Apr-2025 07-Apr-2025   BILL PAYMENT ELECT    REF0002    1,500.00                  1,48,500.00',
+  ].join('\n');
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+    pdfParseMock.mockResolvedValue({ text: SBI_PDF_TEXT, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+  });
+
+  it('detects bank as SBI', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.bank).toBe('SBI');
+  });
+
+  it('parses credit rows as INCOME', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    const income = result.transactions.filter((t) => t.type === 'INCOME');
+    expect(income.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('parses debit rows as EXPENSE', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    const expenses = result.transactions.filter((t) => t.type === 'EXPENSE');
+    expect(expenses.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('parses DD-MMM-YYYY dates correctly', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    const firstTx = result.transactions[0];
+    if (firstTx) {
+      expect(firstTx.date.getFullYear()).toBe(2025);
+      expect(firstTx.date.getMonth()).toBe(3); // April = month 3 (0-indexed)
+    }
+  });
+});
+
+// ─── parsePDF — deduplication hash stability ─────────────────────────────────
+
+describe('parsePDF — deduplication hash stability', () => {
+  it('same transaction produces same importHash regardless of CSV or PDF source', () => {
+    // The hash function takes (date, amount, type, description, scopeId) — same for both
+    const date = new Date('2025-04-01T00:00:00.000Z');
+    const h1 = makeImportHash(date, 50000, 'INCOME', 'salary credit', 'user-abc');
+    const h2 = makeImportHash(date, 50000, 'INCOME', 'SALARY CREDIT', 'user-abc');
+    // Case-insensitive normalization means same hash
+    expect(h1).toBe(h2);
+  });
+
+  it('userId as scopeId produces a different hash than accountId as scopeId', () => {
+    const date = new Date('2025-04-01T00:00:00.000Z');
+    const h1 = makeImportHash(date, 50000, 'INCOME', 'salary credit', 'user-abc');
+    const h2 = makeImportHash(date, 50000, 'INCOME', 'salary credit', 'account-xyz');
+    expect(h1).not.toBe(h2);
   });
 });
