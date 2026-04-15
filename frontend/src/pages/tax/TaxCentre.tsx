@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useFY } from '@/contexts/FYContext';
 import { taxApi } from '@/api/tax';
+import { loansApi } from '@/api/loans';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { cn } from '@/lib/utils';
 import ScheduleCG from './ScheduleCG';
@@ -42,6 +43,7 @@ const profileSchema = z.object({
   deduction80G: z.coerce.number().min(0).optional(),
   deduction24B: z.coerce.number().min(0).optional(),
   nps80Ccd1B: z.coerce.number().min(0).optional(),
+  otherDeductions: z.coerce.number().min(0).optional(),
   taxPaidAdvance: z.coerce.number().min(0).optional(),
   taxPaidTds: z.coerce.number().min(0).optional(),
   taxPaidSelfAssessment: z.coerce.number().min(0).optional(),
@@ -83,7 +85,18 @@ export default function TaxCentrePage() {
     queryFn: () => taxApi.getProfile(selectedFY, viewUserId),
   });
 
-  const { register, handleSubmit, watch, formState: { isDirty } } = useForm<ProfileForm>({
+  // Loans for Sec 24(b) suggestion — only fetch when editing own profile
+  const { data: loans = [] } = useQuery({
+    queryKey: ['loans', viewUserId],
+    queryFn: () => loansApi.getAll(viewUserId),
+    enabled: !isViewingOther,
+  });
+  // Upper-bound estimate: outstandingBalance × annualRate — actual deductible may be lower
+  const sec24bSuggestion = loans
+    .filter((l) => l.section24bEligible)
+    .reduce((sum, l) => sum + (l.outstandingBalance * l.interestRate) / 100, 0);
+
+  const { register, handleSubmit, watch, setValue, formState: { isDirty } } = useForm<ProfileForm>({
     resolver: zodResolver(profileSchema),
     values: profile ?? {},
   });
@@ -97,6 +110,36 @@ export default function TaxCentrePage() {
       qc.invalidateQueries({ queryKey: ['tax-profile', selectedFY, viewUserId] });
     },
   });
+
+  // Auto-dismiss save success after 3 seconds
+  const { reset: resetSaveMutation } = saveMutation;
+  useEffect(() => {
+    if (!saveMutation.isSuccess) return;
+    const timer = setTimeout(resetSaveMutation, 3000);
+    return () => clearTimeout(timer);
+  }, [saveMutation.isSuccess, resetSaveMutation]);
+
+  // Tracks which profile ID has already been pre-filled into the HRA calculator
+  const hraHydratedForProfileId = useRef<string | null>(null);
+
+  // Reset HRA params and hydration state when member changes so new member profile pre-fills
+  useEffect(() => {
+    setHraParams({ basicSalary: '', hraReceived: '', rentPaid: '', city: 'METRO' });
+    hraHydratedForProfileId.current = null;
+  }, [viewUserId]);
+
+  // Pre-fill HRA calculator from saved profile (one-shot per profile ID)
+  useEffect(() => {
+    if (!profile?.id || hraHydratedForProfileId.current === profile.id) return;
+    if (hraParams.basicSalary !== '') return; // user already entered data — don't overwrite
+    hraHydratedForProfileId.current = profile.id;
+    setHraParams({
+      basicSalary: profile.grossSalary ? String(Math.round(Number(profile.grossSalary) * 0.5)) : '',
+      hraReceived: profile.hraReceived ? String(Number(profile.hraReceived)) : '',
+      rentPaid: profile.rentPaidMonthly ? String(Number(profile.rentPaidMonthly)) : '',
+      city: profile.cityType ?? 'METRO',
+    });
+  }, [profile, hraParams.basicSalary]);
 
   const calcHRA = async () => {
     if (!hraParams.basicSalary) return;
@@ -129,6 +172,14 @@ export default function TaxCentrePage() {
   const selectedMemberName = viewUserId
     ? members.find((m) => m.id === viewUserId)?.name ?? 'Member'
     : undefined;
+
+  // Banner: elected regime's effective tax rate + refund/due
+  const bannerRegime = summary
+    ? (summary.electedRegime === 'NEW' ? summary.newRegime : summary.oldRegime)
+    : null;
+  const effectiveTaxRate = summary && bannerRegime && summary.grossSalary > 0
+    ? ((bannerRegime.tax / summary.grossSalary) * 100).toFixed(1)
+    : null;
 
   return (
     <div className="space-y-6">
@@ -176,6 +227,35 @@ export default function TaxCentrePage() {
       {/* Tax Summary Tab */}
       {activeTab === 'summary' && (
         <div className="space-y-6">
+          {/* Effective tax rate + refund/due banner */}
+          {effectiveTaxRate && bannerRegime && (
+            <div className="flex flex-wrap gap-3">
+              <div className="flex-1 min-w-[140px] rounded-lg border bg-card px-4 py-3 flex items-center gap-3">
+                <TrendingDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Effective Tax Rate</p>
+                  <p className="text-xl font-bold">{effectiveTaxRate}%</p>
+                </div>
+              </div>
+              <div className={cn(
+                'flex-1 min-w-[140px] rounded-lg border px-4 py-3 flex items-center gap-3',
+                bannerRegime.refund > 0 ? 'border-green-400 bg-green-50 dark:bg-green-950' : 'border-orange-400 bg-orange-50 dark:bg-orange-950',
+              )}>
+                {bannerRegime.refund > 0
+                  ? <CheckCircle className="h-5 w-5 text-green-600 shrink-0" />
+                  : <AlertCircle className="h-5 w-5 text-orange-600 shrink-0" />
+                }
+                <div>
+                  <p className="text-xs text-muted-foreground">{bannerRegime.refund > 0 ? 'Refund Due' : 'Tax Due'}</p>
+                  <INRDisplay
+                    amount={bannerRegime.refund > 0 ? bannerRegime.refund : bannerRegime.taxAfterPaid}
+                    className={cn('text-xl font-bold', bannerRegime.refund > 0 ? 'text-green-600' : 'text-orange-600')}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Profile Form — read-only when viewing another member */}
           <div className="rounded-lg border bg-card p-6">
             <h2 className="font-semibold mb-4">
@@ -242,6 +322,15 @@ export default function TaxCentrePage() {
                       <div className="space-y-1">
                         <Label>Sec 24(b) — Home Loan Int. (₹)</Label>
                         <Input {...register('deduction24B')} type="number" max={200000} placeholder="Max ₹2,00,000" />
+                        {sec24bSuggestion > 0 && !isViewingOther && (
+                          <button
+                            type="button"
+                            onClick={() => setValue('deduction24B', Math.round(sec24bSuggestion), { shouldDirty: true })}
+                            className="text-xs text-primary underline-offset-2 hover:underline mt-0.5"
+                          >
+                            Est. from loans: ~₹{Math.round(sec24bSuggestion).toLocaleString('en-IN')} →
+                          </button>
+                        )}
                       </div>
                       <div className="space-y-1">
                         <Label>80E — Education Loan Int. (₹)</Label>
@@ -254,6 +343,10 @@ export default function TaxCentrePage() {
                       <div className="space-y-1">
                         <Label>80CCD(1B) — NPS Extra (₹)</Label>
                         <Input {...register('nps80Ccd1B')} type="number" max={50000} />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Other Deductions (80TTA / 80TTB, ₹)</Label>
+                        <Input {...register('otherDeductions')} type="number" placeholder="Self-apply limits: 80TTA max ₹10K / 80TTB max ₹50K" />
                       </div>
                     </>
                   )}
@@ -271,7 +364,17 @@ export default function TaxCentrePage() {
                     <Input {...register('taxPaidSelfAssessment')} type="number" />
                   </div>
                 </div>
-                <div className="flex justify-end">
+                <div className="flex items-center justify-end gap-3">
+                  {saveMutation.isSuccess && (
+                    <span className="flex items-center gap-1 text-sm text-green-600">
+                      <CheckCircle className="h-4 w-4" /> Saved
+                    </span>
+                  )}
+                  {saveMutation.isError && (
+                    <span className="text-sm text-destructive">
+                      {saveMutation.error instanceof Error ? saveMutation.error.message : 'Save failed'}
+                    </span>
+                  )}
                   <Button type="submit" disabled={saveMutation.isPending}>
                     {saveMutation.isPending ? 'Saving…' : 'Calculate & Save'}
                   </Button>
@@ -302,6 +405,9 @@ export default function TaxCentrePage() {
                   <div className="flex justify-between"><span>80C</span><INRDisplay amount={summary.deductions.s80C} className="text-green-600" /></div>
                   <div className="flex justify-between"><span>80D</span><INRDisplay amount={summary.deductions.s80D} className="text-green-600" /></div>
                   <div className="flex justify-between"><span>Section 24(b)</span><INRDisplay amount={summary.deductions.section24B} className="text-green-600" /></div>
+                  {summary.deductions.other > 0 && (
+                    <div className="flex justify-between"><span>Other (80TTA/TTB)</span><INRDisplay amount={summary.deductions.other} className="text-green-600" /></div>
+                  )}
                   <div className="border-t pt-2 flex justify-between font-medium"><span>Taxable Income</span><INRDisplay amount={summary.oldRegime.taxableIncome} /></div>
                   <div className="flex justify-between font-bold text-lg border-t pt-2"><span>Tax + Cess</span><INRDisplay amount={summary.oldRegime.tax} className="text-red-600" /></div>
                   {summary.oldRegime.refund > 0
