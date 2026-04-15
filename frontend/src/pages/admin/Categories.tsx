@@ -37,6 +37,11 @@ const categorySchema = z.object({
 
 type CategoryForm = z.infer<typeof categorySchema>;
 
+const editCategorySchema = categorySchema.extend({
+  type: categorySchema.shape.type.optional(),
+});
+type EditCategoryForm = z.infer<typeof editCategorySchema>;
+
 // ── Data hook ─────────────────────────────────────────────────────────────────
 
 function useCategories() {
@@ -96,7 +101,7 @@ export default function CategoriesPage() {
     watch: editWatch,
     setValue: editSetValue,
     formState: { errors: editErrors },
-  } = useForm<CategoryForm>({ resolver: zodResolver(categorySchema) });
+  } = useForm<EditCategoryForm>({ resolver: zodResolver(editCategorySchema) });
 
   // ── Mutations ──────────────────────────────────────────────────────────────
   const [addError, setAddError] = useState<string | null>(null);
@@ -115,7 +120,7 @@ export default function CategoriesPage() {
 
   const [editError, setEditError] = useState<string | null>(null);
   const editMutation = useMutation({
-    mutationFn: ({ id, ...data }: CategoryForm & { id: string }) =>
+    mutationFn: ({ id, ...data }: EditCategoryForm & { id: string }) =>
       api.put(`/categories/${id}`, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['categories'] });
@@ -148,6 +153,7 @@ export default function CategoriesPage() {
   };
 
   const openDelete = (cat: Category) => {
+    if (cat.isDefault) return; // should never happen — UI hides Delete for defaults
     setDeleteError(null);
     setDeleteCat(cat);
     setActiveMenu(null);
@@ -334,14 +340,18 @@ export default function CategoriesPage() {
                 <Label htmlFor="edit-type">Type</Label>
                 <select
                   id="edit-type"
-                  {...editRegister('type')}
-                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  {...editRegister('type', { disabled: editCat.isDefault })}
+                  disabled={editCat.isDefault}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <option value="EXPENSE">Expense</option>
                   <option value="INCOME">Income</option>
                   <option value="ASSET">Asset</option>
                   <option value="LIABILITY">Liability</option>
                 </select>
+                {editCat?.isDefault && (
+                  <p className="text-xs text-muted-foreground">Type cannot be changed for default categories.</p>
+                )}
               </div>
 
               <div className="space-y-1.5">
@@ -500,33 +510,33 @@ function CategoryGroup({ title, type, categories, activeMenu, setActiveMenu, onE
                 />
               )}
 
-              {/* Actions (non-default only) */}
-              {!cat.isDefault && (
-                <div className="relative">
-                  <button
-                    onClick={() => setActiveMenu(activeMenu === cat.id ? null : cat.id)}
-                    className="rounded-md p-1 hover:bg-muted/60 transition-colors"
-                  >
-                    <MoreVertical className="h-4 w-4 text-muted-foreground" />
-                  </button>
-                  {activeMenu === cat.id && (
-                    <div className="absolute right-0 top-7 z-10 min-w-[130px] rounded-lg border bg-popover shadow-md py-1">
-                      <button
-                        className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-muted/60 transition-colors"
-                        onClick={() => onEdit(cat)}
-                      >
-                        <Pencil className="h-3.5 w-3.5" /> Edit
-                      </button>
+              {/* Actions menu — all categories get Edit; only non-defaults get Delete */}
+              <div className="relative">
+                <button
+                  onClick={() => setActiveMenu(activeMenu === cat.id ? null : cat.id)}
+                  className="rounded-md p-1 hover:bg-muted/60 transition-colors"
+                >
+                  <MoreVertical className="h-4 w-4 text-muted-foreground" />
+                </button>
+                {activeMenu === cat.id && (
+                  <div className="absolute right-0 top-7 z-10 min-w-[130px] rounded-lg border bg-popover shadow-md py-1">
+                    <button
+                      className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-muted/60 transition-colors"
+                      onClick={() => onEdit(cat)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" /> Edit
+                    </button>
+                    {!cat.isDefault && (
                       <button
                         className="flex w-full items-center gap-2 px-3 py-2 text-sm text-destructive hover:bg-destructive/10 transition-colors"
                         onClick={() => onDelete(cat)}
                       >
                         <Trash2 className="h-3.5 w-3.5" /> Delete
                       </button>
-                    </div>
-                  )}
-                </div>
-              )}
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           ))}
         </div>

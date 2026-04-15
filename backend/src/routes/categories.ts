@@ -51,8 +51,13 @@ router.post('/', asyncHandler(async (req, res) => {
 router.put('/:id', asyncHandler(async (req, res) => {
   const cat = await prisma.category.findFirst({ where: { id: req.params.id } });
   if (!cat) throw AppError.notFound('Category');
-  if (cat.isDefault) throw AppError.forbidden('Default categories cannot be edited');
-  const data = categorySchema.partial().parse(req.body);
+  if (cat.isDefault && req.body.type !== undefined && req.body.type !== cat.type) {
+    throw AppError.badRequest('The type of a default category cannot be changed');
+  }
+  const parsed = categorySchema.partial().parse(req.body);
+  // Belt-and-suspenders: strip type for default categories even if the guard above passed
+  const { type: _stripped, ...dataWithoutType } = parsed;
+  const data = cat.isDefault ? dataWithoutType : parsed;
   try {
     const updated = await prisma.category.update({ where: { id: req.params.id }, data });
     sendSuccess(res, updated);
