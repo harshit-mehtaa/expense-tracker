@@ -8,6 +8,7 @@ dist/
 build/
 .next/
 out/
+.vite/
 
 # Environment
 .env

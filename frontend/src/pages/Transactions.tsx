@@ -364,14 +364,14 @@ function ImportModal({ onClose }: { onClose: () => void }) {
     : bankAccountId;
 
   // Hint used for preview text — file detection takes priority over manual bank dropdown.
-  const detectedBankHint = file ? (detectBankFromFilename(file.name) ?? bank || null) : null;
+  const detectedBankHint = file ? (detectBankFromFilename(file.name) ?? (bank || null)) : null;
 
   // Re-run auto-detection when bank hint, mode, or accounts list changes.
   // accounts is included so detection re-runs correctly if accounts finish loading after file selection.
   // file is intentionally omitted — file changes are handled eagerly by handleFileSelected.
   useEffect(() => {
     if (bankAccountId === AUTO_DETECT && file) {
-      const hint = detectBankFromFilename(file.name) ?? bank || null;
+      const hint = detectBankFromFilename(file.name) ?? (bank || null);
       setAutoDetectResult(resolveAccountForBank(hint, accounts));
     }
   }, [bank, bankAccountId, accounts]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -382,7 +382,7 @@ function ImportModal({ onClose }: { onClose: () => void }) {
     setFile(selected);
     setPdfPassword('');
     if (selected && bankAccountId === AUTO_DETECT) {
-      const hint = detectBankFromFilename(selected.name) ?? bank || null;
+      const hint = detectBankFromFilename(selected.name) ?? (bank || null);
       setAutoDetectResult(resolveAccountForBank(hint, accounts));
     }
   }
