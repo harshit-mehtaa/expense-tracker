@@ -124,7 +124,7 @@ export default function TaxCentrePage() {
     .filter((l) => l.section24bEligible)
     .reduce((sum, l) => sum + (l.outstandingBalance * l.interestRate) / 100, 0);
 
-  const { register, handleSubmit, watch, setValue, formState: { isDirty } } = useForm<ProfileForm>({
+  const { register, handleSubmit, watch, setValue } = useForm<ProfileForm>({
     resolver: zodResolver(profileSchema),
     values: profile ?? {},
   });

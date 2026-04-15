@@ -297,6 +297,8 @@ function ImportModal({ onClose }: { onClose: () => void }) {
   const { toast } = useToast();
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
+  // Bank imports produce INCOME/EXPENSE transactions — filter out ASSET/LIABILITY categories
+  const importCategories = categories.filter((c: any) => c.type === 'INCOME' || c.type === 'EXPENSE');
   const [file, setFile] = useState<File | null>(null);
   const [bankAccountId, setBankAccountId] = useState('');
   const [bank, setBank] = useState('');
@@ -460,7 +462,7 @@ function ImportModal({ onClose }: { onClose: () => void }) {
                       className="rounded-md border bg-background px-2 py-1 text-sm flex-1"
                     >
                       <option value="">Category</option>
-                      {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      {importCategories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
                     <Button size="sm" onClick={addRule} className="h-8">Add</Button>
                   </div>
@@ -610,7 +612,6 @@ function AddTransactionModal({ onClose, budgetActuals }: { onClose: () => void; 
 
   const amount = watch('amount');
   const selectedType = watch('type');
-  const selectedCategoryId = watch('categoryId');
 
   // Reset categoryId when transaction type changes so a stale cross-type category is never submitted
   useEffect(() => {
