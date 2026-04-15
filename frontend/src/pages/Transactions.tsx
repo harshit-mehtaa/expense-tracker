@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -332,6 +332,18 @@ function resolveAccountForBank(bankKey: string | null, accounts: any[]): AutoDet
   return { account: null, ambiguous: true };
 }
 
+// Reverse-maps an account's bankName to the canonical bank hint key used by the backend parser.
+// Uses the same BANK_ACCOUNT_PATTERNS as resolveAccountForBank so matching is symmetric.
+// Returns null for unrecognized bank names (backend will auto-detect from file content).
+function deriveBankHintFromBankName(bankName: string | null | undefined): string | null {
+  if (!bankName) return null;
+  const lower = bankName.toLowerCase();
+  for (const [key, patterns] of Object.entries(BANK_ACCOUNT_PATTERNS)) {
+    if (patterns.some((p) => lower.includes(p))) return key;
+  }
+  return null;
+}
+
 function ImportModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -342,7 +354,7 @@ function ImportModal({ onClose }: { onClose: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [bankAccountId, setBankAccountId] = useState(AUTO_DETECT);
   const [autoDetectResult, setAutoDetectResult] = useState<AutoDetectResult>({ account: null, ambiguous: false });
-  const [bank, setBank] = useState('');
+  const [manualBankHint, setManualBankHint] = useState('');
   const [pdfPassword, setPdfPassword] = useState('');
   const [result, setResult] = useState<any>(null);
   const [showRules, setShowRules] = useState(false);
@@ -363,18 +375,34 @@ function ImportModal({ onClose }: { onClose: () => void }) {
     ? (autoDetectResult.ambiguous ? '' : autoDetectResult.account?.id ?? '')
     : bankAccountId;
 
-  // Hint used for preview text — file detection takes priority over manual bank dropdown.
-  const detectedBankHint = file ? (detectBankFromFilename(file.name) ?? (bank || null)) : null;
+  // Pure filename-based bank detection — stabilised with useMemo so it's safe in effect deps.
+  const filenameBankHint = useMemo(
+    () => (file ? detectBankFromFilename(file.name) : null),
+    [file],
+  );
 
-  // Re-run auto-detection when bank hint, mode, or accounts list changes.
-  // accounts is included so detection re-runs correctly if accounts finish loading after file selection.
-  // file is intentionally omitted — file changes are handled eagerly by handleFileSelected.
+  // Bank hint sent to backend parser. Priority:
+  //   1. Specific account selected → derive from account's bankName
+  //   2. Filename detection hit → use filenameBankHint
+  //   3. "Don't link" + no filename match → manualBankHint (user-selected fallback)
+  //   4. AUTO_DETECT → null (backend auto-detects from file content)
+  let resolvedBankHint: string | null = null;
+  if (bankAccountId !== AUTO_DETECT && bankAccountId !== '') {
+    const acc = accounts.find((a: any) => a.id === bankAccountId);
+    resolvedBankHint = deriveBankHintFromBankName(acc?.bankName);
+  } else if (filenameBankHint) {
+    resolvedBankHint = filenameBankHint;
+  } else if (bankAccountId === '') {
+    resolvedBankHint = manualBankHint || null;
+  }
+
+  // Re-run auto-detection when account mode, accounts list, or filename bank hint changes.
+  // file changes are handled eagerly by handleFileSelected — file itself is intentionally omitted.
   useEffect(() => {
     if (bankAccountId === AUTO_DETECT && file) {
-      const hint = detectBankFromFilename(file.name) ?? (bank || null);
-      setAutoDetectResult(resolveAccountForBank(hint, accounts));
+      setAutoDetectResult(resolveAccountForBank(filenameBankHint, accounts));
     }
-  }, [bank, bankAccountId, accounts]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [bankAccountId, accounts, filenameBankHint]); // eslint-disable-line react-hooks/exhaustive-deps -- file intentionally omitted (handled eagerly in handleFileSelected)
 
   // Shared handler for file selection (click + drag-drop).
   function handleFileSelected(f: File | null | undefined) {
@@ -382,7 +410,7 @@ function ImportModal({ onClose }: { onClose: () => void }) {
     setFile(selected);
     setPdfPassword('');
     if (selected && bankAccountId === AUTO_DETECT) {
-      const hint = detectBankFromFilename(selected.name) ?? (bank || null);
+      const hint = detectBankFromFilename(selected.name);
       setAutoDetectResult(resolveAccountForBank(hint, accounts));
     }
   }
@@ -394,7 +422,7 @@ function ImportModal({ onClose }: { onClose: () => void }) {
       formData.append('file', file);
       // resolvedAccountId is derived at render time — never sends the '__auto__' sentinel to the API
       if (resolvedAccountId) formData.append('bankAccountId', resolvedAccountId);
-      if (bank) formData.append('bank', bank);
+      if (resolvedBankHint) formData.append('bank', resolvedBankHint);
       if (isPDF && pdfPassword) formData.append('pdfPassword', pdfPassword);
       return api.post<{ data: any }>('/transactions/import', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -458,25 +486,16 @@ function ImportModal({ onClose }: { onClose: () => void }) {
         {!result ? (
           <>
             <div className="space-y-1">
-              <Label>Bank</Label>
-              <select value={bank} onChange={(e) => setBank(e.target.value)} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
-                <option value="">Auto-detect from file</option>
-                <option value="HDFC">HDFC Bank</option>
-                <option value="SBI">SBI</option>
-                <option value="ICICI">ICICI Bank</option>
-                <option value="AXIS">Axis Bank</option>
-                <option value="KOTAK">Kotak Bank</option>
-              </select>
-            </div>
-            <div className="space-y-1">
               <Label>Link to Account (optional)</Label>
               <select
                 value={bankAccountId}
                 onChange={(e) => {
                   const val = e.target.value;
                   setBankAccountId(val);
-                  // Clear detection result when user manually picks an account (or no account)
+                  // Clear auto-detect result when user manually picks an account or "Don't link"
                   if (val !== AUTO_DETECT) setAutoDetectResult({ account: null, ambiguous: false });
+                  // Clear manual bank hint when switching away from "Don't link"
+                  if (val !== '') setManualBankHint('');
                 }}
                 className="w-full rounded-md border bg-background px-3 py-2 text-sm"
               >
@@ -490,14 +509,32 @@ function ImportModal({ onClose }: { onClose: () => void }) {
               {bankAccountId === AUTO_DETECT && file && (
                 <p className="text-xs mt-1">
                   {autoDetectResult.ambiguous
-                    ? <span className="text-amber-600">Multiple {detectedBankHint} accounts found — please select one manually</span>
+                    ? <span className="text-amber-600">Multiple {filenameBankHint} accounts found — please select one manually</span>
                     : autoDetectResult.account
                       ? <span className="text-muted-foreground">→ will link to {autoDetectResult.account.bankName} ····{autoDetectResult.account.accountNumberLast4 ?? ''}</span>
-                      : detectedBankHint
-                        ? <span className="text-muted-foreground">No {detectedBankHint} account found — will import unlinked</span>
+                      : filenameBankHint
+                        ? <span className="text-muted-foreground">No {filenameBankHint} account found — will import unlinked</span>
                         : <span className="text-muted-foreground">Could not detect bank from filename — will import unlinked</span>
                   }
                 </p>
+              )}
+              {/* Bank format fallback — shown only when "Don't link" is selected and filename detection fails */}
+              {bankAccountId === '' && !filenameBankHint && (
+                <div className="space-y-1 mt-2">
+                  <Label className="text-xs text-muted-foreground">Bank format (optional)</Label>
+                  <select
+                    value={manualBankHint}
+                    onChange={(e) => setManualBankHint(e.target.value)}
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  >
+                    <option value="">Auto-detect from file</option>
+                    <option value="HDFC">HDFC Bank</option>
+                    <option value="SBI">SBI</option>
+                    <option value="ICICI">ICICI Bank</option>
+                    <option value="AXIS">Axis Bank</option>
+                    <option value="KOTAK">Kotak Bank</option>
+                  </select>
+                </div>
               )}
             </div>
             <div

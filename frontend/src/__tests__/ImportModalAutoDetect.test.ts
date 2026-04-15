@@ -155,6 +155,175 @@ describe('resolveAccountForBank', () => {
   });
 });
 
+// ─── deriveBankHintFromBankName ───────────────────────────────────────────────
+// Inline copy of the helper from Transactions.tsx — update here if the implementation changes.
+
+function deriveBankHintFromBankName(bankName: string | null | undefined): string | null {
+  if (!bankName) return null;
+  const lower = bankName.toLowerCase();
+  for (const [key, patterns] of Object.entries(BANK_ACCOUNT_PATTERNS)) {
+    if (patterns.some((p) => lower.includes(p))) return key;
+  }
+  return null;
+}
+
+describe('deriveBankHintFromBankName', () => {
+  it('maps "HDFC Bank" → "HDFC"', () => {
+    expect(deriveBankHintFromBankName('HDFC Bank')).toBe('HDFC');
+  });
+
+  it('maps "State Bank of India" → "SBI" (via "state bank" pattern)', () => {
+    expect(deriveBankHintFromBankName('State Bank of India')).toBe('SBI');
+  });
+
+  it('maps "ICICI Bank" → "ICICI"', () => {
+    expect(deriveBankHintFromBankName('ICICI Bank')).toBe('ICICI');
+  });
+
+  it('maps "Axis Bank" → "AXIS"', () => {
+    expect(deriveBankHintFromBankName('Axis Bank')).toBe('AXIS');
+  });
+
+  it('maps "Kotak Mahindra Bank" → "KOTAK"', () => {
+    expect(deriveBankHintFromBankName('Kotak Mahindra Bank')).toBe('KOTAK');
+  });
+
+  it('returns null for unrecognized bank name (e.g. "Yes Bank")', () => {
+    expect(deriveBankHintFromBankName('Yes Bank')).toBeNull();
+  });
+
+  it('is case-insensitive', () => {
+    expect(deriveBankHintFromBankName('hdfc bank')).toBe('HDFC');
+    expect(deriveBankHintFromBankName('STATE BANK OF INDIA')).toBe('SBI');
+  });
+
+  it('returns null for null input', () => {
+    expect(deriveBankHintFromBankName(null)).toBeNull();
+  });
+
+  it('returns null for undefined input', () => {
+    expect(deriveBankHintFromBankName(undefined)).toBeNull();
+  });
+
+  it('returns null for empty string', () => {
+    expect(deriveBankHintFromBankName('')).toBeNull();
+  });
+
+  it('is symmetric with resolveAccountForBank — HDFC account resolves to HDFC hint', () => {
+    const hdfcAccount = { id: 'acc-1', bankName: 'HDFC Bank', accountNumberLast4: '1234' };
+    const hint = deriveBankHintFromBankName(hdfcAccount.bankName);
+    const result = resolveAccountForBank(hint, [hdfcAccount]);
+    expect(result.account).toEqual(hdfcAccount);
+  });
+});
+
+// ─── resolvedBankHint priority chain ─────────────────────────────────────────
+// Inline simulation of the priority logic in ImportModal — update if implementation changes.
+
+function simulateResolvedBankHint(opts: {
+  bankAccountId: string;
+  accounts: any[];
+  filenameBankHint: string | null;
+  manualBankHint: string;
+}): string | null {
+  const { bankAccountId, accounts, filenameBankHint, manualBankHint } = opts;
+  if (bankAccountId !== AUTO_DETECT && bankAccountId !== '') {
+    const acc = accounts.find((a: any) => a.id === bankAccountId);
+    return deriveBankHintFromBankName(acc?.bankName);
+  }
+  if (filenameBankHint) return filenameBankHint;
+  if (bankAccountId === '') return manualBankHint || null;
+  return null;
+}
+
+const HDFC_ACC = { id: 'acc-hdfc', bankName: 'HDFC Bank', accountNumberLast4: '1234' };
+const SBI_ACC  = { id: 'acc-sbi',  bankName: 'State Bank of India', accountNumberLast4: '5678' };
+
+describe('resolvedBankHint priority chain', () => {
+  it('specific account selected → derives hint from account bankName', () => {
+    const hint = simulateResolvedBankHint({
+      bankAccountId: HDFC_ACC.id,
+      accounts: [HDFC_ACC, SBI_ACC],
+      filenameBankHint: null,
+      manualBankHint: '',
+    });
+    expect(hint).toBe('HDFC');
+  });
+
+  it('specific account — SBI via "State Bank of India" bankName', () => {
+    const hint = simulateResolvedBankHint({
+      bankAccountId: SBI_ACC.id,
+      accounts: [HDFC_ACC, SBI_ACC],
+      filenameBankHint: null,
+      manualBankHint: '',
+    });
+    expect(hint).toBe('SBI');
+  });
+
+  it('AUTO_DETECT + filename hit → sends filename bank hint to backend parser', () => {
+    // AUTO_DETECT means "auto-detect which account to link", not "hide bank from parser".
+    // The filename hint is still useful for the backend to pick the right column layout.
+    const hint = simulateResolvedBankHint({
+      bankAccountId: AUTO_DETECT,
+      accounts: [HDFC_ACC],
+      filenameBankHint: 'HDFC',
+      manualBankHint: 'SBI',
+    });
+    expect(hint).toBe('HDFC');
+  });
+
+  it('AUTO_DETECT + no filename hit → null (backend fully auto-detects)', () => {
+    const hint = simulateResolvedBankHint({
+      bankAccountId: AUTO_DETECT,
+      accounts: [HDFC_ACC],
+      filenameBankHint: null,
+      manualBankHint: '',
+    });
+    expect(hint).toBeNull();
+  });
+
+  it('"Don\'t link" + filename hit → uses filenameBankHint (not manualBankHint)', () => {
+    const hint = simulateResolvedBankHint({
+      bankAccountId: '',
+      accounts: [],
+      filenameBankHint: 'SBI',
+      manualBankHint: 'HDFC',
+    });
+    expect(hint).toBe('SBI');
+  });
+
+  it('"Don\'t link" + no filename + manualBankHint set → uses manualBankHint', () => {
+    const hint = simulateResolvedBankHint({
+      bankAccountId: '',
+      accounts: [],
+      filenameBankHint: null,
+      manualBankHint: 'AXIS',
+    });
+    expect(hint).toBe('AXIS');
+  });
+
+  it('"Don\'t link" + no filename + no manualBankHint → null', () => {
+    const hint = simulateResolvedBankHint({
+      bankAccountId: '',
+      accounts: [],
+      filenameBankHint: null,
+      manualBankHint: '',
+    });
+    expect(hint).toBeNull();
+  });
+
+  it('specific account with unrecognized bankName → null (backend auto-detects)', () => {
+    const jupiterAcc = { id: 'acc-j', bankName: 'Jupiter', accountNumberLast4: '0000' };
+    const hint = simulateResolvedBankHint({
+      bankAccountId: jupiterAcc.id,
+      accounts: [jupiterAcc],
+      filenameBankHint: 'HDFC',  // filename says HDFC but account wins
+      manualBankHint: '',
+    });
+    expect(hint).toBeNull();
+  });
+});
+
 // ─── AUTO_DETECT sentinel ─────────────────────────────────────────────────────
 
 describe('AUTO_DETECT sentinel', () => {
