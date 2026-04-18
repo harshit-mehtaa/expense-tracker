@@ -84,6 +84,15 @@ describe('POST /api/categories', () => {
     expect(res.status).toBe(422);
   });
 
+  it('transforms empty string color to undefined (strips the field)', async () => {
+    const res = await request(app).post('/api/categories').send({ name: 'Food', type: 'EXPENSE', color: '' });
+    expect(res.status).toBe(201);
+    // color: '' is stripped by the schema transform (z.literal('').transform → undefined)
+    expect(catMock.create).toHaveBeenCalledWith({
+      data: expect.not.objectContaining({ color: '' }),
+    });
+  });
+
   it('returns 409 when duplicate name+type already exists (P2002)', async () => {
     const { Prisma } = await import('@prisma/client');
     const p2002 = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
@@ -93,6 +102,12 @@ describe('POST /api/categories', () => {
     catMock.create.mockRejectedValue(p2002);
     const res = await request(app).post('/api/categories').send({ name: 'Groceries', type: 'EXPENSE' });
     expect(res.status).toBe(409);
+  });
+
+  it('re-throws non-P2002 errors as 500', async () => {
+    catMock.create.mockRejectedValue(new Error('DB connection lost'));
+    const res = await request(app).post('/api/categories').send({ name: 'Test', type: 'EXPENSE' });
+    expect(res.status).toBe(500);
   });
 });
 
@@ -111,10 +126,33 @@ describe('PUT /api/categories/:id', () => {
     expect(res.status).toBe(404);
   });
 
-  it('returns 403 when attempting to edit a default category', async () => {
+  it('returns 200 when renaming a default category (only type changes are blocked)', async () => {
     catMock.findFirst.mockResolvedValue(DEFAULT_CAT);
     const res = await request(app).put('/api/categories/cat-default').send({ name: 'NewName' });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
+  });
+
+  it('returns 400 when attempting to change the type of a default category', async () => {
+    catMock.findFirst.mockResolvedValue(DEFAULT_CAT);
+    const res = await request(app).put('/api/categories/cat-default').send({ type: 'EXPENSE' });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 409 when update causes a duplicate name+type conflict (P2002)', async () => {
+    const { Prisma } = await import('@prisma/client');
+    const p2002 = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+      code: 'P2002',
+      clientVersion: '5.x',
+    });
+    catMock.update.mockRejectedValue(p2002);
+    const res = await request(app).put('/api/categories/cat-1').send({ name: 'Salary' });
+    expect(res.status).toBe(409);
+  });
+
+  it('re-throws non-P2002 errors from update as 500', async () => {
+    catMock.update.mockRejectedValue(new Error('DB timeout'));
+    const res = await request(app).put('/api/categories/cat-1').send({ name: 'Dining' });
+    expect(res.status).toBe(500);
   });
 });
 
@@ -138,9 +176,18 @@ describe('DELETE /api/categories/:id', () => {
     expect(res.status).toBe(403);
   });
 
-  it('returns 409 when category is used by one or more budgets', async () => {
+  it('returns 409 when category is used by multiple budgets (plural message)', async () => {
     budgetMock.count.mockResolvedValue(2);
     const res = await request(app).delete('/api/categories/cat-1');
     expect(res.status).toBe(409);
+    expect(res.body.message).toContain('2 budgets');
+  });
+
+  it('returns 409 with singular "budget" (not "1 budgets") when only one budget uses it', async () => {
+    budgetMock.count.mockResolvedValue(1);
+    const res = await request(app).delete('/api/categories/cat-1');
+    expect(res.status).toBe(409);
+    expect(res.body.message).toContain('1 budget');
+    expect(res.body.message).not.toContain('1 budgets');
   });
 });

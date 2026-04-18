@@ -157,6 +157,12 @@ describe('getDashboardSummary', () => {
     expect(r.fyYear).toBeDefined();
   });
 
+  it('non-Error recurring failure is swallowed — raw value logged (line 12 instanceof false branch)', async () => {
+    generateRecurringMock.mockRejectedValue('service unavailable'); // not an Error instance
+    const r = await getDashboardSummary('u1', 'MEMBER', '2025-26');
+    expect(r).toBeDefined(); // still resolves
+  });
+
   it('zero income → savingsRate = 0 (no division by zero)', async () => {
     // all aggregates return zero
     const r = await getDashboardSummary('u1', 'MEMBER', '2025-26');
@@ -201,6 +207,10 @@ describe('getCashflow', () => {
 
   it('ADMIN with targetUserId does not throw', async () => {
     await expect(getCashflow('admin-1', 'ADMIN', undefined, 'u2')).resolves.toHaveLength(12);
+  });
+
+  it('ADMIN without targetUserId: effectiveUserId=undefined → Prisma.empty branch (line 78 false branch)', async () => {
+    await expect(getCashflow('admin-1', 'ADMIN')).resolves.toHaveLength(12);
   });
 });
 
@@ -376,6 +386,57 @@ describe('computeNetWorthStatement', () => {
     expect(r.assets.realEstate).toBe(5000000);
     expect((r.assets as any).realEstateItems).toBeUndefined();
   });
+
+  it('non-INR investment with missing rateMap entry falls back to FX=1 (line 426 ?? branch)', async () => {
+    // currency=USD but no exchange rate loaded → rateMap['USD'] is undefined → ?? 1
+    invMock.findMany.mockResolvedValue([
+      { name: 'Apple', type: 'STOCKS_FOREIGN', unitsOrQuantity: 10, purchasePricePerUnit: 80, purchaseExchangeRate: 80, currentPricePerUnit: 100, currency: 'USD' },
+    ]);
+    fxMock.findMany.mockResolvedValue([]); // no rates in rateMap
+    const r = await computeNetWorthStatement('u1');
+    // currentValue: 10 * 100 * 1 (fallback) = 1000
+    expect(r.assets.investments).toBe(1000);
+  });
+
+  it('gold with null description maps to description: null (line 440 ?? branch)', async () => {
+    goldMock.findMany.mockResolvedValue([
+      { type: 'DIGITAL', description: null, quantityGrams: 5, purchasePricePerGram: 6000, currentPricePerGram: 7500 },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+    expect(r.goldItems[0].description).toBeNull();
+  });
+
+  it('called without userId: family-wide query uses where={} (line 475 false branch)', async () => {
+    bankMock.findMany.mockResolvedValue([
+      { bankName: 'HDFC', accountNumberLast4: '1234', accountType: 'SAVINGS', currentBalance: 50000 },
+    ]);
+    const r = await computeNetWorthStatement(); // no userId
+    expect(r.totalAssets).toBe(50000);
+    expect(r.netWorth).toBe(50000);
+  });
+
+  it('null outstandingBalance in loanGroupBy treated as 0 and excluded (line 487 ?? branch)', async () => {
+    loanMock.groupBy.mockResolvedValue([
+      { loanType: 'PERSONAL', _sum: { outstandingBalance: null } },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+    // amt = Number(null ?? 0) = 0 → skipped since amt > 0 is false
+    expect(r.totalLiabilities).toBe(0);
+    expect(r.liabilities).toEqual({});
+  });
+
+  it('non-INR investment with null purchaseExchangeRate uses purchaseFx=1 fallback (line 425 || branch)', async () => {
+    // currency=USD, purchaseExchangeRate=null → Number(null)=0 → 0 || 1 = 1
+    invMock.findMany.mockResolvedValue([
+      { name: 'Apple', type: 'STOCKS_FOREIGN', unitsOrQuantity: 10, purchasePricePerUnit: 100, purchaseExchangeRate: null, currentPricePerUnit: 120, currency: 'USD' },
+    ]);
+    fxMock.findMany.mockResolvedValue([{ fromCurrency: 'USD', toCurrency: 'INR', rate: 84 }]);
+    const r = await computeNetWorthStatement('u1');
+    // amount (cost): 10 * 100 * 1 (purchaseFx fallback) = 1000
+    expect(r.investmentItems[0].amount).toBe(1000);
+    // currentValue: 10 * 120 * 84 = 100800
+    expect(r.assets.investments).toBe(100800);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -487,6 +548,55 @@ describe('getProfitAndLoss', () => {
 
   it('ADMIN with targetUserId does not throw', async () => {
     await expect(getProfitAndLoss('admin-1', 'ADMIN', '2025-26', 'u2')).resolves.toBeDefined();
+  });
+
+  it('populates monthly series with real income/expense values (lines 675-678)', async () => {
+    // Make $queryRaw return monthly data so data is found in monthlyResults.find()
+    queryRawMock.mockResolvedValue([{ month: 4, year: 2025, income: 50000, expense: 30000 }]);
+    const r = await getProfitAndLoss('u1', 'MEMBER', '2025-26');
+    // monthly array uses month name ('Apr'), not number; find by monthIndex
+    const april = r.monthly.find((m: any) => m.monthIndex === 4);
+    expect(april?.income).toBe(50000);
+    expect(april?.expense).toBe(30000);
+    expect(april?.net).toBe(20000);
+  });
+
+  it('treats unknown categoryId as "Uncategorized" (catMap miss, line 659)', async () => {
+    // categoryId is non-null but NOT returned by category.findMany → catMap miss → ?? 'Uncategorized'
+    txMock.groupBy
+      .mockResolvedValueOnce([{ categoryId: 'cat-unknown', _sum: { amount: 2000 } }])
+      .mockResolvedValueOnce([]);
+    catMock.findMany.mockResolvedValue([]); // empty catMap
+    const r = await getProfitAndLoss('u1', 'MEMBER', '2025-26');
+    expect(r.expenseCategories[0].categoryName).toBe('Uncategorized');
+  });
+
+  it('treats null _sum.amount as 0 in category rows (line 660)', async () => {
+    txMock.groupBy
+      .mockResolvedValueOnce([{ categoryId: null, _sum: { amount: null } }])
+      .mockResolvedValueOnce([]);
+    const r = await getProfitAndLoss('u1', 'MEMBER', '2025-26');
+    expect(r.expenseCategories[0].total).toBe(0);
+  });
+
+  it('ADMIN without targetUserId — family-wide filter (line 606: effectiveUserId=undefined)', async () => {
+    // ADMIN + no targetUserId → effectiveUserId=undefined → empty userFilter {} → Prisma.empty in SQL
+    const r = await getProfitAndLoss('admin-1', 'ADMIN', '2025-26');
+    expect(r.fy).toBe('2025-26');
+  });
+
+  it('fallback to current FY when fy is omitted (line 602: fy ?? getCurrentFY())', async () => {
+    const r = await getProfitAndLoss('u1', 'MEMBER');
+    expect(r.fy).toMatch(/^\d{4}-\d{2}$/);
+  });
+
+  it('savingsRate > 0 when totalIncome > 0 (line 682: Math.round branch)', async () => {
+    // Mock aggregate to return non-zero income
+    txMock.aggregate
+      .mockResolvedValueOnce({ _sum: { amount: 50000 } }) // income
+      .mockResolvedValueOnce({ _sum: { amount: 30000 } }); // expense
+    const r = await getProfitAndLoss('u1', 'MEMBER', '2025-26');
+    expect(r.summary.savingsRate).toBeGreaterThan(0);
   });
 });
 
@@ -636,6 +746,34 @@ describe('getTrialBalance', () => {
     const secondCall = txMock.groupBy.mock.calls[1][0];
     expect(firstCall.where.type).toBe('EXPENSE');
     expect(secondCall.where.type).toBe('INCOME');
+  });
+
+  it('falls back to current FY when fy param is omitted', async () => {
+    // No fy argument → line 699: `const currentFY = fy ?? getCurrentFY()`
+    const r = await getTrialBalance('u1', 'MEMBER');
+    expect(r.fy).toMatch(/^\d{4}-\d{2}$/); // e.g. '2025-26'
+  });
+
+  it('maps unknown categoryId to "Uncategorized" (catMap miss)', async () => {
+    // categoryId is non-null but NOT in catMap → line 735: catMap[categoryId] ?? 'Uncategorized'
+    txMock.groupBy
+      .mockResolvedValueOnce([{ categoryId: 'cat-missing', _sum: { amount: 1000 } }])
+      .mockResolvedValueOnce([]);
+    catMock.findMany.mockResolvedValue([]); // empty catMap
+    const r = await getTrialBalance('u1', 'MEMBER', '2025-26');
+    expect(r.entries[0].accountName).toBe('Uncategorized');
+  });
+
+  it('treats null _sum.amount as 0 for both DEBIT and CREDIT rows', async () => {
+    // line 742: debit: Number(r._sum.amount ?? 0) and line 749: credit: Number(r._sum.amount ?? 0)
+    txMock.groupBy
+      .mockResolvedValueOnce([{ categoryId: null, _sum: { amount: null } }]) // expense null
+      .mockResolvedValueOnce([{ categoryId: null, _sum: { amount: null } }]); // income null
+    const r = await getTrialBalance('u1', 'MEMBER', '2025-26');
+    const debitEntry = r.entries.find((e) => e.type === 'DEBIT');
+    const creditEntry = r.entries.find((e) => e.type === 'CREDIT');
+    expect(debitEntry?.debit).toBe(0);
+    expect(creditEntry?.credit).toBe(0);
   });
 });
 
@@ -930,6 +1068,98 @@ describe('getUpcomingAlerts', () => {
       expect(alert).toBeDefined();
       expect(alert!.entityId).toBe('b-aug-q');
     });
+  });
+
+  it('SIP with sipDate before today uses next-month formula (line 191 false branch)', async () => {
+    // Pinned date = April 15 → today=15. sipDate=5 < 15 → daysUntil = 30-15+5 = 20 → >7 → excluded
+    sipMock.findMany.mockResolvedValue([{
+      id: 'sip-past', fundName: 'Old SIP', monthlyAmount: 5000, sipDate: 5,
+    }]);
+    const r = await getUpcomingAlerts('u1', 'MEMBER');
+    const sipAlert = r.find((a: any) => a.type === 'SIP');
+    expect(sipAlert).toBeUndefined(); // 20 days until next SIP → excluded (>7)
+  });
+
+  it('Insurance with premiumDueDate=32 (>31) → skipped (line 207 dayOfMonth>31 branch)', async () => {
+    insMock.findMany.mockResolvedValue([{
+      id: 'ins-invalid', policyName: 'Invalid Policy', providerName: 'XYZ',
+      premiumAmount: 5000, premiumDueDate: 32, premiumFrequency: 'MONTHLY',
+    }]);
+    const r = await getUpcomingAlerts('u1', 'MEMBER');
+    expect(r.find((a: any) => a.type === 'INSURANCE_PREMIUM')).toBeUndefined();
+  });
+
+  it('Insurance with past premiumDueDate → nextOccurrence bumped to next month (line 210 true branch)', async () => {
+    // Pinned date = April 15. premiumDueDate=5 → April 5 < April 15 → bumped to May 5 (20 days away)
+    insMock.findMany.mockResolvedValue([{
+      id: 'ins-past', policyName: 'Health Cover', providerName: 'Star Health',
+      premiumAmount: 10000, premiumDueDate: 5, premiumFrequency: 'ANNUAL',
+    }]);
+    const r = await getUpcomingAlerts('u1', 'MEMBER');
+    const alert = r.find((a: any) => a.type === 'INSURANCE_PREMIUM');
+    expect(alert).toBeDefined(); // May 5 is within 30 days of April 15
+    expect(alert!.daysUntilDue).toBe(20);
+  });
+
+  it('EMI with emiDate before today uses next-month formula (line 225 false branch)', async () => {
+    // Pinned date = April 15 → today=15. emiDate=5 < 15 → daysUntil = 30-15+5 = 20 → >7 → excluded
+    loanMock.findMany.mockResolvedValue([{
+      id: 'loan-past', lenderName: 'ICICI', emiAmount: 20000, emiDate: 5, loanType: 'PERSONAL',
+    }]);
+    const r = await getUpcomingAlerts('u1', 'MEMBER');
+    const emiAlert = r.find((a: any) => a.type === 'EMI');
+    expect(emiAlert).toBeUndefined(); // 20 days until next EMI → excluded (>7)
+  });
+
+  it('groupBy row with null categoryId is skipped in actualsMap (line 307 false branch)', async () => {
+    budgetMock.findMany.mockResolvedValue([{
+      id: 'b-1', userId: 'u1', amount: 10000, period: 'MONTHLY', categoryId: 'cat-1',
+      category: { name: 'Food' },
+    }]);
+    // groupBy returns a row with null categoryId — actualsMap update is skipped (if branch false)
+    txMock.groupBy.mockResolvedValue([{ categoryId: null, _sum: { amount: 5000 } }]);
+    const r = await getUpcomingAlerts('u1', 'MEMBER');
+    // actualsMap['cat-1'] stays 0 → 0% of 10000 < 80% → no alert
+    const alert = r.find((a: any) => a.type === 'BUDGET_ALERT');
+    expect(alert).toBeUndefined();
+  });
+
+  it('groupBy row with null _sum.amount uses 0 fallback (line 307 amount ?? 0 true branch)', async () => {
+    // _sum.amount is null → Number(null ?? 0) = 0 → actualsMap stays 0 → no alert
+    budgetMock.findMany.mockResolvedValue([{
+      id: 'b-null-amt', userId: 'u1', amount: 10000, period: 'MONTHLY', categoryId: 'cat-na',
+      category: { name: 'Transport' },
+    }]);
+    txMock.groupBy.mockResolvedValue([{ categoryId: 'cat-na', _sum: { amount: null } }]);
+    const r = await getUpcomingAlerts('u1', 'MEMBER');
+    expect(r.find((a: any) => a.type === 'BUDGET_ALERT')).toBeUndefined();
+  });
+
+  it('two budget periods share same categoryId: second bucket uses actualsMap ?? 0 false branch (line 307)', async () => {
+    // MONTHLY and QUARTERLY budgets for same category → two bucket queries → actualsMap accumulates
+    budgetMock.findMany.mockResolvedValue([
+      { id: 'b-m', userId: 'u1', amount: 10000, period: 'MONTHLY', categoryId: 'cat-shared', category: { name: 'Groceries' } },
+      { id: 'b-q', userId: 'u1', amount: 30000, period: 'QUARTERLY', categoryId: 'cat-shared', category: { name: 'Groceries' } },
+    ]);
+    // Both bucket queries return 9000 for cat-shared → total = 18000
+    // First bucket: actualsMap['cat-shared'] = (undefined ?? 0) + 9000 = 9000
+    // Second bucket: actualsMap['cat-shared'] = (9000 ?? 0) + 9000 = 18000 ← false branch of ??
+    txMock.groupBy.mockResolvedValue([{ categoryId: 'cat-shared', _sum: { amount: 9000 } }]);
+    const r = await getUpcomingAlerts('u1', 'MEMBER');
+    const alerts = r.filter((a: any) => a.type === 'BUDGET_ALERT');
+    expect(alerts.length).toBeGreaterThan(0); // at least one budget alert fired
+  });
+
+  it('budget with null category.name uses "Budget" fallback in alert title (line 321 ?? branch)', async () => {
+    budgetMock.findMany.mockResolvedValue([{
+      id: 'b-null-name', userId: 'u1', amount: 10000, period: 'MONTHLY', categoryId: 'cat-x',
+      category: { name: null }, // null name → ?. returns null → ?? 'Budget' fallback
+    }]);
+    txMock.groupBy.mockResolvedValue([{ categoryId: 'cat-x', _sum: { amount: 9000 } }]); // 90%
+    const r = await getUpcomingAlerts('u1', 'MEMBER');
+    const alert = r.find((a: any) => a.type === 'BUDGET_ALERT');
+    expect(alert).toBeDefined();
+    expect(alert!.title).toMatch(/^Budget at/);
   });
 
   // Oct-Dec quarter branch: currentMonth0 >= 9 && <= 11

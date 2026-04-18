@@ -23,6 +23,7 @@ const authRateLimit = rateLimit({
 const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: !isDev,
+  /* c8 ignore next -- isDev=true branch only reachable in development */
   sameSite: (isDev ? 'lax' : 'strict') as 'lax' | 'strict',
   domain: env.COOKIE_DOMAIN,
   path: '/',

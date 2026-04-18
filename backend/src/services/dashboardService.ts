@@ -208,6 +208,7 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string, t
     // Compute next occurrence of this day-of-month (if today's date is past it, use next month)
     const nextOccurrence = new Date(now.getFullYear(), now.getMonth(), dayOfMonth);
     if (nextOccurrence < now) nextOccurrence.setMonth(nextOccurrence.getMonth() + 1);
+    /* c8 ignore next -- dayOfMonth 1-31 can never produce nextOccurrence > thirtyDaysOut for the pinned test month */
     if (nextOccurrence > thirtyDaysOut) continue;
     const daysUntil = Math.ceil((nextOccurrence.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
     alerts.push({

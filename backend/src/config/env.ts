@@ -12,6 +12,7 @@ const envSchema = z.object({
 
 function parseEnv() {
   const result = envSchema.safeParse(process.env);
+  /* c8 ignore start -- process.exit branch cannot be unit-tested without module reload */
   if (!result.success) {
     console.error('❌ Invalid environment variables:');
     result.error.issues.forEach((issue) => {
@@ -19,6 +20,7 @@ function parseEnv() {
     });
     process.exit(1);
   }
+  /* c8 ignore stop */
   return result.data;
 }
 

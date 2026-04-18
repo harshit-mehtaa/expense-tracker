@@ -271,9 +271,9 @@ describe('GET /api/tax/capital-gains/summary', () => {
 });
 
 describe('POST /api/tax/capital-gains', () => {
-  it('returns 200 on valid CG entry', async () => {
+  it('returns 201 on valid CG entry', async () => {
     const res = await request(makeAdminApp()).post('/api/tax/capital-gains').send(VALID_CG);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
   });
 
   it('returns 422 when assetType is invalid', async () => {
@@ -347,9 +347,9 @@ describe('GET /api/tax/other-income/summary', () => {
 });
 
 describe('POST /api/tax/other-income', () => {
-  it('returns 200 on valid entry', async () => {
+  it('returns 201 on valid entry', async () => {
     const res = await request(makeAdminApp()).post('/api/tax/other-income').send(VALID_OS);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
   });
 
   it('returns 422 when sourceType is invalid', async () => {
@@ -422,9 +422,9 @@ describe('GET /api/tax/house-property/summary', () => {
 });
 
 describe('POST /api/tax/house-property', () => {
-  it('returns 200 on valid HP entry', async () => {
+  it('returns 201 on valid HP entry', async () => {
     const res = await request(makeAdminApp()).post('/api/tax/house-property').send(VALID_HP);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
   });
 
   it('returns 422 when usage is invalid', async () => {
@@ -487,9 +487,9 @@ describe('GET /api/tax/foreign-assets/summary', () => {
 });
 
 describe('POST /api/tax/foreign-assets', () => {
-  it('returns 200 on valid FA entry', async () => {
+  it('returns 201 on valid FA entry', async () => {
     const res = await request(makeAdminApp()).post('/api/tax/foreign-assets').send(VALID_FA);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
   });
 
   it('returns 422 when category is invalid', async () => {

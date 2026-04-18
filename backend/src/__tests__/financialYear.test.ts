@@ -9,6 +9,7 @@ import {
   listFYOptions,
   formatFYLabel,
   validateFY,
+  getMonthStart,
 } from '../utils/financialYear';
 
 describe('getCurrentFY', () => {
@@ -143,5 +144,31 @@ describe('validateFY', () => {
     expect(validateFY('bad-fy')).toBe(getCurrentFY());
     expect(validateFY('24-25')).toBe(getCurrentFY()); // too short
     expect(validateFY('2024/25')).toBe(getCurrentFY()); // wrong separator
+  });
+});
+
+describe('getMonthStart', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns a Date at midnight IST on the 1st of the current month', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2025-06-15T10:30:00+05:30'));
+    const result = getMonthStart();
+    // June 1 00:00 IST = May 31 18:30 UTC
+    expect(result.toISOString()).toBe('2025-05-31T18:30:00.000Z');
+  });
+
+  it('returns start of month even on the first day of the month', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2025-04-01T00:00:00+05:30'));
+    const result = getMonthStart();
+    // Apr 1 00:00 IST = Mar 31 18:30 UTC
+    expect(result.toISOString()).toBe('2025-03-31T18:30:00.000Z');
+  });
+
+  it('returns a Date (not null/undefined)', () => {
+    expect(getMonthStart()).toBeInstanceOf(Date);
   });
 });

@@ -135,6 +135,16 @@ describe('GET /api/reports/spending-by-category', () => {
       }),
     );
   });
+
+  it('handles null categoryId and null _sum.amount gracefully', async () => {
+    txGroupByMock.mockResolvedValue([{ categoryId: null, _sum: { amount: null } }]);
+    categoryFindManyMock.mockResolvedValue([]);
+    const res = await request(makeAdminApp()).get('/api/reports/spending-by-category?fy=2025-26');
+    expect(res.status).toBe(200);
+    const item = res.body.data[0];
+    expect(item.category).toBeNull();
+    expect(item.total).toBe(0);
+  });
 });
 
 // ─── GET /api/reports/net-worth-statement ─────────────────────────────────────

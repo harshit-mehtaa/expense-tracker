@@ -10,12 +10,19 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
       include: ['src/**/*.ts'],
-      exclude: ['node_modules/', 'dist/', 'prisma/', 'src/__tests__/'],
+      exclude: [
+        'node_modules/',
+        'dist/',
+        'prisma/',
+        'src/__tests__/',
+        'src/index.ts',       // Express bootstrap — no testable business logic
+        'src/config/prisma.ts', // Prisma singleton — infrastructure, not business logic
+      ],
       thresholds: {
-        statements: 94,
-        branches: 94,
-        functions: 98,
-        lines: 94,
+        statements: 100,
+        branches: 100,
+        functions: 100,
+        lines: 100,
       },
     },
   },

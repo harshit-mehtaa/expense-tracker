@@ -154,6 +154,16 @@ describe('GET /api/transactions', () => {
     );
   });
 
+  it('parseMultiParam returns undefined when only commas (vals empty after filter)', async () => {
+    // ?type=,,, → split(',') = ['','',''] → filter(Boolean) = [] → vals.length = 0 → undefined
+    await request(makeApp()).get('/api/transactions?type=,,,');
+    expect(getTransactionsMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'ADMIN',
+      expect.objectContaining({ types: undefined }),
+    );
+  });
+
   it('passes undefined for absent minAmount and maxAmount filters', async () => {
     await request(makeApp()).get('/api/transactions');
     const call = getTransactionsMock.mock.calls[0][2];

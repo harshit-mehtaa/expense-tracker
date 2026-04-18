@@ -369,6 +369,11 @@ describe('GET /api/investments', () => {
     expect(res.status).toBe(200);
   });
 
+  it('passes valid page number through (truthy branch, line 213)', async () => {
+    await request(app).get('/api/investments?page=2');
+    expect(m(svc.getInvestments)).toHaveBeenCalledWith('u1', undefined, 2, expect.any(Number));
+  });
+
   it('clamps page=0 to page=1', async () => {
     await request(app).get('/api/investments?page=0');
     expect(m(svc.getInvestments)).toHaveBeenCalledWith('u1', undefined, 1, expect.any(Number));

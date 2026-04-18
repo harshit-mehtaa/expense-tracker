@@ -95,6 +95,14 @@ describe('getAccounts', () => {
     const call = acctMock.findMany.mock.calls[0][0];
     expect(call.where).not.toHaveProperty('userId');
   });
+
+  it('ADMIN family-wide: falls back to empty string when user.name is null (line 29 ?? branch)', async () => {
+    acctMock.findMany.mockResolvedValue([
+      { id: 'acct-1', bankName: 'HDFC', userId: 'u1', isActive: true, user: { name: null } },
+    ]);
+    const result = await getAccounts(undefined, 'admin-1', 'ADMIN');
+    expect((result[0] as any).userName).toBe('');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

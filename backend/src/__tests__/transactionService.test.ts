@@ -585,6 +585,80 @@ describe('updateTransaction', () => {
       }),
     );
   });
+
+  it('updates date field when date is provided (line 300 truthy branch)', async () => {
+    txMock.update.mockResolvedValue({ ...MOCK_TX, date: new Date('2025-05-01') });
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { date: '2025-05-01' });
+    expect(txMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ date: new Date('2025-05-01') }),
+      }),
+    );
+  });
+
+  it('uses original.amount when data.amount is undefined in loan recalculation (line 329 ?? branch)', async () => {
+    // type changes EXPENSE→INCOME on a loan-linked tx, amount is NOT provided
+    // newAmount = data.amount ?? Number(original.amount) → uses original.amount
+    txMock.findUnique.mockResolvedValue({
+      ...MOCK_TX,
+      type: 'EXPENSE',
+      amount: 1000,
+      bankAccountId: null,
+      loanId: 'loan-1',
+    });
+    txMock.update.mockResolvedValue({ ...MOCK_TX, type: 'INCOME' });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { type: 'INCOME' });
+
+    // wasLoanExpense=true, isLoanExpense=false → oldLoanDecrement=1000, newLoanDecrement=0
+    // loanNetChange = 1000 - 0 = 1000 (restore full amount)
+    expect(loanMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'loan-1' },
+        data: { outstandingBalance: { increment: 1000 } },
+      }),
+    );
+  });
+
+  it('INCOME→EXPENSE type change on loan-linked tx (line 335: !wasLoanExpense → 0)', async () => {
+    // original is INCOME (wasLoanExpense=false), new type is EXPENSE (isLoanExpense=true)
+    // oldLoanDecrement = wasLoanExpense ? amount : 0 → 0 (line 335 ': 0' branch)
+    // newLoanDecrement = isLoanExpense ? 800 : 0 → 800
+    // loanNetChange = 0 - 800 = -800 (loan outstanding increases)
+    txMock.findUnique.mockResolvedValue({
+      ...MOCK_TX,
+      type: 'INCOME',
+      amount: 500,
+      bankAccountId: null,
+      loanId: 'loan-1',
+    });
+    txMock.update.mockResolvedValue({ ...MOCK_TX, type: 'EXPENSE', amount: 800 });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { type: 'EXPENSE', amount: 800 });
+
+    expect(loanMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'loan-1' },
+        data: { outstandingBalance: { increment: -800 } },
+      }),
+    );
+  });
+
+  it('INCOME→INCOME loan-linked tx — skips loan update (line 333: false branch)', async () => {
+    // wasLoanExpense=false, isLoanExpense=false → condition false → loanMock.update NOT called
+    txMock.findUnique.mockResolvedValue({
+      ...MOCK_TX,
+      type: 'INCOME',
+      amount: 500,
+      bankAccountId: null,
+      loanId: 'loan-1',
+    });
+    txMock.update.mockResolvedValue({ ...MOCK_TX, type: 'INCOME', amount: 600 });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { amount: 600 });
+
+    expect(loanMock.update).not.toHaveBeenCalled();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -853,6 +927,13 @@ describe('buildCsv', () => {
     const csv = buildCsv([makeRow({ bankAccount: null })]);
     expect(csv).toBeDefined();
     expect(csv).not.toContain('undefined');
+  });
+
+  it('handles null accountNumberLast4 — falls back to empty string suffix', () => {
+    // line 525: accountNumberLast4 ?? '' when bankAccount exists but last4 is null
+    const csv = buildCsv([makeRow({ bankAccount: { bankName: 'SBI', accountNumberLast4: null } })]);
+    expect(csv).toContain('SBI ····');
+    expect(csv).not.toContain('null');
   });
 
   it('renders empty string for null paymentMode via ?? operator (line 526)', () => {

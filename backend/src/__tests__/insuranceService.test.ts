@@ -97,6 +97,14 @@ describe('getInsurancePolicies', () => {
     expect((result[0] as any).userName).toBe('Alice');
     expect((result[0] as any).user).toBeUndefined();
   });
+
+  it('ADMIN family-wide: falls back to empty string when user.name is null', async () => {
+    policyMock.findMany.mockResolvedValueOnce([
+      { ...MOCK_POLICY, user: { name: null } },
+    ]);
+    const result = await getInsurancePolicies(undefined, 'admin-1', 'ADMIN');
+    expect((result[0] as any).userName).toBe('');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -209,6 +217,14 @@ describe('get80DSummary', () => {
     await get80DSummary('u1', 'u1', 'MEMBER');
     expect(policyMock.findMany).toHaveBeenCalledWith({
       where: { userId: 'u1', is80dEligible: true },
+    });
+  });
+
+  it('ADMIN role: scopes query to provided userId (not requesterId)', async () => {
+    policyMock.findMany.mockResolvedValue([]);
+    await get80DSummary('u2', 'admin-1', 'ADMIN');
+    expect(policyMock.findMany).toHaveBeenCalledWith({
+      where: { userId: 'u2', is80dEligible: true },
     });
   });
 

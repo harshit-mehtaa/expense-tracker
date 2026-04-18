@@ -373,6 +373,18 @@ describe('parseCSV — Kotak format', () => {
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.transactions.some((t) => t.amount === 75000)).toBe(true);
   });
+
+  it('dateStr with no dashes falls back to new Date(dateStr) — line 240 false branch', () => {
+    // '2025/04/01' → split('-') → 1 part → parts.length !== 3 → false branch → new Date('2025/04/01')
+    const csv = [
+      'Transaction Date,Description,Chq / Ref No.,Debit Amount,Credit Amount,Balance',
+      '2025/04/01,SALARY CREDIT,NEFT001,,50000.00,150000.00',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv), 'KOTAK');
+    expect(result.transactions).toHaveLength(1);
+    expect(result.transactions[0].amount).toBe(50000);
+    expect(result.errors).toHaveLength(0);
+  });
 });
 
 // ─── parsePDF — error cases ───────────────────────────────────────────────────
@@ -503,10 +515,9 @@ describe('parsePDF — HDFC text layout', () => {
 
   it('includes a warning about PDF parsing accuracy', async () => {
     const result = await parsePDF(Buffer.from('fake'));
-    if (result.transactions.length > 0) {
-      expect(result.warnings.length).toBeGreaterThan(0);
-      expect(result.warnings[0]).toMatch(/review/i);
-    }
+    expect(result.transactions.length).toBeGreaterThan(0);
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(result.warnings[0]).toMatch(/review/i);
   });
 });
 
@@ -555,6 +566,343 @@ describe('parsePDF — SBI text layout', () => {
       expect(firstTx.date.getFullYear()).toBe(2025);
       expect(firstTx.date.getMonth()).toBe(3); // April = month 3 (0-indexed)
     }
+  });
+});
+
+// ─── parsePDF — inferTransactionType and amount-heuristic edge cases ─────────
+// These tests exercise the "both-columns > 0" fall-through (line 378) and the
+// 3-amounts positional heuristic (lines 503-504).
+
+describe('parsePDF — amount heuristic edge cases', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('both-columns-nonzero falls through to default EXPENSE (line 378)', async () => {
+    // "MISCELLANEOUS TRANSFER" has no income/expense keywords.
+    // 3 amounts where withdrawal=500 AND deposit=300 are BOTH non-zero → neither heuristic fires.
+    // inferTransactionType falls through to return 'EXPENSE' (line 378).
+    const text = [
+      'Test Bank Statement',
+      'Account: 12345678',
+      '01/04/25     MISCELLANEOUS TRANSFER    REF001   01/04/25  500.00  300.00  1,49,200.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const tx = result.transactions.find((t) => t.description.includes('MISCELLANEOUS'));
+    expect(tx).toBeDefined();
+    expect(tx!.type).toBe('EXPENSE');
+    expect(tx!.amount).toBeGreaterThan(0); // positional heuristic picks withdrawal column (lines 503-504)
+  });
+
+  it('amount at position 0 in afterDate uses whole line as description (line 489)', async () => {
+    // afterDate starts immediately with an amount (no leading description text).
+    // firstAmtPos = 0 → rawDescription = afterDate (the "else" branch, line 489).
+    // Keyword "SALARY" in the middle → INCOME is detected.
+    const text = [
+      'Test Bank Statement',
+      'Account: 12345678',
+      '01/04/25 50,000.00 SALARY CREDIT 50,000.00 1,50,000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    // At least one transaction should be extracted (description includes amount text)
+    expect(result.transactions.length + result.errors.length).toBeGreaterThan(0);
+  });
+});
+
+// ─── parsePDF — alternate date format coverage ───────────────────────────────
+// The parsePDFDate helper supports DD/MM/YY, DD/MM/YYYY, DD-MM-YYYY, DD-MMM-YYYY, ISO.
+// Existing tests cover DD/MM/YY (HDFC) and DD-MMM-YYYY (SBI).
+// These tests cover the remaining date formats (lines 336-338, 345-352).
+
+describe('parsePDF — DD-MM-YYYY date format (lines 336-338)', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('parses DD-MM-YYYY dates and extracts a transaction', async () => {
+    const text = [
+      'Test Bank Statement',
+      'Account: 12345678',
+      '01-04-2025   SALARY CREDIT   REF001   50,000.00   1,50,000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions).toHaveLength(1);
+    expect(result.transactions[0].date.getFullYear()).toBe(2025);
+    expect(result.transactions[0].amount).toBe(50000);
+  });
+});
+
+describe('parsePDF — ISO YYYY-MM-DD date format (lines 345-352)', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('parses YYYY-MM-DD dates and extracts a transaction', async () => {
+    const text = [
+      'Test Bank Statement',
+      'Account: 12345678',
+      '2025-04-01   SALARY CREDIT   REF001   50,000.00   1,50,000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions).toHaveLength(1);
+    expect(result.transactions[0].date.getFullYear()).toBe(2025);
+    expect(result.transactions[0].amount).toBe(50000);
+  });
+});
+
+// ─── parseCSV — HDFC edge-case branches ──────────────────────────────────────
+
+describe('parseCSV — HDFC edge-case branches', () => {
+  it('row with zero withdrawal AND zero deposit is skipped (line 54 !withdrawal&&!deposit branch)', () => {
+    const csv = [
+      'HDFC Bank Statement',
+      'Date,Narration,Chq/Ref No.,Value Dt,Withdrawal Amt.,Deposit Amt.,Closing Balance',
+      '01/04/25,ZERO ROW,REF001,01/04/25,0,0,100000.00',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv));
+    expect(result.transactions).toHaveLength(0); // zero amounts → skipped
+  });
+
+  it('HDFC row with non-slash date → invalid date parts → error (line 58 parts.length≠3 branch)', () => {
+    const csv = [
+      'HDFC Bank Statement',
+      'Date,Narration,Chq/Ref No.,Value Dt,Withdrawal Amt.,Deposit Amt.,Closing Balance',
+      '2025-04-01,SALARY,REF001,2025-04-01,,50000.00,150000.00',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv));
+    // dateStr='2025-04-01', parts=['2025-04-01'] (split by '/') → length=1 ≠ 3 → error
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0].message).toMatch(/invalid date format/i);
+  });
+
+  it('HDFC 4-digit year (DD/MM/YYYY) parsed correctly (line 62 false branch: parts[2].length≠2)', () => {
+    const csv = [
+      'HDFC Bank Statement',
+      'Date,Narration,Chq/Ref No.,Value Dt,Withdrawal Amt.,Deposit Amt.,Closing Balance',
+      '01/04/2025,SALARY CREDIT,REF001,01/04/2025,,50000.00,150000.00',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv));
+    // parts[2]='2025' (length=4) → uses parts[2] directly → year='2025'
+    const income = result.transactions.find((t) => t.type === 'INCOME');
+    expect(income).toBeDefined();
+    expect(income!.date.getFullYear()).toBe(2025);
+    expect(income!.date.getMonth()).toBe(3); // April
+  });
+
+  it('HDFC row with invalid date components → error (line 65 isNaN branch)', () => {
+    const csv = [
+      'HDFC Bank Statement',
+      'Date,Narration,Chq/Ref No.,Value Dt,Withdrawal Amt.,Deposit Amt.,Closing Balance',
+      '99/99/25,SALARY,REF001,99/99/25,,50000.00,150000.00',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv));
+    // parts=['99','99','25'], year='2025', d=new Date('2025-99-99')=Invalid → error
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0].message).toMatch(/could not parse date/i);
+  });
+});
+
+// ─── parseCSV — bank auto-detection branches ─────────────────────────────────
+
+describe('parseCSV — bank auto-detection from header', () => {
+  it('detects SBI from "State Bank" header text (line 258 first alt)', () => {
+    const csv = [
+      'State Bank of India - Account Statement',
+      'Txn Date,Value Date,Description,Ref No,Debit,Credit,Balance',
+      '01-Apr-2025,01-Apr-2025,SALARY CREDIT,NEFT001,,50000.00,150000.00',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv)); // no bank hint
+    expect(result.bank).toBe('SBI');
+  });
+
+  it('detects Axis from "Axis" header text (line 260)', () => {
+    const csv = [
+      'Axis Bank Account Statement',
+      'Tran Date,Chq No,Description,Debit,Credit,Balance',
+      '2025-04-01,,SALARY,,60000.00,160000.00',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv)); // no bank hint
+    expect(result.bank).toBe('Axis');
+  });
+
+  it('detects Kotak from "Kotak" header text (line 261)', () => {
+    const csv = [
+      'Kotak Mahindra Bank Statement',
+      'Transaction Date,Description,Chq / Ref No.,Debit Amount,Credit Amount,Balance',
+      '01-04-2025,SALARY CREDIT,NEFT001,,75000.00,175000.00',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv)); // no bank hint
+    expect(result.bank).toBe('Kotak');
+  });
+});
+
+// ─── parsePDF — detectBankFromText branches ───────────────────────────────────
+
+describe('parsePDF — detectBankFromText ICICI/Axis/Kotak (lines 359-361)', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('detects ICICI from PDF text (line 359)', async () => {
+    // Text doesn't include 'hdfc', 'state bank', 'sbi' → falls through to ICICI check
+    const text = 'ICICI Bank - Account Statement\n' + 'Account: XXXXXXXX1234\n'.repeat(10);
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.bank).toBe('ICICI');
+  });
+
+  it('detects AXIS from PDF text (line 360)', async () => {
+    const text = 'Axis Bank Ltd - Account Statement\n' + 'Account: XXXXXXXX5678\n'.repeat(10);
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.bank).toBe('AXIS');
+  });
+
+  it('detects KOTAK from PDF text (line 361)', async () => {
+    const text = 'Kotak Mahindra Bank - Account Statement\n' + 'Account: XXXXXXXX9012\n'.repeat(10);
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.bank).toBe('KOTAK');
+  });
+});
+
+// ─── parsePDF — main loop edge cases (lines 476, 479, 484, 494) ──────────────
+
+describe('parsePDF — main loop edge-case branches', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('date-like pattern with invalid date components is skipped (lines 337/476)', async () => {
+    // "99-99-9999" matches DD-MM-YYYY PDF pattern but parsePDFDate returns null (isNaN)
+    // → if (!date) continue at line 476
+    const text = [
+      'Test Bank Statement (long enough padding here to pass trimmedText check)',
+      '99-99-9999 SALARY CREDIT REF001 50,000.00 1,50,000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    // Invalid date → date=null → skipped → no transactions from that line
+    expect(result.transactions.filter((t) => t.amount === 50000)).toHaveLength(0);
+  });
+
+  it('future-date rows are skipped (line 479)', async () => {
+    // "01/04/99" → year 2099 (far future) → date > new Date() → continue
+    const text = [
+      'Test Bank Statement with enough text padding here to pass length check',
+      '01/04/99 SALARY CREDIT REF001 50,000.00 1,50,000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    // 2099 date is in future → skipped
+    expect(result.transactions.filter((t) => t.amount === 50000)).toHaveLength(0);
+  });
+
+  it('date-matched line with no amounts is skipped (line 484)', async () => {
+    // Line matches date pattern but afterDate has no amounts matching \d{1,3}(,\d{2,3})*\.\d{2}
+    const text = [
+      'Test Bank Statement with enough text padding here to pass length check',
+      '01/04/25 SOME TEXT WITHOUT DECIMAL AMOUNTS',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions).toHaveLength(0);
+  });
+
+  it('line with very short description is skipped (line 494)', async () => {
+    // afterDate = "X 5,000.00" → firstAmtPos=2 → rawDesc=afterDate.slice(0,2)="X " → cleaned="X" (len<2)
+    const text = [
+      'Test Bank Statement with enough text padding here to pass length check',
+      '01/04/25 X 5,000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions).toHaveLength(0); // description "X" is < 2 chars → skipped
+  });
+
+  it('non-Error thrown by pdf-parse uses String(err) for message (line 422)', async () => {
+    // err instanceof Error is false → String(err) path → not password/encrypted → generic error
+    pdfParseMock.mockRejectedValueOnce('unexpected string rejection');
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.errors[0].message).toMatch(/Failed to read PDF/i);
+    expect(result.errors[0].message).toContain('unexpected string rejection');
+  });
+});
+
+// ─── parsePDF — invalid dates in each format (parsePDFDate isNaN branches) ───
+
+describe('parsePDF — parsePDFDate invalid-date branches (lines 337, 343, 355)', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('DD/MM/YY with 4-digit year covers line 335 false branch (DD/MM/YYYY)', async () => {
+    // "01/04/2025" → m[3]='2025' (length=4) → false branch: uses m[3] directly
+    const text = [
+      'Test Bank Statement with enough text padding here to pass length check',
+      '01/04/2025 SALARY CREDIT REF001 50,000.00 1,50,000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions).toHaveLength(1);
+    expect(result.transactions[0].date.getFullYear()).toBe(2025);
+    expect(result.transactions[0].amount).toBe(50000);
+  });
+
+  it('DD/MM/YY with invalid date components returns null, row skipped (line 337 null branch)', async () => {
+    // "32/13/25" → matches DD/MM/YY pattern → new Date("2025-13-32") = Invalid Date → isNaN → null → skip
+    const text = [
+      'Test Bank Statement with enough text padding here to pass length check',
+      '32/13/25 SALARY CREDIT REF001 50,000.00 1,50,000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions.filter((t) => t.amount === 50000)).toHaveLength(0);
+  });
+
+  it('DD-MMM-YYYY invalid month name gives null date, row skipped (line 349 null branch)', async () => {
+    // "99-ZZZ-9999" matches DD-MMM-YYYY PDF pattern, parsePDFDate uses DD[\s-]MMM[\s-]YYYY internally
+    // d = new Date('99 ZZZ 9999') = Invalid → isNaN → null → line 476 continue
+    const text = [
+      'Test Bank Statement with enough text padding here to pass length check',
+      '99-ZZZ-9999 SALARY CREDIT REF001 50,000.00 1,50,000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions.filter((t) => t.amount === 50000)).toHaveLength(0);
+  });
+
+  it('YYYY-MM-DD invalid month/day gives null date, row skipped (line 355 null branch)', async () => {
+    // "9999-99-99" matches ISO PDF pattern, parsePDFDate: d=new Date('9999-99-99')=Invalid → null
+    const text = [
+      'Test Bank Statement with enough text padding here to pass length check',
+      '9999-99-99 SALARY CREDIT REF001 50,000.00 1,50,000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions.filter((t) => t.amount === 50000)).toHaveLength(0);
   });
 });
 

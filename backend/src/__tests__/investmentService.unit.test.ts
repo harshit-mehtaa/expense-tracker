@@ -308,6 +308,39 @@ describe('xirr via getPortfolioSummary', () => {
     expect(result.totalCurrentValue).toBeCloseTo(8_300, 0);
   });
 
+  it('non-INR investment with no fxRate entry falls back to 1 (lines 79/107 ?? true branch)', async () => {
+    // fxMock returns empty → rateMap has no USD entry → rateMap['USD'] ?? 1 = 1
+    fxMock.findMany.mockResolvedValue([]);
+    invMock.findMany.mockResolvedValue([
+      makeInvestment({ currency: 'USD', purchasePricePerUnit: 100, currentPricePerUnit: 120 }),
+    ]);
+    const result = await getPortfolioSummary('u1');
+    // fxRate = 1 (fallback), so values are as if USD = 1 INR
+    expect(result.totalInvested).toBeCloseTo(1000, 0);
+    expect(result.totalCurrentValue).toBeCloseTo(1200, 0);
+  });
+
+  it('investment with purchaseExchangeRate uses it as buyFx (lines 83/108 truthy branch)', async () => {
+    // purchaseExchangeRate=85 overrides the fxRate for the purchase calculation
+    fxMock.findMany.mockResolvedValue([{ fromCurrency: 'USD', toCurrency: 'INR', rate: 83 }]);
+    invMock.findMany.mockResolvedValue([
+      makeInvestment({ currency: 'USD', purchasePricePerUnit: 10, currentPricePerUnit: 10, purchaseExchangeRate: 85 }),
+    ]);
+    const result = await getPortfolioSummary('u1');
+    // invested = 10 units * 10 * 85 = 8500, current = 10 * 10 * 83 = 8300
+    expect(result.totalInvested).toBeCloseTo(8_500, 0);
+    expect(result.totalCurrentValue).toBeCloseTo(8_300, 0);
+  });
+
+  it('all-zero cashflows: hasNegative=false → xirr returns null (line 12 !hasNegative branch)', async () => {
+    // purchasePricePerUnit=0 → invested=0 → allCashflows outflow = -0 (not negative) → hasNegative=false
+    invMock.findMany.mockResolvedValue([
+      makeInvestment({ purchasePricePerUnit: 0, currentPricePerUnit: 120 }),
+    ]);
+    const result = await getPortfolioSummary('u1');
+    expect(result.xirr).toBeNull();
+  });
+
   it('uses sipTransactions as cashflows when available (non-empty sipTransactions path)', async () => {
     // Investment with sipTransactions — triggers the allCashflows loop (lines 101-103)
     invMock.findMany.mockResolvedValue([
@@ -454,6 +487,48 @@ describe('getInvestments', () => {
     expect(result.items[0].investedINR).toBeCloseTo(8300, 0);
   });
 
+  it('non-INR with no fxRate entry falls back to 1 (line 194 ?? true branch)', async () => {
+    fxMock.findMany.mockResolvedValue([]); // no exchange rates → rateMap empty
+    invMock.count.mockResolvedValue(1);
+    invMock.findMany.mockResolvedValue([{
+      ...MOCK_INV_WITH_SIP,
+      currency: 'USD',
+      unitsOrQuantity: 1,
+      purchasePricePerUnit: 100,
+      currentPricePerUnit: 100,
+    }]);
+    const result = await getInvestments('u1');
+    // fxRate falls back to 1 → invested = 100 * 1 = 100
+    expect(result.items[0].investedINR).toBeCloseTo(100, 0);
+  });
+
+  it('purchaseExchangeRate set uses it as buyFx (line 195 truthy branch)', async () => {
+    fxMock.findMany.mockResolvedValue([{ fromCurrency: 'USD', toCurrency: 'INR', rate: 83 }]);
+    invMock.count.mockResolvedValue(1);
+    invMock.findMany.mockResolvedValue([{
+      ...MOCK_INV_WITH_SIP,
+      currency: 'USD',
+      unitsOrQuantity: 1,
+      purchasePricePerUnit: 100,
+      currentPricePerUnit: 100,
+      purchaseExchangeRate: 85,
+    }]);
+    const result = await getInvestments('u1');
+    // invested = 100 * 85 (purchaseExchangeRate), current = 100 * 83 (fxRate)
+    expect(result.items[0].investedINR).toBeCloseTo(8500, 0);
+    expect(result.items[0].currentValueINR).toBeCloseTo(8300, 0);
+  });
+
+  it('zero purchase price → gainPct=0 (line 200 false branch of invested>0)', async () => {
+    invMock.count.mockResolvedValue(1);
+    invMock.findMany.mockResolvedValue([{
+      ...MOCK_INV_WITH_SIP,
+      purchasePricePerUnit: 0,  // invested = 0 → gainPct = 0 (no division by zero)
+    }]);
+    const result = await getInvestments('u1');
+    expect(result.items[0].gainPct).toBe(0);
+  });
+
   it('builds per-investment XIRR from sipTransactions when non-empty (line 204 path)', async () => {
     const ONE_YEAR_AGO = new Date();
     ONE_YEAR_AGO.setFullYear(ONE_YEAR_AGO.getFullYear() - 1);
@@ -552,6 +627,28 @@ describe('getFDs', () => {
     expect((result[0] as any).userName).toBe('Alice');
     expect((result[0] as any).user).toBeUndefined();
   });
+
+  it('ADMIN with userId and status: status filter applied (line 251 true branch)', async () => {
+    await getFDs('u2', 'admin-1', 'ADMIN', 'ACTIVE' as any);
+    expect(fdMock.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'u2', status: 'ACTIVE' } }),
+    );
+  });
+
+  it('ADMIN family-wide with status: status filter applied (line 258 true branch)', async () => {
+    fdMock.findMany.mockResolvedValueOnce([]);
+    await getFDs(undefined, 'admin-1', 'ADMIN', 'ACTIVE' as any);
+    const call = fdMock.findMany.mock.calls[0][0];
+    expect(call.where).toMatchObject({ status: 'ACTIVE' });
+  });
+
+  it('ADMIN family-wide: falls back to empty string when user.name is null (line 263 ?? branch)', async () => {
+    fdMock.findMany.mockResolvedValueOnce([
+      { id: 'fd-1', bankName: 'HDFC', user: { name: null } },
+    ]);
+    const result = await getFDs(undefined, 'admin-1', 'ADMIN');
+    expect((result[0] as any).userName).toBe('');
+  });
 });
 
 describe('getFDsMaturing', () => {
@@ -588,6 +685,23 @@ describe('createFD', () => {
     // maturityAmount = calcFDMaturity(100000, 8, 12, 'CUMULATIVE') ≈ 108243
     expect(createCall.data.maturityAmount).toBeGreaterThan(100000);
     expect(createCall.data.userId).toBe('u1');
+  });
+
+  it('defaults interestPayoutType to CUMULATIVE when omitted (line 280 ?? true branch)', async () => {
+    // No interestPayoutType → undefined ?? 'CUMULATIVE' → 'CUMULATIVE'
+    const fdData = {
+      principalAmount: 50000,
+      interestRate: 7,
+      tenureMonths: 6,
+      bankName: 'SBI',
+      startDate: new Date('2025-01-01'),
+      maturityDate: new Date('2025-07-01'),
+      status: 'ACTIVE',
+    };
+    fdMock.create.mockResolvedValue({ id: 'fd-new2', ...fdData });
+    await createFD('u1', fdData as any);
+    expect(fdMock.create).toHaveBeenCalled();
+    expect(fdMock.create.mock.calls[0][0].data.maturityAmount).toBeGreaterThan(0);
   });
 });
 
@@ -629,10 +743,24 @@ describe('getRDs', () => {
     );
   });
 
+  it('MEMBER without status: status ternary uses {} (line 305 false branch)', async () => {
+    await getRDs('other-user', 'u1', 'MEMBER');
+    expect(rdMock.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'u1' } }),
+    );
+  });
+
   it('ADMIN with userId: scopes to specified member', async () => {
     await getRDs('u2', 'admin-1', 'ADMIN');
     expect(rdMock.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { userId: 'u2' } }),
+    );
+  });
+
+  it('ADMIN with userId and status: status filter applied (line 313 true branch)', async () => {
+    await getRDs('u2', 'admin-1', 'ADMIN', 'ACTIVE' as any);
+    expect(rdMock.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'u2', status: 'ACTIVE' } }),
     );
   });
 
@@ -646,6 +774,21 @@ describe('getRDs', () => {
     expect(call.include).toEqual({ user: { select: { name: true } } });
     expect((result[0] as any).userName).toBe('Bob');
     expect((result[0] as any).user).toBeUndefined();
+  });
+
+  it('ADMIN family-wide with status: status filter applied in family-wide query (line 320 true branch)', async () => {
+    rdMock.findMany.mockResolvedValueOnce([]);
+    await getRDs(undefined, 'admin-1', 'ADMIN', 'ACTIVE' as any);
+    const call = rdMock.findMany.mock.calls[0][0];
+    expect(call.where).toMatchObject({ status: 'ACTIVE' });
+  });
+
+  it('ADMIN family-wide: falls back to empty string when user.name is null (line 325 ?? branch)', async () => {
+    rdMock.findMany.mockResolvedValueOnce([
+      { id: 'rd-1', bankName: 'SBI', user: { name: null } },
+    ]);
+    const result = await getRDs(undefined, 'admin-1', 'ADMIN');
+    expect((result[0] as any).userName).toBe('');
   });
 });
 
@@ -708,6 +851,13 @@ describe('getSIPs', () => {
     await getSIPs('u1');
     expect(sipMock.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ include: expect.objectContaining({ investment: true }) }),
+    );
+  });
+
+  it('passes status filter when provided (line 355 truthy branch)', async () => {
+    await getSIPs('u1', 'ACTIVE' as any);
+    expect(sipMock.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'u1', status: 'ACTIVE' } }),
     );
   });
 });
@@ -895,6 +1045,14 @@ describe('getGoldHoldings', () => {
     expect((result.holdings[0] as any).userName).toBe('Alice');
     expect((result.holdings[0] as any).user).toBeUndefined();
   });
+
+  it('ADMIN family-wide: falls back to empty string when user.name is null (line 427 ?? branch)', async () => {
+    goldMock.findMany.mockResolvedValueOnce([
+      { id: 'g-1', quantityGrams: 5, purchasePricePerGram: 5000, currentPricePerGram: 6000, user: { name: null } },
+    ]);
+    const result = await getGoldHoldings(undefined, 'admin-1', 'ADMIN');
+    expect((result.holdings[0] as any).userName).toBe('');
+  });
 });
 
 describe('createGoldHolding', () => {
@@ -969,6 +1127,14 @@ describe('getRealEstate', () => {
     expect(call.include).toMatchObject({ loan: true, user: { select: { name: true } } });
     expect((result.properties[0] as any).userName).toBe('Bob');
     expect((result.properties[0] as any).user).toBeUndefined();
+  });
+
+  it('ADMIN family-wide: falls back to empty string when user.name is null (line 478 ?? branch)', async () => {
+    reMock.findMany.mockResolvedValueOnce([
+      { id: 're-1', purchasePrice: 5000000, currentValue: 6000000, rentalIncomeMonthly: null, loan: null, user: { name: null } },
+    ]);
+    const result = await getRealEstate(undefined, 'admin-1', 'ADMIN');
+    expect((result.properties[0] as any).userName).toBe('');
   });
 });
 
