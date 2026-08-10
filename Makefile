@@ -1,4 +1,4 @@
-.PHONY: start stop restart build reset-db seed logs shell-backend shell-db backup-db restore-db
+.PHONY: start stop restart build reset-db seed generate logs shell-backend shell-db backup-db restore-db
 
 # ── Dev lifecycle ──────────────────────────────────────────────────────────
 
@@ -30,6 +30,13 @@ seed:
 
 migrate:
 	docker compose exec backend npx prisma migrate dev
+
+# Re-generate the Prisma client after editing schema.prisma while the stack is running.
+# Container start already does this; ts-node-dev's hot-reload does not.
+generate:
+	docker compose exec backend npx prisma generate
+	docker compose restart backend
+	@echo "✓ Prisma client regenerated"
 
 # ── Backup / Restore ───────────────────────────────────────────────────────
 

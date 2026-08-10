@@ -5,15 +5,36 @@ version: '3.9'
 
 services:
   migrate:
-    command: ["sh", "-c", "npx prisma migrate deploy && npx ts-node prisma/seed.ts"]
-    # No volume mounts — migrate runs from the built image so it uses the correct
-    # Linux Prisma binaries (not the macOS host's node_modules)
+    # --transpile-only on the seed: backend depends on migrate completing successfully, so a
+    # type error anywhere in seed.ts's import graph would block the whole stack from starting.
+    # The Dockerfile already declines to gate on tsc (`npx tsc ... || true`), so type-checking
+    # here would be a stricter bar than the build itself applies.
+    command: ["sh", "-c", "npx prisma generate && npx prisma migrate deploy && npx ts-node --transpile-only prisma/seed.ts"]
+    volumes:
+      # Mount prisma/ and src/ so migrate sees migrations, seed.ts, and the helpers seed.ts
+      # imports (e.g. src/utils/categoryStyle) as written since the image was built.
+      # node_modules is NOT mounted, so the container uses its own copy rather than the macOS
+      # host's. Note the image's node_modules is not guaranteed pure-Linux either — there is no
+      # .dockerignore, so `COPY . .` copies the host tree in; it works because the Dockerfile
+      # re-runs `prisma generate` inside Linux afterwards.
+      # `prisma generate` must run first here: the mounted schema/seed may reference fields the
+      # image's generated client does not know about.
+      - ./backend/prisma:/app/prisma
+      - ./backend/src:/app/src
 
   backend:
     build:
       context: ./backend
       target: builder
-    command: ["npx", "ts-node-dev", "--respawn", "--transpile-only", "--poll", "src/index.ts"]
+    # prisma generate at CONTAINER START: prisma/ is bind-mounted from the host but
+    # node_modules comes from the image, so an edit to schema.prisma leaves the generated
+    # client stale until the image is rebuilt. Running it here re-syncs on every start and
+    # survives `docker compose down`, which discards the container layer.
+    # Caveat: this does NOT cover editing schema.prisma while the stack is up. ts-node-dev
+    # only watches the require() graph, and its --respawn restarts the app child only — the
+    # shell has already exec'd away, so generate does not re-run. After a schema edit use
+    # `make generate` (or `make restart`).
+    command: ["sh", "-c", "npx prisma generate && npx ts-node-dev --respawn --transpile-only --poll src/index.ts"]
     # --poll: virtiofs/osxfs on Docker for Mac doesn't reliably deliver inotify events,
     #         so use stat-based polling to ensure hot-reload detects source file changes.
     volumes:
