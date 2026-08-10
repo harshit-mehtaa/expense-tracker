@@ -78,7 +78,10 @@ export default function DashboardPage() {
     if (netWorthHistory !== undefined && !hasCurrentMonthSnapshot) {
       triggerSnapshot();
     }
-  }, [netWorthHistory, hasCurrentMonthSnapshot]); // triggerSnapshot is stable from useMutation
+    // triggerSnapshot is the mutate fn from useMutation and is referentially stable;
+    // including it would add churn without changing behaviour.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [netWorthHistory, hasCurrentMonthSnapshot]);
 
   const netWorthChartData = (netWorthHistory ?? []).slice(-12).map((s) => ({
     month: new Date(s.snapshotDate).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }),
