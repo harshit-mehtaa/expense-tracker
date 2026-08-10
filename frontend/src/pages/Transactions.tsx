@@ -26,6 +26,7 @@ import { useBudgetsVsActuals, type BudgetActualItem } from '@/hooks/useBudgetsVs
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import RecurringRulesPage from '@/pages/transactions/RecurringRules';
 import { formatINR } from '@/lib/indianFormat';
+import { avatarInitial, buildMemberColorMap, resolveAvatarColor } from '@/lib/memberAvatar';
 
 interface Transaction {
   id: string;
@@ -271,18 +272,43 @@ const PAYMENT_MODE_ICONS: Record<string, string> = {
   AUTO_DEBIT: '🔄',
 };
 
-function MemberBadge({ name, color }: { name?: string; color?: string | null }) {
-  if (!name) return <span className="text-xs text-muted-foreground">—</span>;
-  const initial = name.trim().charAt(0).toUpperCase();
+/**
+ * `compact` renders the avatar alone — used in the desktop table where the column header
+ * already supplies the context. The name stays available on hover and to screen readers.
+ * The mobile card view uses the full pill, since its badges have no column header.
+ */
+function MemberBadge({ name, color, fallbackColor, compact = false }: { name?: string; color?: string | null; fallbackColor?: string; compact?: boolean }) {
+  const trimmed = name?.trim();
+  if (!trimmed) return <span className="text-xs text-muted-foreground">—</span>;
+  const initial = avatarInitial(trimmed);
+  const background = resolveAvatarColor(color, fallbackColor);
+
+  if (compact) {
+    // role="img" + aria-label gives one accessible name. Using sr-only text alongside a
+    // title would make some screen readers announce the member twice.
+    return (
+      <span
+        className="flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold text-white"
+        style={{ backgroundColor: background }}
+        role="img"
+        aria-label={trimmed}
+        title={trimmed}
+      >
+        {initial}
+      </span>
+    );
+  }
+
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-foreground">
       <span
         className="flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold text-white"
-        style={{ backgroundColor: color || '#64748b' }}
+        style={{ backgroundColor: background }}
+        aria-hidden="true"
       >
         {initial}
       </span>
-      <span className="max-w-[110px] truncate">{name}</span>
+      <span className="max-w-[110px] truncate">{trimmed}</span>
     </span>
   );
 }
@@ -2470,6 +2496,11 @@ export default function TransactionsPage() {
   const transactions = data?.pages.flatMap((p) => p.data) ?? [];
   const total = data?.pages[0]?.pagination.total ?? 0;
   const showMemberIndicator = isAdmin && !viewUserId;
+  // Avatar colour per member, keyed by user id and assigned by position in the family
+  // list. Positional assignment means two members can never share a fallback colour —
+  // which a name hash could not guarantee, and matters because the compact avatar drops
+  // the name. An explicit colorTag still wins; this only fills the gap.
+  const memberFallbackColors = useMemo(() => buildMemberColorMap(members), [members]);
   const selectedMemberName = viewUserId
     ? members.find((m) => m.id === viewUserId)?.name ?? (viewUserId === user?.id ? user.name : undefined)
     : undefined;
@@ -2751,8 +2782,8 @@ export default function TransactionsPage() {
             <colgroup>
               <col className="w-8" />
               <col className="w-[8%]" />
-              {showMemberIndicator && <col className="w-[10%]" />}
-              <col className="w-[16%]" />
+              {showMemberIndicator && <col className="w-16" />}
+              <col className={showMemberIndicator ? 'w-[20%]' : 'w-[16%]'} />
               <col className="w-[15%]" />
               <col className="w-[9%]" />
               <col className={showMemberIndicator ? 'w-[18%]' : 'w-[20%]'} />
@@ -2773,7 +2804,7 @@ export default function TransactionsPage() {
                 </th>
                 <th className="px-2 py-3 text-left font-medium text-muted-foreground">Date</th>
                 {showMemberIndicator && (
-                  <th className="px-2 py-3 text-left font-medium text-muted-foreground">Member</th>
+                  <th className="px-2 py-3 text-center font-medium text-muted-foreground">Member</th>
                 )}
                 <th className="px-2 py-3 text-left font-medium text-muted-foreground">Description</th>
                 <th className="px-2 py-3 text-left font-medium text-muted-foreground">Remark</th>
@@ -2801,8 +2832,8 @@ export default function TransactionsPage() {
                     {new Date(tx.date).toLocaleDateString('en-IN')}
                   </td>
                   {showMemberIndicator && (
-                    <td className="px-2 py-3 align-top">
-                      <MemberBadge name={tx.memberName} color={tx.memberColor} />
+                    <td className="px-2 py-3 align-top text-center">
+                      <MemberBadge name={tx.memberName} color={tx.memberColor} fallbackColor={memberFallbackColors.get(tx.userId)} compact />
                     </td>
                   )}
                   <td className="px-2 py-3 align-top font-medium truncate" title={tx.description}>{tx.description}</td>
@@ -2923,7 +2954,7 @@ export default function TransactionsPage() {
                 {/* Row 2: badges */}
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {showMemberIndicator && (
-                    <MemberBadge name={tx.memberName} color={tx.memberColor} />
+                    <MemberBadge name={tx.memberName} color={tx.memberColor} fallbackColor={memberFallbackColors.get(tx.userId)} />
                   )}
                   {!isTransfer && (
                     <BankAccountBadge accountName={tx.bankAccountName} compact />
