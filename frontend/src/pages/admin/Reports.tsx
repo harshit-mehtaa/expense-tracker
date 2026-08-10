@@ -65,7 +65,7 @@ export default function ReportsPage() {
   const tabs: { id: TabId; label: string }[] = [
     { id: 'pl', label: 'P&L' },
     { id: 'spending', label: 'Spending Analysis' },
-    { id: 'networth', label: 'Net Worth' },
+    { id: 'networth', label: 'Net Worth (Balance Sheet)' },
     { id: 'trialbalance', label: 'Trial Balance' },
   ];
 
@@ -511,7 +511,7 @@ export default function ReportsPage() {
       {/* ── Net Worth Tab ─────────────────────────────────────────────────────────── */}
       {activeTab === 'networth' && (
         <section className="space-y-4">
-          <h2 className="text-lg font-semibold">Net Worth Statement</h2>
+          <h2 className="text-lg font-semibold">Net Worth (Balance Sheet)</h2>
           {!netWorth ? (
             <div className="text-center py-8 border rounded-lg text-muted-foreground">Loading net worth data...</div>
           ) : (
