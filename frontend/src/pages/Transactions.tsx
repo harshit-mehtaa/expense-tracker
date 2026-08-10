@@ -2494,16 +2494,19 @@ export default function TransactionsPage() {
     getNextPageParam: (lastPage) => lastPage.pagination.hasMore ? lastPage.pagination.nextCursor : undefined,
   });
 
+  // Avatar colour per member, keyed by user id and assigned by position in the family
+  // list. Positional assignment means two members can never share a fallback colour —
+  // which a name hash could not guarantee, and matters because the compact avatar drops
+  // the name. An explicit colorTag still wins; this only fills the gap.
+  // Must stay above the `isLoading` early return: a hook called conditionally changes the
+  // hook count between renders and React throws once loading completes.
+  const memberFallbackColors = useMemo(() => buildMemberColorMap(members), [members]);
+
   if (isLoading) return <PageLoader />;
 
   const transactions = data?.pages.flatMap((p) => p.data) ?? [];
   const total = data?.pages[0]?.pagination.total ?? 0;
   const showMemberIndicator = isAdmin && !viewUserId;
-  // Avatar colour per member, keyed by user id and assigned by position in the family
-  // list. Positional assignment means two members can never share a fallback colour —
-  // which a name hash could not guarantee, and matters because the compact avatar drops
-  // the name. An explicit colorTag still wins; this only fills the gap.
-  const memberFallbackColors = useMemo(() => buildMemberColorMap(members), [members]);
   const selectedMemberName = viewUserId
     ? members.find((m) => m.id === viewUserId)?.name ?? (viewUserId === user?.id ? user.name : undefined)
     : undefined;
