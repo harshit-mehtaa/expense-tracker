@@ -197,7 +197,10 @@ function parseAccountChipText(accountName: string) {
     .trim();
   return {
     bankName: bankName || accountName,
-    visibleText: last4 ? `•••• ${last4}` : 'Account',
+    // Bare last-4: the adjacent BankLogo already identifies the bank, and the masking
+    // bullets cost more column width than they convey. The full account name stays
+    // available via the chip's title attribute.
+    visibleText: last4 ?? 'Account',
   };
 }
 
