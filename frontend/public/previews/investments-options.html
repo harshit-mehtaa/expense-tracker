@@ -1,0 +1,1182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Investment Page Options</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --soft: #f1f5f9;
+      --green: #059669;
+      --red: #dc2626;
+      --blue: #2563eb;
+      --cyan: #0891b2;
+      --violet: #7c3aed;
+      --amber: #d97706;
+      --slate: #334155;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    main {
+      max-width: 1220px;
+      margin: 0 auto;
+      padding: 24px 18px 44px;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 24px;
+      line-height: 1.2;
+    }
+
+    h2 {
+      font-size: 18px;
+      line-height: 1.25;
+    }
+
+    h3 {
+      font-size: 14px;
+      line-height: 1.3;
+    }
+
+    .page-head {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 0 -18px 20px;
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(248, 250, 252, 0.92);
+      backdrop-filter: blur(10px);
+    }
+
+    .nav button {
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0 12px;
+      background: #fff;
+      color: var(--muted);
+      cursor: pointer;
+      font-weight: 650;
+      font-size: 13px;
+    }
+
+    .nav button.active {
+      border-color: #0f172a;
+      background: #0f172a;
+      color: #fff;
+    }
+
+    .screen {
+      display: none;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+
+    .screen.active {
+      display: block;
+    }
+
+    .screen-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 12px;
+      background: #fff;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .btn.primary {
+      border-color: #0f172a;
+      background: #0f172a;
+      color: #fff;
+    }
+
+    .input {
+      height: 34px;
+      min-width: 180px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 10px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .content {
+      padding: 16px;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--card);
+      padding: 13px;
+      min-width: 0;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .metric .value {
+      margin-top: 7px;
+      font-size: 21px;
+      line-height: 1.1;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .positive { color: var(--green); }
+    .negative { color: var(--red); }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      height: 22px;
+      border-radius: 999px;
+      padding: 0 8px;
+      background: var(--soft);
+      color: #334155;
+      font-size: 12px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .chip.green { background: #dcfce7; color: #047857; }
+    .chip.amber { background: #fef3c7; color: #b45309; }
+    .chip.blue { background: #dbeafe; color: #1d4ed8; }
+    .chip.red { background: #fee2e2; color: #b91c1c; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th {
+      background: #f8fafc;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    td {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: middle;
+    }
+
+    td.right,
+    th.right {
+      text-align: right;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--card);
+      padding: 14px;
+      min-width: 0;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 320px;
+      gap: 14px;
+    }
+
+    .three-col {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .section-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .asset-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      flex: 0 0 auto;
+    }
+
+    .bars {
+      display: grid;
+      gap: 10px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      font-size: 13px;
+    }
+
+    .bar-shell {
+      margin-top: 5px;
+      height: 7px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #e2e8f0;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: var(--blue);
+    }
+
+    .asset-card {
+      display: grid;
+      gap: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+    }
+
+    .asset-card .top {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .asset-card .meta {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      font-size: 13px;
+    }
+
+    .field-label {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+
+    .field-value {
+      margin-top: 3px;
+      font-weight: 700;
+    }
+
+    .goal-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+    }
+
+    .goal-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .drawer-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 330px;
+      gap: 14px;
+    }
+
+    .drawer {
+      border-left: 1px solid var(--line);
+      background: #f8fafc;
+      padding: 16px;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+    }
+
+    .timeline-item {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+      font-size: 13px;
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .portfolio-row {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.4fr) repeat(4, minmax(100px, 0.7fr)) 84px;
+      gap: 12px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      padding: 12px;
+      font-size: 13px;
+    }
+
+    .portfolio-row.head {
+      background: #f8fafc;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 750;
+      text-transform: uppercase;
+    }
+
+    .portfolio-row:last-child {
+      border-bottom: 0;
+    }
+
+    .icon-btns {
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+
+    .icon-btn {
+      display: inline-flex;
+      width: 28px;
+      height: 28px;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--muted);
+    }
+
+    .modern-command {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: start;
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      padding: 18px;
+    }
+
+    .modern-title {
+      display: flex;
+      min-width: 0;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .modern-mark {
+      display: inline-flex;
+      width: 42px;
+      height: 42px;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: #0f172a;
+      color: #fff;
+      font-weight: 850;
+      flex: 0 0 auto;
+    }
+
+    .modern-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .modern-filter {
+      display: inline-flex;
+      align-items: center;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 0 10px;
+      color: #334155;
+      font-size: 13px;
+      font-weight: 650;
+      min-width: 128px;
+    }
+
+    .modern-metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .modern-metric {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+      min-width: 0;
+    }
+
+    .modern-metric::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 3px;
+      background: var(--accent, #2563eb);
+    }
+
+    .modern-metric .label-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .modern-metric .value {
+      margin-top: 8px;
+      font-size: 22px;
+      line-height: 1.1;
+      font-weight: 850;
+    }
+
+    .trend {
+      display: inline-flex;
+      align-items: center;
+      height: 20px;
+      border-radius: 999px;
+      padding: 0 7px;
+      background: #dcfce7;
+      color: #047857;
+      font-size: 11px;
+      font-weight: 750;
+    }
+
+    .modern-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 14px;
+    }
+
+    .modern-panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .modern-panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+    }
+
+    .holding-list {
+      display: grid;
+    }
+
+    .holding-card {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.2fr) minmax(340px, 1.6fr) auto;
+      gap: 14px;
+      align-items: center;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .holding-card:last-child {
+      border-bottom: 0;
+    }
+
+    .holding-identity {
+      display: flex;
+      min-width: 0;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .holding-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: var(--accent, #2563eb);
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 850;
+      flex: 0 0 auto;
+    }
+
+    .holding-name {
+      font-weight: 780;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .holding-sub {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .stat-pill {
+      min-width: 0;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 9px;
+    }
+
+    .stat-pill .label {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .stat-pill .value {
+      margin-top: 4px;
+      font-weight: 780;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .side-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+    }
+
+    .allocation-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 9px 0;
+      border-bottom: 1px solid #edf2f7;
+      font-size: 13px;
+    }
+
+    .allocation-item:last-child {
+      border-bottom: 0;
+    }
+
+    .insight-list {
+      display: grid;
+      gap: 9px;
+      margin-top: 10px;
+    }
+
+    .insight {
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 10px;
+      font-size: 13px;
+    }
+
+    .kpi-strip {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .kpi-strip .metric .value {
+      font-size: 18px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 750;
+    }
+
+    .section-title::before {
+      content: "";
+      width: 4px;
+      height: 20px;
+      border-radius: 999px;
+      background: var(--blue);
+    }
+
+    .section-title.violet::before { background: var(--violet); }
+    .section-title.amber::before { background: var(--amber); }
+    .section-title.green::before { background: var(--green); }
+    .section-title.cyan::before { background: var(--cyan); }
+
+    @media (max-width: 960px) {
+      .page-head,
+      .screen-head {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .metrics,
+      .kpi-strip,
+      .three-col {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .two-col,
+      .drawer-layout,
+      .modern-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .modern-command {
+        grid-template-columns: 1fr;
+      }
+
+      .modern-actions {
+        justify-content: flex-start;
+      }
+
+      .holding-card {
+        grid-template-columns: 1fr;
+      }
+
+      .drawer {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .portfolio-row {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .portfolio-row.head {
+        display: none;
+      }
+
+      .timeline-item {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 620px) {
+      main {
+        padding: 18px 12px 36px;
+      }
+
+      .nav {
+        margin-left: -12px;
+        margin-right: -12px;
+        padding-left: 12px;
+        padding-right: 12px;
+      }
+
+      .metrics,
+      .modern-metrics,
+      .kpi-strip,
+      .three-col,
+      .asset-card .meta,
+      .mini-grid,
+      .stat-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .actions,
+      .nav {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .nav button,
+      .btn,
+      .input {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="page-head">
+      <div>
+        <h1>Investments Page Design Options</h1>
+        <p class="subtle">Click an option below to view a full mock of that direction. The real app is not changed by this preview.</p>
+      </div>
+      <span class="chip blue">Preview only</span>
+    </header>
+
+    <nav class="nav" aria-label="Investment design options">
+      <button class="active" data-target="option-1">1. Command Center</button>
+      <button data-target="option-2">2. Asset Sections</button>
+      <button data-target="option-3">3. Table First</button>
+      <button data-target="option-4">4. Goal Based</button>
+      <button data-target="option-5">5. Detail Drawer</button>
+    </nav>
+
+    <section id="option-1" class="screen active">
+      <div class="modern-command">
+        <div class="modern-title">
+          <span class="modern-mark">IN</span>
+          <div>
+            <h2>Portfolio Command Center</h2>
+            <p class="subtle">Modern finance workspace with summary, active holdings, allocation, and tax status in one scan.</p>
+            <div class="actions" style="margin-top:10px;">
+              <span class="chip blue">All Family</span>
+              <span class="chip">25 holdings</span>
+              <span class="chip green">5 active SIPs</span>
+            </div>
+          </div>
+        </div>
+        <div class="modern-actions">
+          <span class="modern-filter">FY 2026-27</span>
+          <span class="modern-filter">All Assets</span>
+          <span class="btn">Add SIP</span>
+          <span class="btn primary">Add Investment</span>
+        </div>
+      </div>
+      <div class="content grid">
+        <div class="modern-metrics">
+          <div class="modern-metric" style="--accent:#2563eb;">
+            <div class="label-row"><span>Current Value</span><span class="trend">+2.1% MoM</span></div>
+            <p class="value">INR 28,64,000</p>
+            <p class="subtle">Across market assets</p>
+          </div>
+          <div class="modern-metric" style="--accent:#0f766e;">
+            <div class="label-row"><span>Invested</span><span>Cost</span></div>
+            <p class="value">INR 23,40,000</p>
+            <p class="subtle">Original capital</p>
+          </div>
+          <div class="modern-metric" style="--accent:#059669;">
+            <div class="label-row"><span>P&L</span><span class="trend">+22.39%</span></div>
+            <p class="value positive">INR 5,24,000</p>
+            <p class="subtle">Unrealised gain</p>
+          </div>
+          <div class="modern-metric" style="--accent:#7c3aed;">
+            <div class="label-row"><span>Monthly SIP</span><span>5 active</span></div>
+            <p class="value">INR 78,000</p>
+            <p class="subtle">Next debit cycle</p>
+          </div>
+        </div>
+        <div class="modern-grid">
+          <div class="modern-panel">
+            <div class="modern-panel-head">
+              <div>
+                <h3>Priority Holdings</h3>
+                <p class="subtle">Inline price updates, full edit actions, and linked SIP status.</p>
+              </div>
+              <span class="btn">View All</span>
+            </div>
+            <div class="holding-list">
+              <div class="holding-card">
+                <div class="holding-identity">
+                  <span class="holding-avatar" style="--accent:#2563eb;">PP</span>
+                  <div>
+                    <p class="holding-name">Parag Parikh Flexi Cap</p>
+                    <p class="holding-sub">Mutual Fund - Folio 8421 - Harshit</p>
+                  </div>
+                </div>
+                <div class="stat-grid">
+                  <div class="stat-pill"><p class="label">Invested</p><p class="value">INR 6.50L</p></div>
+                  <div class="stat-pill"><p class="label">Current</p><p class="value">INR 8.12L</p></div>
+                  <div class="stat-pill"><p class="label">Return</p><p class="value positive">+25.0%</p></div>
+                  <div class="stat-pill"><p class="label">SIP</p><p class="value">INR 25K</p></div>
+                </div>
+                <div class="icon-btns"><span class="icon-btn">E</span><span class="icon-btn">D</span></div>
+              </div>
+              <div class="holding-card">
+                <div class="holding-identity">
+                  <span class="holding-avatar" style="--accent:#0f766e;">HN</span>
+                  <div>
+                    <p class="holding-name">HDFC Nifty 50 Index</p>
+                    <p class="holding-sub">Mutual Fund - Direct Growth - Family</p>
+                  </div>
+                </div>
+                <div class="stat-grid">
+                  <div class="stat-pill"><p class="label">Invested</p><p class="value">INR 4.20L</p></div>
+                  <div class="stat-pill"><p class="label">Current</p><p class="value">INR 4.93L</p></div>
+                  <div class="stat-pill"><p class="label">Return</p><p class="value positive">+17.3%</p></div>
+                  <div class="stat-pill"><p class="label">SIP</p><p class="value">INR 18K</p></div>
+                </div>
+                <div class="icon-btns"><span class="icon-btn">E</span><span class="icon-btn">D</span></div>
+              </div>
+              <div class="holding-card">
+                <div class="holding-identity">
+                  <span class="holding-avatar" style="--accent:#d97706;">TC</span>
+                  <div>
+                    <p class="holding-name">TCS</p>
+                    <p class="holding-sub">Indian Stock - NSE - Harshit</p>
+                  </div>
+                </div>
+                <div class="stat-grid">
+                  <div class="stat-pill"><p class="label">Invested</p><p class="value">INR 3.40L</p></div>
+                  <div class="stat-pill"><p class="label">Current</p><p class="value">INR 4.10L</p></div>
+                  <div class="stat-pill"><p class="label">Return</p><p class="value positive">+20.7%</p></div>
+                  <div class="stat-pill"><p class="label">SIP</p><p class="value">None</p></div>
+                </div>
+                <div class="icon-btns"><span class="icon-btn">E</span><span class="icon-btn">D</span></div>
+              </div>
+              <div class="holding-card">
+                <div class="holding-identity">
+                  <span class="holding-avatar" style="--accent:#7c3aed;">SG</span>
+                  <div>
+                    <p class="holding-name">SGB 2028 Series III</p>
+                    <p class="holding-sub">Sovereign Gold Bond - 55g equivalent</p>
+                  </div>
+                </div>
+                <div class="stat-grid">
+                  <div class="stat-pill"><p class="label">Invested</p><p class="value">INR 2.90L</p></div>
+                  <div class="stat-pill"><p class="label">Current</p><p class="value">INR 3.76L</p></div>
+                  <div class="stat-pill"><p class="label">Return</p><p class="value positive">+29.7%</p></div>
+                  <div class="stat-pill"><p class="label">Coupon</p><p class="value">2.5%</p></div>
+                </div>
+                <div class="icon-btns"><span class="icon-btn">E</span><span class="icon-btn">D</span></div>
+              </div>
+            </div>
+          </div>
+          <aside class="stack">
+            <div class="side-card">
+              <div class="section-row"><h3>Asset Allocation</h3><span class="chip">4 classes</span></div>
+              <div class="bars">
+                <div class="allocation-item"><div><span class="asset-dot" style="background:#2563eb"></span> Mutual Funds<div class="bar-shell"><div class="bar-fill" style="width:56%"></div></div></div><strong>56%</strong></div>
+                <div class="allocation-item"><div><span class="asset-dot" style="background:#059669"></span> Stocks<div class="bar-shell"><div class="bar-fill" style="width:18%;background:#059669"></div></div></div><strong>18%</strong></div>
+                <div class="allocation-item"><div><span class="asset-dot" style="background:#d97706"></span> Gold/SGB<div class="bar-shell"><div class="bar-fill" style="width:14%;background:#d97706"></div></div></div><strong>14%</strong></div>
+                <div class="allocation-item"><div><span class="asset-dot" style="background:#7c3aed"></span> Deposits<div class="bar-shell"><div class="bar-fill" style="width:12%;background:#7c3aed"></div></div></div><strong>12%</strong></div>
+              </div>
+            </div>
+            <div class="side-card">
+              <div class="section-row"><h3>80C Utilization</h3><span class="trend">73%</span></div>
+              <div class="bar-shell"><div class="bar-fill" style="width:73%;background:#059669"></div></div>
+              <p class="subtle" style="margin-top:8px;">INR 1,10,000 used of INR 1,50,000</p>
+            </div>
+            <div class="side-card">
+              <div class="section-row"><h3>Action Items</h3><span class="chip amber">2</span></div>
+              <div class="insight-list">
+                <div class="insight"><strong>Review SIP amount</strong><p class="subtle">ELSS is at 73% of 80C target.</p></div>
+                <div class="insight"><strong>Price stale</strong><p class="subtle">TCS current price updated 19 days ago.</p></div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section id="option-2" class="screen">
+      <div class="screen-head">
+        <div>
+          <h2>Option 2 - Asset-Class Sections</h2>
+          <p class="subtle">Grouped by how you think about assets: mutual funds, stocks, deposits, SIPs, tax-saving.</p>
+        </div>
+        <div class="actions">
+          <span class="input">All Family</span>
+          <span class="btn primary">Add</span>
+        </div>
+      </div>
+      <div class="content grid">
+        <div class="metrics">
+          <div class="metric"><p class="label">Mutual Funds</p><p class="value">INR 15,86,000</p></div>
+          <div class="metric"><p class="label">Stocks</p><p class="value">INR 4,10,300</p></div>
+          <div class="metric"><p class="label">FD/RD</p><p class="value">INR 3,35,000</p></div>
+          <div class="metric"><p class="label">Gold/SGB</p><p class="value">INR 3,76,000</p></div>
+        </div>
+        <div class="grid">
+          <div class="section-row"><h3 class="section-title">Mutual Funds</h3><span class="chip green">2 active SIPs</span></div>
+          <div class="three-col">
+            <div class="asset-card"><div class="top"><div><h3>Parag Parikh Flexi Cap</h3><p class="subtle">Harshit - Growth</p></div><span class="chip green">+25.0%</span></div><div class="asset-card meta"><div><p class="field-label">Current</p><p class="field-value">INR 8,12,400</p></div><div><p class="field-label">SIP</p><p class="field-value">INR 25,000</p></div><div><p class="field-label">Date</p><p class="field-value">Day 5</p></div></div></div>
+            <div class="asset-card"><div class="top"><div><h3>HDFC Nifty 50 Index</h3><p class="subtle">Family - Index</p></div><span class="chip green">+17.3%</span></div><div class="asset-card meta"><div><p class="field-label">Current</p><p class="field-value">INR 4,92,700</p></div><div><p class="field-label">SIP</p><p class="field-value">INR 18,000</p></div><div><p class="field-label">Date</p><p class="field-value">Day 10</p></div></div></div>
+            <div class="asset-card"><div class="top"><div><h3>ELSS Tax Saver</h3><p class="subtle">80C - lock-in</p></div><span class="chip amber">80C</span></div><div class="asset-card meta"><div><p class="field-label">Current</p><p class="field-value">INR 2,80,900</p></div><div><p class="field-label">SIP</p><p class="field-value">INR 10,000</p></div><div><p class="field-label">Date</p><p class="field-value">Day 15</p></div></div></div>
+          </div>
+          <div class="section-row"><h3 class="section-title violet">Deposits</h3><span class="chip">3 accounts</span></div>
+          <div class="three-col">
+            <div class="asset-card"><div class="top"><h3>HDFC FD</h3><span class="chip blue">7.10%</span></div><div class="asset-card meta"><div><p class="field-label">Principal</p><p class="field-value">INR 2,00,000</p></div><div><p class="field-label">Maturity</p><p class="field-value">INR 2,28,400</p></div><div><p class="field-label">Due</p><p class="field-value">Aug 2027</p></div></div></div>
+            <div class="asset-card"><div class="top"><h3>SBI RD</h3><span class="chip blue">6.80%</span></div><div class="asset-card meta"><div><p class="field-label">Monthly</p><p class="field-value">INR 15,000</p></div><div><p class="field-label">Deposited</p><p class="field-value">INR 1,35,000</p></div><div><p class="field-label">Progress</p><p class="field-value">9/24</p></div></div></div>
+            <div class="asset-card"><div class="top"><h3>Emergency FD</h3><span class="chip green">Liquid</span></div><div class="asset-card meta"><div><p class="field-label">Principal</p><p class="field-value">INR 1,50,000</p></div><div><p class="field-label">Maturity</p><p class="field-value">INR 1,61,500</p></div><div><p class="field-label">Due</p><p class="field-value">Jan 2027</p></div></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="option-3" class="screen">
+      <div class="screen-head">
+        <div>
+          <h2>Option 3 - Statement/Table First</h2>
+          <p class="subtle">Dense broker-style page: everything is sortable, comparable, and compact.</p>
+        </div>
+        <div class="actions">
+          <span class="input">Search holding</span>
+          <span class="btn">Export</span>
+          <span class="btn primary">Add Row</span>
+        </div>
+      </div>
+      <div class="content grid">
+        <div class="kpi-strip">
+          <div class="metric"><p class="label">Current</p><p class="value">INR 28.64L</p></div>
+          <div class="metric"><p class="label">Invested</p><p class="value">INR 23.40L</p></div>
+          <div class="metric"><p class="label">P&L</p><p class="value positive">+INR 5.24L</p></div>
+          <div class="metric"><p class="label">XIRR</p><p class="value positive">13.8%</p></div>
+          <div class="metric"><p class="label">SIPs</p><p class="value">INR 78K</p></div>
+        </div>
+        <div class="card" style="padding:0;overflow:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Owner</th><th>Asset</th><th>Type</th><th>Units</th><th class="right">Buy Price</th><th class="right">Current Price</th><th class="right">Invested</th><th class="right">Current</th><th class="right">P&L</th><th>Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>Harshit</td><td><strong>Parag Parikh Flexi Cap</strong><p class="subtle">Folio 8421</p></td><td>Mutual Fund</td><td>2,340.45</td><td class="right">277.72</td><td class="right">347.11</td><td class="right">INR 6,50,000</td><td class="right">INR 8,12,400</td><td class="right positive">+25.0%</td><td><span class="chip green">SIP</span></td><td class="right">E D</td></tr>
+              <tr><td>Family</td><td><strong>HDFC Nifty 50 Index</strong><p class="subtle">Direct Growth</p></td><td>Mutual Fund</td><td>1,128.90</td><td class="right">372.04</td><td class="right">436.44</td><td class="right">INR 4,20,000</td><td class="right">INR 4,92,700</td><td class="right positive">+17.3%</td><td><span class="chip green">SIP</span></td><td class="right">E D</td></tr>
+              <tr><td>Harshit</td><td><strong>TCS</strong><p class="subtle">NSE</p></td><td>Stock</td><td>105</td><td class="right">3,238</td><td class="right">3,908</td><td class="right">INR 3,40,000</td><td class="right">INR 4,10,300</td><td class="right positive">+20.7%</td><td><span class="chip">Hold</span></td><td class="right">E D</td></tr>
+              <tr><td>Harshit</td><td><strong>SGB 2028 Series III</strong><p class="subtle">Sovereign Gold Bond</p></td><td>Gold</td><td>55g</td><td class="right">5,272</td><td class="right">6,836</td><td class="right">INR 2,90,000</td><td class="right">INR 3,76,000</td><td class="right positive">+29.7%</td><td><span class="chip blue">Bond</span></td><td class="right">E D</td></tr>
+              <tr><td>Family</td><td><strong>HDFC FD</strong><p class="subtle">Matures Aug 2027</p></td><td>FD</td><td>1</td><td class="right">2,00,000</td><td class="right">2,28,400</td><td class="right">INR 2,00,000</td><td class="right">INR 2,28,400</td><td class="right positive">+14.2%</td><td><span class="chip blue">Active</span></td><td class="right">E D</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="option-4" class="screen">
+      <div class="screen-head">
+        <div>
+          <h2>Option 4 - Goal-Based View</h2>
+          <p class="subtle">Investments grouped by purpose first, asset class second.</p>
+        </div>
+        <div class="actions">
+          <span class="input">All Goals</span>
+          <span class="btn">Add Goal</span>
+          <span class="btn primary">Add Investment</span>
+        </div>
+      </div>
+      <div class="content grid">
+        <div class="metrics">
+          <div class="metric"><p class="label">Retirement</p><p class="value">INR 16.32L</p></div>
+          <div class="metric"><p class="label">Emergency</p><p class="value">INR 3.50L</p></div>
+          <div class="metric"><p class="label">Tax Saving</p><p class="value">INR 2.80L</p></div>
+          <div class="metric"><p class="label">Wealth</p><p class="value">INR 5.01L</p></div>
+        </div>
+        <div class="three-col">
+          <div class="goal-card">
+            <div class="goal-head"><div><h3>Retirement Corpus</h3><p class="subtle">Target INR 2.5 Cr</p></div><span class="chip green">On track</span></div>
+            <div class="bar-shell"><div class="bar-fill" style="width:42%;background:#059669"></div></div>
+            <div class="mini-grid" style="margin-top:12px;"><div><p class="field-label">Current</p><p class="field-value">INR 16,32,000</p></div><div><p class="field-label">Monthly SIP</p><p class="field-value">INR 53,000</p></div></div>
+            <p class="subtle" style="margin-top:12px;">Parag Parikh, HDFC Index, NPS</p>
+          </div>
+          <div class="goal-card">
+            <div class="goal-head"><div><h3>Emergency Fund</h3><p class="subtle">Target INR 6.0L</p></div><span class="chip amber">58%</span></div>
+            <div class="bar-shell"><div class="bar-fill" style="width:58%;background:#d97706"></div></div>
+            <div class="mini-grid" style="margin-top:12px;"><div><p class="field-label">Current</p><p class="field-value">INR 3,50,000</p></div><div><p class="field-label">Maturity</p><p class="field-value">Jan 2027</p></div></div>
+            <p class="subtle" style="margin-top:12px;">Emergency FD, liquid fund</p>
+          </div>
+          <div class="goal-card">
+            <div class="goal-head"><div><h3>Tax Saving</h3><p class="subtle">FY 2026-27</p></div><span class="chip blue">80C</span></div>
+            <div class="bar-shell"><div class="bar-fill" style="width:73%;background:#2563eb"></div></div>
+            <div class="mini-grid" style="margin-top:12px;"><div><p class="field-label">Used</p><p class="field-value">INR 1,10,000</p></div><div><p class="field-label">Remaining</p><p class="field-value">INR 40,000</p></div></div>
+            <p class="subtle" style="margin-top:12px;">ELSS, PPF, tax saver FD</p>
+          </div>
+        </div>
+        <div class="card">
+          <div class="section-row"><h3>Goal Contributions This Month</h3><span class="chip">May 2026</span></div>
+          <div class="timeline">
+            <div class="timeline-item"><strong>Day 05</strong><div>Parag Parikh Flexi Cap - Retirement</div><strong>INR 25,000</strong></div>
+            <div class="timeline-item"><strong>Day 10</strong><div>HDFC Nifty 50 Index - Retirement</div><strong>INR 18,000</strong></div>
+            <div class="timeline-item"><strong>Day 15</strong><div>ELSS Tax Saver - Tax Saving</div><strong>INR 10,000</strong></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="option-5" class="screen">
+      <div class="screen-head">
+        <div>
+          <h2>Option 5 - Hybrid Overview + Detail Drawer</h2>
+          <p class="subtle">Clean list view, with the selected holding opened in a right-side detail panel.</p>
+        </div>
+        <div class="actions">
+          <span class="input">Search or filter</span>
+          <span class="btn primary">Add Investment</span>
+        </div>
+      </div>
+      <div class="drawer-layout">
+        <div class="content grid">
+          <div class="metrics">
+            <div class="metric"><p class="label">Current Value</p><p class="value">INR 28.64L</p></div>
+            <div class="metric"><p class="label">P&L</p><p class="value positive">+INR 5.24L</p></div>
+            <div class="metric"><p class="label">Active SIPs</p><p class="value">5</p></div>
+            <div class="metric"><p class="label">Review Needed</p><p class="value">2</p></div>
+          </div>
+          <div class="stack">
+            <div class="asset-card" style="border-color:#0f172a;">
+              <div class="top"><div><h3>Parag Parikh Flexi Cap</h3><p class="subtle">Selected - Mutual Fund - Harshit</p></div><span class="chip green">+25.0%</span></div>
+              <div class="asset-card meta"><div><p class="field-label">Current</p><p class="field-value">INR 8,12,400</p></div><div><p class="field-label">SIP</p><p class="field-value">INR 25,000</p></div><div><p class="field-label">Next</p><p class="field-value">May 5</p></div></div>
+            </div>
+            <div class="asset-card"><div class="top"><div><h3>HDFC Nifty 50 Index</h3><p class="subtle">Mutual Fund - Family</p></div><span class="chip green">+17.3%</span></div></div>
+            <div class="asset-card"><div class="top"><div><h3>TCS</h3><p class="subtle">Indian Stock - NSE</p></div><span class="chip green">+20.7%</span></div></div>
+            <div class="asset-card"><div class="top"><div><h3>HDFC FD</h3><p class="subtle">Fixed Deposit - Family</p></div><span class="chip blue">Active</span></div></div>
+          </div>
+        </div>
+        <aside class="drawer">
+          <div class="stack">
+            <div>
+              <h2>Parag Parikh Flexi Cap</h2>
+              <p class="subtle">Direct Growth - Folio 8421</p>
+            </div>
+            <div class="mini-grid">
+              <div class="card"><p class="field-label">Invested</p><p class="field-value">INR 6,50,000</p></div>
+              <div class="card"><p class="field-label">Current</p><p class="field-value">INR 8,12,400</p></div>
+              <div class="card"><p class="field-label">Units</p><p class="field-value">2,340.45</p></div>
+              <div class="card"><p class="field-label">NAV</p><p class="field-value">INR 347.11</p></div>
+            </div>
+            <div class="card">
+              <div class="section-row"><h3>SIP Link</h3><span class="chip green">Active</span></div>
+              <p class="subtle">INR 25,000 on day 5 from HDFC Bank **** 4421</p>
+            </div>
+            <div class="card">
+              <div class="section-row"><h3>Linked Transactions</h3><span class="chip">3 recent</span></div>
+              <div class="timeline">
+                <div class="timeline-item"><strong>May 05</strong><div>SIP debit</div><strong>INR 25,000</strong></div>
+                <div class="timeline-item"><strong>Apr 05</strong><div>SIP debit</div><strong>INR 25,000</strong></div>
+                <div class="timeline-item"><strong>Mar 05</strong><div>SIP debit</div><strong>INR 25,000</strong></div>
+              </div>
+            </div>
+            <div class="actions">
+              <span class="btn">Update Price</span>
+              <span class="btn primary">Edit Investment</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const buttons = Array.from(document.querySelectorAll('[data-target]'));
+    const screens = Array.from(document.querySelectorAll('.screen'));
+
+    buttons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const target = button.getAttribute('data-target');
+        buttons.forEach((item) => item.classList.toggle('active', item === button));
+        screens.forEach((screen) => screen.classList.toggle('active', screen.id === target));
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    });
+  </script>
+</body>
+</html>

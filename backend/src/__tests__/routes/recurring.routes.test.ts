@@ -170,7 +170,7 @@ describe('PUT /api/recurring/:id', () => {
   it('returns 200 on successful update', async () => {
     const res = await request(app).put('/api/recurring/rule-1').send({ isActive: false });
     expect(res.status).toBe(200);
-    expect(updateMock).toHaveBeenCalledWith('rule-1', 'u1', expect.objectContaining({ isActive: false }));
+    expect(updateMock).toHaveBeenCalledWith('rule-1', 'u1', expect.objectContaining({ isActive: false }), 'MEMBER');
   });
 
   it('propagates 404 from service', async () => {
@@ -187,7 +187,7 @@ describe('DELETE /api/recurring/:id', () => {
   it('returns 204 on successful deletion', async () => {
     const res = await request(app).delete('/api/recurring/rule-1');
     expect(res.status).toBe(204);
-    expect(deleteMock).toHaveBeenCalledWith('rule-1', 'u1');
+    expect(deleteMock).toHaveBeenCalledWith('rule-1', 'u1', 'MEMBER');
   });
 });
 

@@ -19,7 +19,7 @@ vi.mock('../../middleware/auth', () => ({
 vi.mock('../../config/prisma', () => {
   const prisma = {
     user: { findFirst: vi.fn() },
-    transaction: { groupBy: vi.fn() },
+    transaction: { groupBy: vi.fn(), findMany: vi.fn() },
     category: { findMany: vi.fn() },
   };
   return { default: prisma, prisma };
@@ -41,6 +41,7 @@ import { makeApp } from '../helpers/makeApp';
 
 const userFindFirstMock = (prisma as any).user.findFirst as ReturnType<typeof vi.fn>;
 const txGroupByMock = (prisma as any).transaction.groupBy as ReturnType<typeof vi.fn>;
+const txFindManyMock = (prisma as any).transaction.findMany as ReturnType<typeof vi.fn>;
 const categoryFindManyMock = (prisma as any).category.findMany as ReturnType<typeof vi.fn>;
 const computeNetWorthMock = dashboardService.computeNetWorthStatement as ReturnType<typeof vi.fn>;
 const getPnLMock = dashboardService.getProfitAndLoss as ReturnType<typeof vi.fn>;
@@ -67,6 +68,7 @@ const MOCK_NET_WORTH = { assets: { bankBalances: 100000 }, liabilities: { loans:
 beforeEach(() => {
   vi.clearAllMocks();
   txGroupByMock.mockResolvedValue(MOCK_SPENDING);
+  txFindManyMock.mockResolvedValue([]);
   categoryFindManyMock.mockResolvedValue(MOCK_CATEGORY);
   computeNetWorthMock.mockResolvedValue(MOCK_NET_WORTH);
   getPnLMock.mockResolvedValue({ summary: {}, monthly: [], expenseCategories: [], incomeCategories: [] });

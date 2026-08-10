@@ -166,6 +166,12 @@ describe('signRefreshToken', () => {
     expect(ttl).toBeGreaterThanOrEqual(604795);
     expect(ttl).toBeLessThanOrEqual(604800);
   });
+
+  it('generates unique tokens for repeated signs in the same second', () => {
+    const first = signRefreshToken(TEST_PAYLOAD);
+    const second = signRefreshToken(TEST_PAYLOAD);
+    expect(second).not.toBe(first);
+  });
 });
 
 describe('verifyRefreshToken', () => {

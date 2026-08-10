@@ -1,0 +1,1 @@
+ALTER TABLE "BankAccount" ADD COLUMN IF NOT EXISTS "accountNumber" TEXT;

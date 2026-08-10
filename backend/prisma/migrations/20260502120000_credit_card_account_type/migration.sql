@@ -1,0 +1,1 @@
+ALTER TYPE "AccountType" ADD VALUE 'CREDIT_CARD';

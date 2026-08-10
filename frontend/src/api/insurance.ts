@@ -20,13 +20,23 @@ export interface InsurancePolicy {
   isForParents: boolean;
   notes?: string;
   userName?: string;
+  isPaid?: boolean;
+  lastPaidTransactionId?: string | null;
+  lastPaidDate?: string | null;
+  lastPaidAmount?: number | null;
+  lastPaidDescription?: string | null;
 }
 
 const unwrap = <T>(res: { data: { data: T } }): T => res.data.data;
 
 // Prisma Decimal fields serialize as strings in JSON; coerce to number at the API boundary.
 export function normalizePolicy(p: InsurancePolicy): InsurancePolicy {
-  return { ...p, sumAssured: Number(p.sumAssured), premiumAmount: Number(p.premiumAmount) };
+  return {
+    ...p,
+    sumAssured: Number(p.sumAssured),
+    premiumAmount: Number(p.premiumAmount),
+    lastPaidAmount: p.lastPaidAmount == null ? null : Number(p.lastPaidAmount),
+  };
 }
 
 export const insuranceApi = {
@@ -40,7 +50,8 @@ export const insuranceApi = {
     api.get<{ data: any }>('/insurance/80d-summary', {
       params: opts?.targetUserId ? { userId: opts.targetUserId } : {},
     }).then(unwrap),
-  create: (data: object) => api.post<{ data: InsurancePolicy }>('/insurance', data).then(unwrap).then(normalizePolicy),
+  create: (data: object, opts?: { targetUserId?: string }) =>
+    api.post<{ data: InsurancePolicy }>('/insurance', data, { params: opts?.targetUserId ? { targetUserId: opts.targetUserId } : {} }).then(unwrap).then(normalizePolicy),
   update: (id: string, data: object) => api.put<{ data: InsurancePolicy }>(`/insurance/${id}`, data).then(unwrap).then(normalizePolicy),
   delete: (id: string) => api.delete(`/insurance/${id}`),
 };

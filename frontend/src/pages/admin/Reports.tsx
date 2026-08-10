@@ -55,6 +55,24 @@ const GOLD_TYPE_LABELS: Record<string, string> = {
   DIGITAL:   'Digital',
 };
 
+function reportCategoryName(item: any): string {
+  return item.categoryName ?? item.category?.name ?? 'Uncategorized';
+}
+
+function sortReportCategories<T>(items: T[]): T[] {
+  return [...items].sort((a: any, b: any) =>
+    reportCategoryName(a).localeCompare(reportCategoryName(b), undefined, { sensitivity: 'base' }),
+  );
+}
+
+function topReportCategoriesByTotal<T>(items: T[], count: number): T[] {
+  return sortReportCategories(
+    [...items]
+      .sort((a: any, b: any) => Number(b.total ?? 0) - Number(a.total ?? 0))
+      .slice(0, count),
+  );
+}
+
 export default function ReportsPage() {
   const { selectedFY } = useFY();
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
@@ -109,36 +127,45 @@ export default function ReportsPage() {
   // ── P&L data ─────────────────────────────────────────────────────────────────
   const summary = plData?.summary;
   const monthly = plData?.monthly ?? [];
-  const expenseCategories = plData?.expenseCategories ?? [];
-  const incomeCategories = plData?.incomeCategories ?? [];
+  const rawExpenseCategories = plData?.expenseCategories ?? [];
+  const rawIncomeCategories = plData?.incomeCategories ?? [];
+  const expenseCategories = sortReportCategories(rawExpenseCategories);
+  const incomeCategories = sortReportCategories(rawIncomeCategories);
+  const expenseChartCategories = topReportCategoriesByTotal(rawExpenseCategories, 15);
+  const incomeChartCategories = topReportCategoriesByTotal(rawIncomeCategories, 15);
+  const expensePieCategories = topReportCategoriesByTotal(rawExpenseCategories, 9);
+  const incomePieCategories = topReportCategoriesByTotal(rawIncomeCategories, 9);
   const hasMonthlyData = monthly.some((m: any) => m.income > 0 || m.expense > 0);
 
-  const expensePieData = expenseCategories.slice(0, 9).map((item: any, i: number) => ({
+  const expensePieData = expensePieCategories.map((item: any, i: number) => ({
     name: item.categoryName,
     value: item.total,
     color: CHART_PALETTE.categorical[i % CHART_PALETTE.categorical.length],
   }));
-  const expenseBarData = expenseCategories.slice(0, 15).map((item: any) => ({
+  const expenseBarData = expenseChartCategories.map((item: any) => ({
     name: item.categoryName,
     amount: item.total,
   }));
-  const incomePieData = incomeCategories.slice(0, 9).map((item: any, i: number) => ({
+  const incomePieData = incomePieCategories.map((item: any, i: number) => ({
     name: item.categoryName,
     value: item.total,
     color: CHART_PALETTE.categorical[i % CHART_PALETTE.categorical.length],
   }));
-  const incomeBarData = incomeCategories.slice(0, 15).map((item: any) => ({
+  const incomeBarData = incomeChartCategories.map((item: any) => ({
     name: item.categoryName,
     amount: item.total,
   }));
 
   // ── Spending data ─────────────────────────────────────────────────────────────
-  const spendingPieData = spendingByCat.slice(0, 9).map((item: any, i: number) => ({
+  const sortedSpendingByCat = sortReportCategories(spendingByCat);
+  const spendingChartCategories = topReportCategoriesByTotal(spendingByCat, 15);
+  const spendingPieCategories = topReportCategoriesByTotal(spendingByCat, 9);
+  const spendingPieData = spendingPieCategories.map((item: any, i: number) => ({
     name: item.category?.name ?? 'Uncategorized',
     value: item.total,
     color: CHART_PALETTE.categorical[i % CHART_PALETTE.categorical.length],
   }));
-  const spendingBarData = spendingByCat.slice(0, 15).map((item: any) => ({
+  const spendingBarData = spendingChartCategories.map((item: any) => ({
     name: item.category?.name ?? 'Uncategorized',
     amount: item.total,
   }));
@@ -152,6 +179,14 @@ export default function ReportsPage() {
     : isAdmin
     ? 'Family-wide'
     : 'My data';
+  const sortedTrialBalanceEntries = trialBalance?.entries
+    ? [...trialBalance.entries].sort((a, b) => {
+      const aIsBalancingRow = a.accountName === 'Net Savings (Surplus)' || a.accountName === 'Net Loss (Deficit)';
+      const bIsBalancingRow = b.accountName === 'Net Savings (Surplus)' || b.accountName === 'Net Loss (Deficit)';
+      if (aIsBalancingRow !== bIsBalancingRow) return aIsBalancingRow ? 1 : -1;
+      return a.accountName.localeCompare(b.accountName, undefined, { sensitivity: 'base' });
+    })
+    : [];
 
   return (
     <div className="space-y-8">
@@ -279,10 +314,10 @@ export default function ReportsPage() {
                       <ResponsiveContainer width="100%" height={300}>
                         <BarChart data={expenseBarData} layout="vertical" margin={{ left: 80, top: 4, right: 8, bottom: 0 }}>
                           <CartesianGrid {...GRID_STYLE} horizontal={false} />
-                          <XAxis type="number" tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} {...AXIS_STYLE} />
+                          <XAxis type="number" tickFormatter={(v) => formatINRShort(Number(v))} {...AXIS_STYLE} />
                           <YAxis type="category" dataKey="name" width={75} {...AXIS_STYLE} />
                           <Tooltip content={<CustomTooltip formatter={formatINRShort} />} />
-                          <Bar dataKey="amount" name="Spent" fill={CHART_PALETTE.expense} radius={[0, 4, 4, 0]} animationDuration={600} animationEasing="ease-out" activeBar={{ fill: '#fb7185', radius: [0, 4, 4, 0] }} />
+                          <Bar dataKey="amount" name="Spent" fill={CHART_PALETTE.expense} radius={4} animationDuration={600} animationEasing="ease-out" activeBar={{ fill: '#fb7185', radius: 4 }} />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
@@ -326,10 +361,10 @@ export default function ReportsPage() {
                       <ResponsiveContainer width="100%" height={300}>
                         <BarChart data={incomeBarData} layout="vertical" margin={{ left: 80, top: 4, right: 8, bottom: 0 }}>
                           <CartesianGrid {...GRID_STYLE} horizontal={false} />
-                          <XAxis type="number" tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} {...AXIS_STYLE} />
+                          <XAxis type="number" tickFormatter={(v) => formatINRShort(Number(v))} {...AXIS_STYLE} />
                           <YAxis type="category" dataKey="name" width={75} {...AXIS_STYLE} />
                           <Tooltip content={<CustomTooltip formatter={formatINRShort} />} />
-                          <Bar dataKey="amount" name="Received" fill={CHART_PALETTE.income} radius={[0, 4, 4, 0]} animationDuration={600} animationEasing="ease-out" activeBar={{ fill: '#34d399', radius: [0, 4, 4, 0] }} />
+                          <Bar dataKey="amount" name="Received" fill={CHART_PALETTE.income} radius={4} animationDuration={600} animationEasing="ease-out" activeBar={{ fill: '#34d399', radius: 4 }} />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
@@ -376,10 +411,10 @@ export default function ReportsPage() {
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart data={spendingBarData} layout="vertical" margin={{ left: 80, top: 4, right: 8, bottom: 0 }}>
                     <CartesianGrid {...GRID_STYLE} horizontal={false} />
-                    <XAxis type="number" tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} {...AXIS_STYLE} />
+                    <XAxis type="number" tickFormatter={(v) => formatINRShort(Number(v))} {...AXIS_STYLE} />
                     <YAxis type="category" dataKey="name" width={75} {...AXIS_STYLE} />
                     <Tooltip content={<CustomTooltip formatter={formatINRShort} />} />
-                    <Bar dataKey="amount" name="Spent" fill={CHART_PALETTE.expense} radius={[0, 4, 4, 0]} animationDuration={600} animationEasing="ease-out" activeBar={{ fill: '#fb7185', radius: [0, 4, 4, 0] }} />
+                    <Bar dataKey="amount" name="Spent" fill={CHART_PALETTE.expense} radius={4} animationDuration={600} animationEasing="ease-out" activeBar={{ fill: '#fb7185', radius: 4 }} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -393,7 +428,7 @@ export default function ReportsPage() {
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="space-y-1 max-h-64 overflow-y-auto">
-                  {spendingByCat.map((item: any, i: number) => (
+                  {sortedSpendingByCat.map((item: any, i: number) => (
                     <div key={i} className="flex items-center justify-between text-sm py-1 border-b border-muted last:border-0">
                       <div className="flex items-center gap-2">
                         <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: CHART_PALETTE.categorical[i % CHART_PALETTE.categorical.length] }} />
@@ -467,7 +502,7 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {trialBalance.entries.map((entry) => {
+                    {sortedTrialBalanceEntries.map((entry) => {
                       const isBalancingRow = entry.accountName === 'Net Savings (Surplus)' || entry.accountName === 'Net Loss (Deficit)';
                       return (
                         <tr

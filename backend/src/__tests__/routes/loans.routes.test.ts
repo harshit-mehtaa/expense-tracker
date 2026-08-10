@@ -155,7 +155,7 @@ describe('PUT /api/loans/:id', () => {
   it('returns 200 on valid update', async () => {
     const res = await request(app).put('/api/loans/loan-1').send({ emiAmount: 46000 });
     expect(res.status).toBe(200);
-    expect(updateMock).toHaveBeenCalledWith('u1', 'loan-1', { emiAmount: 46000 });
+    expect(updateMock).toHaveBeenCalledWith('u1', 'loan-1', { emiAmount: 46000 }, 'MEMBER');
   });
 });
 
@@ -163,7 +163,7 @@ describe('DELETE /api/loans/:id', () => {
   it('returns 204 on deletion', async () => {
     const res = await request(app).delete('/api/loans/loan-1');
     expect(res.status).toBe(204);
-    expect(deleteMock).toHaveBeenCalledWith('u1', 'loan-1');
+    expect(deleteMock).toHaveBeenCalledWith('u1', 'loan-1', 'MEMBER');
   });
 });
 

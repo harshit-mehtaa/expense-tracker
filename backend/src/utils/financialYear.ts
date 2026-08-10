@@ -61,6 +61,18 @@ export function getFYRange(fy: string): { start: Date; end: Date; fy: string; la
 }
 
 /**
+ * Returns the UTC-equivalent boundary for a calendar date in IST.
+ * This keeps date-only UI filters aligned with how transactions are displayed.
+ */
+export function getISTDateBoundary(date: string, boundary: 'start' | 'end'): Date {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const time = boundary === 'start' ? '00:00:00.000' : '23:59:59.999';
+    return dayjs.tz(`${date} ${time}`, IST).toDate();
+  }
+  return new Date(date);
+}
+
+/**
  * Returns the previous Financial Year string.
  * "2024-25" → "2023-24"
  */

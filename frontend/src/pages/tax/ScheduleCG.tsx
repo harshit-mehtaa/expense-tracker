@@ -72,7 +72,7 @@ export default function ScheduleCG({ fy, viewUserId }: Props) {
   };
 
   const createMutation = useMutation({
-    mutationFn: (data: object) => taxApi.createCapitalGain(data),
+    mutationFn: (data: object) => taxApi.createCapitalGain(data, viewUserId),
     onSuccess: () => { invalidate(); setShowForm(false); reset(); },
   });
 
@@ -141,17 +141,15 @@ export default function ScheduleCG({ fy, viewUserId }: Props) {
         </div>
       )}
 
-      {/* Add button — hidden when viewing another member's data */}
+      {/* Add button */}
       <div className="flex justify-between items-center">
         <h3 className="font-medium text-gray-700">Capital Gain Entries</h3>
-        {!viewUserId && (
-          <button
-            onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
-            className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
-          >
-            + Add Entry
-          </button>
-        )}
+        <button
+          onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
+          className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+        >
+          + Add Entry
+        </button>
       </div>
 
       {/* Form */}
@@ -160,12 +158,12 @@ export default function ScheduleCG({ fy, viewUserId }: Props) {
           <input type="hidden" {...register('fyYear')} />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Asset Name</label>
+              <label className="field-required block text-sm font-medium mb-1">Asset Name</label>
               <input {...register('assetName')} className="input" placeholder="e.g. Reliance Industries" />
               {errors.assetName && <p className="text-red-500 text-xs mt-1">{errors.assetName.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Asset Type</label>
+              <label className="field-required block text-sm font-medium mb-1">Asset Type</label>
               <select {...register('assetType')} className="input">
                 <option value="">Select type</option>
                 {Object.entries(ASSET_TYPE_LABELS).map(([v, l]) => (
@@ -175,22 +173,22 @@ export default function ScheduleCG({ fy, viewUserId }: Props) {
               {errors.assetType && <p className="text-red-500 text-xs mt-1">{errors.assetType.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Purchase Date</label>
+              <label className="field-required block text-sm font-medium mb-1">Purchase Date</label>
               <input type="date" {...register('purchaseDate')} className="input" />
               {errors.purchaseDate && <p className="text-red-500 text-xs mt-1">{errors.purchaseDate.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Sale Date</label>
+              <label className="field-required block text-sm font-medium mb-1">Sale Date</label>
               <input type="date" {...register('saleDate')} className="input" />
               {errors.saleDate && <p className="text-red-500 text-xs mt-1">{errors.saleDate.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Purchase Price (₹)</label>
+              <label className="field-required block text-sm font-medium mb-1">Purchase Price (₹)</label>
               <input type="number" step="0.01" {...register('purchasePrice')} className="input" />
               {errors.purchasePrice && <p className="text-red-500 text-xs mt-1">{errors.purchasePrice.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Sale Price (₹)</label>
+              <label className="field-required block text-sm font-medium mb-1">Sale Price (₹)</label>
               <input type="number" step="0.01" {...register('salePrice')} className="input" />
               {errors.salePrice && <p className="text-red-500 text-xs mt-1">{errors.salePrice.message}</p>}
             </div>
@@ -234,7 +232,7 @@ export default function ScheduleCG({ fy, viewUserId }: Props) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Notes</label>
+            <label className="block text-sm font-medium mb-1">Notes (optional)</label>
             <input {...register('notes')} className="input" placeholder="Optional" />
           </div>
 
@@ -279,7 +277,7 @@ export default function ScheduleCG({ fy, viewUserId }: Props) {
                     </td>
                     <td className="py-2 pr-3 text-xs text-gray-500">{e.taxRate}</td>
                     <td className="py-2 flex gap-2">
-                      {raw && !viewUserId && (
+                    {raw && (
                         <>
                           <button onClick={() => startEdit(raw)} className="text-blue-600 hover:underline text-xs">Edit</button>
                           <button onClick={() => deleteMutation.mutate(e.id)} className="text-red-500 hover:underline text-xs">Delete</button>

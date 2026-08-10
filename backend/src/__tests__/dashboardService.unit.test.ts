@@ -22,6 +22,7 @@ vi.mock('../config/prisma', () => {
     transaction: {
       aggregate: vi.fn(),
       groupBy: vi.fn(),
+      findMany: vi.fn(),
     },
     bankAccount: { findMany: vi.fn() },
     fixedDeposit: { findMany: vi.fn() },
@@ -87,6 +88,7 @@ function resetAllMocks() {
   queryRawMock.mockResolvedValue([]);
   txMock.aggregate.mockResolvedValue(ZERO_AGGREGATE);
   txMock.groupBy.mockResolvedValue([]);
+  txMock.findMany.mockResolvedValue([]);
   bankMock.findMany.mockResolvedValue([]);
   fdMock.findMany.mockResolvedValue([]);
   rdMock.findMany.mockResolvedValue([]);
@@ -128,8 +130,10 @@ describe('getDashboardSummary', () => {
     txMock.aggregate
       .mockResolvedValueOnce({ _sum: { amount: 100000 } }) // current income
       .mockResolvedValueOnce({ _sum: { amount: 60000 } })  // current expense
+      .mockResolvedValueOnce({ _sum: { amount: 0 } })      // current refunds
       .mockResolvedValueOnce({ _sum: { amount: 80000 } })  // prev income
-      .mockResolvedValueOnce({ _sum: { amount: 50000 } }); // prev expense
+      .mockResolvedValueOnce({ _sum: { amount: 50000 } })  // prev expense
+      .mockResolvedValueOnce({ _sum: { amount: 0 } });     // prev refunds
     const r = await getDashboardSummary('u1', 'MEMBER', '2025-26');
     expect(r.fyYear).toBe('2025-26');
     expect(r.totalIncome).toBe(100000);
@@ -880,6 +884,17 @@ describe('getUpcomingAlerts', () => {
     const alert = r.find((a: any) => a.type === 'INSURANCE_PREMIUM');
     expect(alert).toBeDefined();
     expect(alert!.entityId).toBe('ins-1');
+  });
+
+  it('Insurance with linked payment in the current premium cycle → no premium alert', async () => {
+    insMock.findMany.mockResolvedValue([{
+      id: 'ins-paid', policyName: 'Health Plan', providerName: 'Star Health',
+      premiumAmount: 8000, premiumDueDate: 20, premiumFrequency: 'MONTHLY',
+      transactions: [{ id: 'tx-paid', date: new Date('2025-04-16T00:00:00.000Z') }],
+    }]);
+    const r = await getUpcomingAlerts('u1', 'MEMBER');
+    const insAlert = r.find((a: any) => a.type === 'INSURANCE_PREMIUM');
+    expect(insAlert).toBeUndefined();
   });
 
   it('Insurance with premiumDueDate=null → skipped', async () => {

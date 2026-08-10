@@ -1,6 +1,7 @@
 import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import { getFYRange } from '../utils/financialYear';
+import { ownerScopedWhere } from '../utils/resolveTargetUserId';
 import type { Prisma, InvestmentType, FDStatus, RDStatus, SIPStatus } from '@prisma/client';
 
 // ─── XIRR (Newton-Raphson) ────────────────────────────────────────────────────
@@ -63,9 +64,15 @@ export function calcRDMaturity(monthly: number, annualRatePercent: number, tenur
 
 // ─── Portfolio Summary ────────────────────────────────────────────────────────
 
-export async function getPortfolioSummary(userId: string) {
+export async function getPortfolioSummary(userId: string | undefined, requesterId = userId ?? '', requesterRole = 'MEMBER') {
+  const where = (
+    requesterRole === 'ADMIN' && !userId
+      ? { user: { isActive: true, deletedAt: null } }
+      : { userId: userId ?? requesterId }
+  ) as Prisma.InvestmentWhereInput;
+
   const investments = await prisma.investment.findMany({
-    where: { userId },
+    where,
     include: { sipTransactions: true },
   });
 
@@ -131,18 +138,24 @@ export async function getPortfolioSummary(userId: string) {
 
 // ─── 80C Summary ─────────────────────────────────────────────────────────────
 
-export async function get80CSummary(userId: string, fy: string) {
+export async function get80CSummary(userId: string | undefined, fy: string, requesterId?: string, requesterRole = 'MEMBER') {
   const { start, end } = getFYRange(fy);
+  const requester = requesterId ?? userId;
+  const userScope = (
+    requesterRole === 'ADMIN' && !userId
+      ? { user: { isActive: true, deletedAt: null } }
+      : { userId: userId ?? requester! }
+  );
 
   const [investments, fds, insurance] = await Promise.all([
     prisma.investment.findMany({
-      where: { userId, isTaxSaving: true, purchaseDate: { gte: start, lt: end } },
+      where: { ...userScope, isTaxSaving: true, purchaseDate: { gte: start, lt: end } },
     }),
     prisma.fixedDeposit.findMany({
-      where: { userId, isTaxSaver: true, startDate: { gte: start, lt: end } },
+      where: { ...userScope, isTaxSaver: true, startDate: { gte: start, lt: end } },
     }),
     prisma.insurancePolicy.findMany({
-      where: { userId, is80cEligible: true },
+      where: { ...userScope, is80cEligible: true },
     }),
   ]);
 
@@ -174,8 +187,17 @@ export async function get80CSummary(userId: string, fy: string) {
 
 // ─── CRUD: Investments ────────────────────────────────────────────────────────
 
-export async function getInvestments(userId: string, type?: InvestmentType, page = 1, pageSize = 25) {
-  const where = { userId, ...(type ? { type } : {}) };
+export async function getInvestments(
+  userId: string | undefined,
+  type?: InvestmentType,
+  page = 1,
+  pageSize = 25,
+  requesterRole = 'MEMBER',
+) {
+  const where = {
+    ...(requesterRole === 'ADMIN' && !userId ? { user: { isActive: true, deletedAt: null } } : { userId: userId! }),
+    ...(type ? { type } : {}),
+  } as Prisma.InvestmentWhereInput;
   const skip = (page - 1) * pageSize;
 
   const [exchangeRates, total, investments] = await Promise.all([
@@ -183,7 +205,7 @@ export async function getInvestments(userId: string, type?: InvestmentType, page
     prisma.investment.count({ where }),
     prisma.investment.findMany({
       where,
-      include: { sipTransactions: { orderBy: { date: 'asc' } } },
+      include: { sipTransactions: { orderBy: { date: 'asc' } }, user: { select: { name: true } } },
       orderBy: { purchaseDate: 'desc' },
       skip,
       take: pageSize,
@@ -193,7 +215,7 @@ export async function getInvestments(userId: string, type?: InvestmentType, page
   const rateMap: Record<string, number> = {};
   exchangeRates.forEach((r) => { rateMap[r.fromCurrency] = Number(r.rate); });
 
-  const items = investments.map((inv) => {
+  const items = investments.map(({ user, ...inv }) => {
     const fxRate = inv.currency === 'INR' ? 1 : (rateMap[inv.currency] ?? 1);
     const buyFx = inv.purchaseExchangeRate ? Number(inv.purchaseExchangeRate) : fxRate;
     const units = Number(inv.unitsOrQuantity);
@@ -212,7 +234,7 @@ export async function getInvestments(userId: string, type?: InvestmentType, page
     cashflows.push({ amount: current, date: new Date() });
     const invXirr = xirr(cashflows);
 
-    return { ...inv, investedINR: invested, currentValueINR: current, gainINR: gain, gainPct, xirr: invXirr };
+    return { ...inv, userName: user?.name ?? '', investedINR: invested, currentValueINR: current, gainINR: gain, gainPct, xirr: invXirr };
   });
 
   return {
@@ -225,14 +247,14 @@ export async function createInvestment(userId: string, data: Prisma.InvestmentCr
   return prisma.investment.create({ data: { ...data, userId } });
 }
 
-export async function updateInvestment(userId: string, id: string, data: Prisma.InvestmentUpdateInput) {
-  const inv = await prisma.investment.findFirst({ where: { id, userId } });
+export async function updateInvestment(requesterId: string, id: string, data: Prisma.InvestmentUpdateInput, requesterRole = 'MEMBER') {
+  const inv = await prisma.investment.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!inv) throw AppError.notFound('Investment');
   return prisma.investment.update({ where: { id }, data });
 }
 
-export async function deleteInvestment(userId: string, id: string) {
-  const inv = await prisma.investment.findFirst({ where: { id, userId } });
+export async function deleteInvestment(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  const inv = await prisma.investment.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!inv) throw AppError.notFound('Investment');
   return prisma.investment.delete({ where: { id } });
 }
@@ -283,18 +305,35 @@ export async function createFD(userId: string, data: Omit<Prisma.FixedDepositCre
     (data.interestPayoutType as string) ?? 'CUMULATIVE',
   );
   return prisma.fixedDeposit.create({
-    data: { ...data, userId, maturityAmount },
+    data: { ...data, userId, maturityAmount } as Prisma.FixedDepositUncheckedCreateInput,
   });
 }
 
-export async function updateFD(userId: string, id: string, data: Prisma.FixedDepositUpdateInput) {
-  const fd = await prisma.fixedDeposit.findFirst({ where: { id, userId } });
+export async function updateFD(requesterId: string, id: string, data: Prisma.FixedDepositUpdateInput, requesterRole = 'MEMBER') {
+  const fd = await prisma.fixedDeposit.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!fd) throw AppError.notFound('Fixed deposit');
-  return prisma.fixedDeposit.update({ where: { id }, data });
+  const updateData: Prisma.FixedDepositUpdateInput = { ...data };
+  const shouldRecalculate = (
+    data.principalAmount !== undefined
+    || data.interestRate !== undefined
+    || data.tenureMonths !== undefined
+    || data.interestPayoutType !== undefined
+  );
+
+  if (shouldRecalculate) {
+    updateData.maturityAmount = calcFDMaturity(
+      Number(data.principalAmount ?? fd.principalAmount),
+      Number(data.interestRate ?? fd.interestRate),
+      Number(data.tenureMonths ?? fd.tenureMonths),
+      String(data.interestPayoutType ?? fd.interestPayoutType),
+    );
+  }
+
+  return prisma.fixedDeposit.update({ where: { id }, data: updateData });
 }
 
-export async function deleteFD(userId: string, id: string) {
-  const fd = await prisma.fixedDeposit.findFirst({ where: { id, userId } });
+export async function deleteFD(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  const fd = await prisma.fixedDeposit.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!fd) throw AppError.notFound('Fixed deposit');
   return prisma.fixedDeposit.delete({ where: { id } });
 }
@@ -335,30 +374,50 @@ export async function createRD(userId: string, data: Omit<Prisma.RecurringDeposi
     data.tenureMonths as number,
   );
   return prisma.recurringDeposit.create({
-    data: { ...data, userId, maturityAmount },
+    data: { ...data, userId, maturityAmount } as Prisma.RecurringDepositUncheckedCreateInput,
   });
 }
 
-export async function updateRD(userId: string, id: string, data: Prisma.RecurringDepositUpdateInput) {
-  const rd = await prisma.recurringDeposit.findFirst({ where: { id, userId } });
+export async function updateRD(requesterId: string, id: string, data: Prisma.RecurringDepositUpdateInput, requesterRole = 'MEMBER') {
+  const rd = await prisma.recurringDeposit.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!rd) throw AppError.notFound('Recurring deposit');
-  return prisma.recurringDeposit.update({ where: { id }, data });
+  const updateData: Prisma.RecurringDepositUpdateInput = { ...data };
+  const shouldRecalculate = (
+    data.monthlyInstallment !== undefined
+    || data.interestRate !== undefined
+    || data.tenureMonths !== undefined
+  );
+
+  if (shouldRecalculate) {
+    updateData.maturityAmount = calcRDMaturity(
+      Number(data.monthlyInstallment ?? rd.monthlyInstallment),
+      Number(data.interestRate ?? rd.interestRate),
+      Number(data.tenureMonths ?? rd.tenureMonths),
+    );
+  }
+
+  return prisma.recurringDeposit.update({ where: { id }, data: updateData });
 }
 
-export async function deleteRD(userId: string, id: string) {
-  const rd = await prisma.recurringDeposit.findFirst({ where: { id, userId } });
+export async function deleteRD(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  const rd = await prisma.recurringDeposit.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!rd) throw AppError.notFound('Recurring deposit');
   return prisma.recurringDeposit.delete({ where: { id } });
 }
 
 // ─── CRUD: SIPs ───────────────────────────────────────────────────────────────
 
-export async function getSIPs(userId: string, status?: SIPStatus) {
-  return prisma.sIP.findMany({
-    where: { userId, ...(status ? { status } : {}) },
-    include: { investment: true, bankAccount: true },
+export async function getSIPs(userId: string | undefined, status?: SIPStatus, requesterRole = 'MEMBER') {
+  const sips = await prisma.sIP.findMany({
+    where: {
+      ...(requesterRole === 'ADMIN' && !userId ? { user: { isActive: true, deletedAt: null } } : { userId: userId! }),
+      ...(status ? { status } : {}),
+    },
+    include: { investment: true, bankAccount: true, user: { select: { name: true } } },
     orderBy: { startDate: 'desc' },
   });
+
+  return sips.map(({ user, ...rest }) => ({ ...rest, userName: user?.name ?? '' }));
 }
 
 export async function getSIPsUpcoming(userId: string, days: number) {
@@ -384,28 +443,73 @@ export async function getSIPsUpcoming(userId: string, days: number) {
     });
 }
 
-export async function createSIP(userId: string, data: Omit<Prisma.SIPCreateInput, 'user' | 'investment'> & { investmentId: string }) {
+type CreateSIPInput = Omit<Prisma.SIPUncheckedCreateInput, 'id' | 'userId' | 'investmentId'> & {
+  investmentId?: string;
+};
+
+export async function createSIP(userId: string, data: CreateSIPInput) {
   const { investmentId, ...rest } = data;
+  let resolvedInvestmentId = investmentId;
+
+  if (resolvedInvestmentId) {
+    const investment = await prisma.investment.findFirst({
+      where: { id: resolvedInvestmentId, userId },
+      select: { id: true },
+    });
+    if (!investment) throw AppError.notFound('Investment');
+  } else {
+    const investment = await prisma.investment.create({
+      data: {
+        userId,
+        type: 'MUTUAL_FUND',
+        name: rest.fundName,
+        currency: 'INR',
+        unitsOrQuantity: 0,
+        purchasePricePerUnit: 0,
+        currentPricePerUnit: 0,
+        purchaseDate: rest.startDate instanceof Date ? rest.startDate : new Date(),
+        folioNumber: rest.folioNumber,
+        notes: 'Auto-created from SIP setup',
+      },
+    });
+    resolvedInvestmentId = investment.id;
+  }
+
   return prisma.sIP.create({
-    data: { ...rest, userId, investment: { connect: { id: investmentId } } },
-    include: { investment: true },
+    data: { ...rest, userId, investmentId: resolvedInvestmentId } as Prisma.SIPUncheckedCreateInput,
+    include: { investment: true, bankAccount: true },
   });
 }
 
-export async function updateSIP(userId: string, id: string, data: Prisma.SIPUpdateInput) {
-  const sip = await prisma.sIP.findFirst({ where: { id, userId } });
+export async function updateSIP(requesterId: string, id: string, data: Prisma.SIPUncheckedUpdateInput, requesterRole = 'MEMBER') {
+  const sip = await prisma.sIP.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!sip) throw AppError.notFound('SIP');
-  return prisma.sIP.update({ where: { id }, data });
+
+  if (data.investmentId !== undefined) {
+    const investmentId = String(data.investmentId);
+    const investment = await prisma.investment.findFirst({
+      where: { id: investmentId, userId: sip.userId },
+      select: { id: true },
+    });
+    if (!investment) throw AppError.notFound('Investment');
+  }
+
+  return prisma.sIP.update({ where: { id }, data, include: { investment: true, bankAccount: true } });
 }
 
-export async function deleteSIP(userId: string, id: string) {
-  const sip = await prisma.sIP.findFirst({ where: { id, userId } });
+export async function deleteSIP(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  const sip = await prisma.sIP.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!sip) throw AppError.notFound('SIP');
   return prisma.sIP.delete({ where: { id } });
 }
 
-export async function addSIPTransaction(userId: string, sipId: string, data: { date: Date; units: number; nav: number; amount: number; type?: 'BUY' | 'SELL' | 'DIVIDEND' }) {
-  const sip = await prisma.sIP.findFirst({ where: { id: sipId, userId } });
+export async function addSIPTransaction(
+  requesterId: string,
+  sipId: string,
+  data: { date: Date; units: number; nav: number; amount: number; type?: 'BUY' | 'SELL' | 'DIVIDEND' },
+  requesterRole = 'MEMBER',
+) {
+  const sip = await prisma.sIP.findFirst({ where: ownerScopedWhere(sipId, requesterId, requesterRole) });
   if (!sip) throw AppError.notFound('SIP');
   return prisma.sIPTransaction.create({
     data: { investmentId: sip.investmentId, date: data.date, units: data.units, nav: data.nav, amount: data.amount, type: data.type ?? 'BUY' },
@@ -443,62 +547,210 @@ export async function createGoldHolding(userId: string, data: Omit<Prisma.GoldHo
   return prisma.goldHolding.create({ data: { ...data, userId } });
 }
 
-export async function updateGoldHolding(userId: string, id: string, data: Prisma.GoldHoldingUpdateInput) {
-  const g = await prisma.goldHolding.findFirst({ where: { id, userId } });
+export async function updateGoldHolding(requesterId: string, id: string, data: Prisma.GoldHoldingUpdateInput, requesterRole = 'MEMBER') {
+  const g = await prisma.goldHolding.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!g) throw AppError.notFound('Gold holding');
   return prisma.goldHolding.update({ where: { id }, data });
 }
 
-export async function deleteGoldHolding(userId: string, id: string) {
-  const g = await prisma.goldHolding.findFirst({ where: { id, userId } });
+export async function deleteGoldHolding(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  const g = await prisma.goldHolding.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!g) throw AppError.notFound('Gold holding');
   return prisma.goldHolding.delete({ where: { id } });
 }
 
 // ─── CRUD: Real Estate ────────────────────────────────────────────────────────
 
+type RealEstateOwnerInput = {
+  userId: string;
+  sharePercent: number;
+};
+
+type RealEstateWriteInput = Omit<Prisma.RealEstateUncheckedCreateInput, 'id' | 'userId' | 'createdAt' | 'updatedAt'> & {
+  owners?: RealEstateOwnerInput[];
+};
+
+type RealEstateUpdateInput = Prisma.RealEstateUncheckedUpdateInput & {
+  owners?: RealEstateOwnerInput[];
+};
+
+const realEstateInclude = {
+  loan: true,
+  owners: {
+    include: {
+      user: { select: { id: true, name: true, email: true, colorTag: true } },
+    },
+  },
+} as const;
+
+function normalizeRealEstateOwners(defaultUserId: string, owners?: RealEstateOwnerInput[]) {
+  const rows = owners?.length ? owners : [{ userId: defaultUserId, sharePercent: 100 }];
+  const seen = new Set<string>();
+  let totalShare = 0;
+
+  const normalized = rows.map((owner) => {
+    const sharePercent = Number(owner.sharePercent);
+    if (!owner.userId) throw AppError.validationError('Property owner is required');
+    if (seen.has(owner.userId)) throw AppError.validationError('A property owner can only be added once');
+    if (!Number.isFinite(sharePercent) || sharePercent <= 0 || sharePercent > 100) {
+      throw AppError.validationError('Owner share must be greater than 0 and at most 100');
+    }
+
+    seen.add(owner.userId);
+    const roundedShare = Math.round(sharePercent * 100) / 100;
+    totalShare += roundedShare;
+    return { userId: owner.userId, sharePercent: roundedShare };
+  });
+
+  if (Math.abs(totalShare - 100) > 0.01) {
+    throw AppError.validationError('Property owner shares must add up to 100%');
+  }
+
+  return normalized;
+}
+
+async function assertActiveRealEstateOwners(owners: RealEstateOwnerInput[]) {
+  const ownerIds = owners.map((owner) => owner.userId);
+  const activeUsers = await prisma.user.findMany({
+    where: { id: { in: ownerIds }, isActive: true, deletedAt: null },
+    select: { id: true },
+  });
+  const activeIds = new Set(activeUsers.map((user) => user.id));
+  const missing = ownerIds.find((ownerId) => !activeIds.has(ownerId));
+  if (missing) throw AppError.validationError('All property owners must be active family members');
+}
+
+function decorateRealEstateProperty(row: any, scopedUserId?: string) {
+  const { user, ...property } = row;
+  const owners = (property.owners ?? [])
+    .map((owner: any) => ({
+      id: owner.id,
+      userId: owner.userId,
+      name: owner.user?.name ?? '',
+      email: owner.user?.email ?? '',
+      colorTag: owner.user?.colorTag ?? null,
+      sharePercent: Number(owner.sharePercent),
+    }))
+    .sort((a: any, b: any) => a.name.localeCompare(b.name));
+
+  const purchasePrice = Number(property.purchasePrice);
+  const currentValue = Number(property.currentValue);
+  const rentalIncomeMonthly = property.rentalIncomeMonthly == null ? null : Number(property.rentalIncomeMonthly);
+  const scopedOwner = scopedUserId ? owners.find((owner: any) => owner.userId === scopedUserId) : undefined;
+  const sharePercent = scopedUserId
+    ? scopedOwner?.sharePercent ?? (property.userId === scopedUserId || owners.length === 0 ? 100 : 0)
+    : 100;
+  const shareMultiplier = sharePercent / 100;
+
+  return {
+    ...property,
+    owners,
+    userName: user?.name ?? property.userName ?? '',
+    purchasePrice,
+    currentValue,
+    rentalIncomeMonthly,
+    sharePercent: scopedUserId ? sharePercent : undefined,
+    purchasePriceShare: purchasePrice * shareMultiplier,
+    currentValueShare: currentValue * shareMultiplier,
+    rentalIncomeMonthlyShare: (rentalIncomeMonthly ?? 0) * shareMultiplier,
+  };
+}
+
+function userRealEstateWhere(userId: string): Prisma.RealEstateWhereInput {
+  return {
+    OR: [
+      { userId },
+      { owners: { some: { userId } } },
+    ],
+  };
+}
+
+function userRealEstateWriteWhere(id: string, requesterId: string, requesterRole: string): Prisma.RealEstateWhereInput {
+  if (requesterRole === 'ADMIN') return { id };
+  return {
+    id,
+    OR: [
+      { userId: requesterId },
+      { owners: { some: { userId: requesterId } } },
+    ],
+  };
+}
+
 export async function getRealEstate(userId: string | undefined, requesterId: string, requesterRole: string) {
   let properties: any[];
+  let scopedUserId: string | undefined;
 
   if (requesterRole !== 'ADMIN') {
-    properties = await prisma.realEstate.findMany({
-      where: { userId: requesterId },
-      include: { loan: true },
+    scopedUserId = requesterId;
+    const rows = await prisma.realEstate.findMany({
+      where: userRealEstateWhere(requesterId),
+      include: realEstateInclude,
       orderBy: { purchaseDate: 'desc' },
     });
+    properties = rows.map((row) => decorateRealEstateProperty(row, scopedUserId));
   } else if (userId) {
-    properties = await prisma.realEstate.findMany({
-      where: { userId },
-      include: { loan: true },
+    scopedUserId = userId;
+    const rows = await prisma.realEstate.findMany({
+      where: userRealEstateWhere(userId),
+      include: realEstateInclude,
       orderBy: { purchaseDate: 'desc' },
     });
+    properties = rows.map((row) => decorateRealEstateProperty(row, scopedUserId));
   } else {
     const rows = await prisma.realEstate.findMany({
       where: { user: { isActive: true, deletedAt: null } },
-      include: { loan: true, user: { select: { name: true } } },
+      include: { ...realEstateInclude, user: { select: { name: true } } },
       orderBy: [{ user: { name: 'asc' } }, { purchaseDate: 'desc' }],
     });
-    properties = rows.map(({ user, ...rest }) => ({ ...rest, userName: user?.name ?? '' }));
+    properties = rows.map((row) => decorateRealEstateProperty(row));
   }
 
-  const totalPurchase = properties.reduce((s: number, p: any) => s + Number(p.purchasePrice), 0);
-  const totalCurrent = properties.reduce((s: number, p: any) => s + Number(p.currentValue), 0);
-  const totalRental = properties.reduce((s: number, p: any) => s + (p.rentalIncomeMonthly ? Number(p.rentalIncomeMonthly) : 0), 0);
+  const totalPurchase = properties.reduce((s: number, p: any) => s + (scopedUserId ? Number(p.purchasePriceShare) : Number(p.purchasePrice)), 0);
+  const totalCurrent = properties.reduce((s: number, p: any) => s + (scopedUserId ? Number(p.currentValueShare) : Number(p.currentValue)), 0);
+  const totalRental = properties.reduce((s: number, p: any) => s + (scopedUserId ? Number(p.rentalIncomeMonthlyShare) : Number(p.rentalIncomeMonthly ?? 0)), 0);
   return { properties, summary: { totalPurchase, totalCurrent, unrealisedGain: totalCurrent - totalPurchase, totalMonthlyRental: totalRental } };
 }
 
-export async function createRealEstate(userId: string, data: Omit<Prisma.RealEstateCreateInput, 'user'>) {
-  return prisma.realEstate.create({ data: { ...data, userId } });
+export async function createRealEstate(userId: string, data: RealEstateWriteInput) {
+  const { owners, ...propertyData } = data as any;
+  const ownerRows = normalizeRealEstateOwners(userId, owners);
+  await assertActiveRealEstateOwners(ownerRows);
+
+  const property = await prisma.realEstate.create({
+    data: {
+      ...propertyData,
+      userId,
+      owners: { create: ownerRows.map((owner) => ({ userId: owner.userId, sharePercent: owner.sharePercent })) },
+    } as any,
+    include: realEstateInclude,
+  });
+  return decorateRealEstateProperty(property);
 }
 
-export async function updateRealEstate(userId: string, id: string, data: Prisma.RealEstateUpdateInput) {
-  const r = await prisma.realEstate.findFirst({ where: { id, userId } });
+export async function updateRealEstate(requesterId: string, id: string, data: RealEstateUpdateInput, requesterRole = 'MEMBER') {
+  const r = await prisma.realEstate.findFirst({ where: userRealEstateWriteWhere(id, requesterId, requesterRole) });
   if (!r) throw AppError.notFound('Property');
-  return prisma.realEstate.update({ where: { id }, data });
+
+  const { owners, ...propertyData } = data as any;
+  let ownerRows: ReturnType<typeof normalizeRealEstateOwners> | undefined;
+  if (owners !== undefined) {
+    ownerRows = normalizeRealEstateOwners(r.userId, owners);
+    await assertActiveRealEstateOwners(ownerRows);
+  }
+
+  const property = await prisma.realEstate.update({
+    where: { id },
+    data: {
+      ...propertyData,
+      ...(ownerRows ? { owners: { deleteMany: {}, create: ownerRows.map((owner) => ({ userId: owner.userId, sharePercent: owner.sharePercent })) } } : {}),
+    } as any,
+    include: realEstateInclude,
+  });
+  return decorateRealEstateProperty(property);
 }
 
-export async function deleteRealEstate(userId: string, id: string) {
-  const r = await prisma.realEstate.findFirst({ where: { id, userId } });
+export async function deleteRealEstate(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  const r = await prisma.realEstate.findFirst({ where: userRealEstateWriteWhere(id, requesterId, requesterRole) });
   if (!r) throw AppError.notFound('Property');
   return prisma.realEstate.delete({ where: { id } });
 }

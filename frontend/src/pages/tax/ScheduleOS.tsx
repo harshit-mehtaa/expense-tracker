@@ -62,7 +62,7 @@ export default function ScheduleOS({ fy, viewUserId }: Props) {
   };
 
   const createMutation = useMutation({
-    mutationFn: (data: object) => taxApi.createOtherIncome(data),
+    mutationFn: (data: object) => taxApi.createOtherIncome(data, viewUserId),
     onSuccess: () => { invalidate(); setShowForm(false); reset(); },
   });
 
@@ -159,17 +159,15 @@ export default function ScheduleOS({ fy, viewUserId }: Props) {
         </div>
       )}
 
-      {/* Add button — hidden when viewing another member's data */}
+      {/* Add button */}
       <div className="flex justify-between items-center">
         <h3 className="font-medium text-gray-700">Income from Other Sources</h3>
-        {!viewUserId && (
-          <button
-            onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
-            className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
-          >
-            + Add Entry
-          </button>
-        )}
+        <button
+          onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
+          className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+        >
+          + Add Entry
+        </button>
       </div>
 
       {/* Form */}
@@ -178,7 +176,7 @@ export default function ScheduleOS({ fy, viewUserId }: Props) {
           <input type="hidden" {...register('fyYear')} />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Source Type</label>
+              <label className="field-required block text-sm font-medium mb-1">Source Type</label>
               <select {...register('sourceType')} className="input">
                 <option value="">Select type</option>
                 {Object.entries(SOURCE_LABELS).map(([v, l]) => (
@@ -188,12 +186,12 @@ export default function ScheduleOS({ fy, viewUserId }: Props) {
               {errors.sourceType && <p className="text-red-500 text-xs mt-1">{errors.sourceType.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Description</label>
+              <label className="field-required block text-sm font-medium mb-1">Description</label>
               <input {...register('description')} className="input" placeholder="e.g. SBI FD Interest" />
               {errors.description && <p className="text-red-500 text-xs mt-1">{errors.description.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Amount (₹)</label>
+              <label className="field-required block text-sm font-medium mb-1">Amount (₹)</label>
               <input type="number" step="0.01" {...register('amount')} className="input" />
               {errors.amount && <p className="text-red-500 text-xs mt-1">{errors.amount.message}</p>}
             </div>
@@ -207,7 +205,7 @@ export default function ScheduleOS({ fy, viewUserId }: Props) {
               )}
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm font-medium mb-1">Notes</label>
+              <label className="block text-sm font-medium mb-1">Notes (optional)</label>
               <input {...register('notes')} className="input" placeholder="Optional" />
             </div>
           </div>
@@ -245,7 +243,7 @@ export default function ScheduleOS({ fy, viewUserId }: Props) {
                   <td className="py-2 pr-3 text-right">{formatCurrency(Number(e.amount))}</td>
                   <td className="py-2 pr-3 text-right text-gray-500">{e.tdsDeducted ? formatCurrency(Number(e.tdsDeducted)) : '—'}</td>
                   <td className="py-2 flex gap-2">
-                    {!viewUserId && (
+                    {(
                       <>
                         <button onClick={() => startEdit(e)} className="text-blue-600 hover:underline text-xs">Edit</button>
                         <button onClick={() => deleteMutation.mutate(e.id)} className="text-red-500 hover:underline text-xs">Delete</button>

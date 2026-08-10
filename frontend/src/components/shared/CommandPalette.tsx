@@ -4,7 +4,6 @@ import { Search, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { INRDisplay } from './INRDisplay';
-import { cn } from '@/lib/utils';
 
 interface Props {
   open: boolean;

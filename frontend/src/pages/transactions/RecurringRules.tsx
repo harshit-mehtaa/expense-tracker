@@ -21,6 +21,7 @@ import {
 } from '@/api/recurring';
 import api from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { getCategoryLabel, getCategoryPath, sortCategoriesByNameAsc } from '@/lib/categoryUtils';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 
 const FREQUENCY_LABELS: Record<RecurringFrequency, string> = {
@@ -47,16 +48,18 @@ function useCategories() {
   return useQuery({
     queryKey: ['categories', 'all'],
     queryFn: () =>
-      api.get<{ data: { id: string; name: string; type: string }[] }>('/categories')
+      api.get<{ data: { id: string; name: string; type: string; icon?: string | null; parentId?: string | null; parent?: any }[] }>('/categories')
         .then((r) => r.data.data),
   });
 }
 
-function useBankAccounts() {
+function useBankAccounts(targetUserId?: string) {
   return useQuery({
-    queryKey: ['accounts'],
+    queryKey: ['accounts', targetUserId],
     queryFn: () =>
-      api.get<{ data: { id: string; bankName: string; accountNumberLast4: string | null }[] }>('/accounts').then((r) => r.data.data),
+      api.get<{ data: { id: string; bankName: string; accountNumberLast4: string | null }[] }>('/accounts', {
+        params: targetUserId ? { userId: targetUserId } : {},
+      }).then((r) => r.data.data),
   });
 }
 
@@ -64,7 +67,6 @@ export default function RecurringRulesPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading } = useMemberSelector();
-  const isViewingOther = isAdmin && viewUserId !== undefined;
   const [showForm, setShowForm] = useState(false);
   const [editingRule, setEditingRule] = useState<RecurringRule | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -76,7 +78,7 @@ export default function RecurringRulesPage() {
 
   const { data: categories = [] } = useCategories();
   const ruleCategories = categories.filter((c) => c.type === 'INCOME' || c.type === 'EXPENSE');
-  const { data: accounts = [] } = useBankAccounts();
+  const { data: accounts = [] } = useBankAccounts(viewUserId);
 
   const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm<RuleForm>({
     resolver: zodResolver(ruleSchema),
@@ -98,7 +100,7 @@ export default function RecurringRulesPage() {
   }, [viewUserId, reset]);
 
   const createMutation = useMutation({
-    mutationFn: (data: CreateRecurringRuleInput) => createRecurringRule(data),
+    mutationFn: (data: CreateRecurringRuleInput) => createRecurringRule(data, viewUserId),
     onSuccess: () => {
       toast({ title: 'Recurring rule created', variant: 'success' });
       invalidate();
@@ -128,7 +130,7 @@ export default function RecurringRulesPage() {
   });
 
   const generateMutation = useMutation({
-    mutationFn: triggerGenerate,
+    mutationFn: () => triggerGenerate(viewUserId),
     onSuccess: (result) => {
       toast({
         title: `Generated ${result.generated} transaction${result.generated !== 1 ? 's' : ''}`,
@@ -150,6 +152,8 @@ export default function RecurringRulesPage() {
         bankAccountId: t.bankAccountId ?? undefined,
         paymentMode: t.paymentMode ?? undefined,
         tags: t.tags ?? [],
+      }, {
+        params: isAdmin ? { targetUserId: rule.userId } : {},
       });
     },
     onSuccess: (_, rule) => {
@@ -220,44 +224,40 @@ export default function RecurringRulesPage() {
               </select>
             </div>
           )}
-          {!isViewingOther && (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => generateMutation.mutate()}
-                disabled={generateMutation.isPending}
-              >
-                <RefreshCw className={cn('h-4 w-4 mr-1', generateMutation.isPending && 'animate-spin')} />
-                Generate Now
-              </Button>
-              <Button size="sm" onClick={() => { setEditingRule(null); reset(); setShowForm(true); }}>
-                <PlusCircle className="h-4 w-4 mr-1" />
-                Add Rule
-              </Button>
-            </>
-          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => generateMutation.mutate()}
+            disabled={generateMutation.isPending}
+          >
+            <RefreshCw className={cn('h-4 w-4 mr-1', generateMutation.isPending && 'animate-spin')} />
+            Generate Now
+          </Button>
+          <Button size="sm" onClick={() => { setEditingRule(null); reset(); setShowForm(true); }}>
+            <PlusCircle className="h-4 w-4 mr-1" />
+            Add Rule
+          </Button>
         </div>
       </div>
 
       {/* Add / Edit form */}
-      {showForm && !isViewingOther && (
+      {showForm && (
         <div className="rounded-xl border border-border bg-card p-5 space-y-4">
           <h2 className="text-base font-semibold">{editingRule ? 'Edit Rule' : 'New Recurring Rule'}</h2>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <Label htmlFor="description">Description</Label>
+                <Label htmlFor="description" required>Description</Label>
                 <Input id="description" {...register('description')} disabled={!!editingRule} />
                 {errors.description && <p className="text-xs text-red-500 mt-1">{errors.description.message}</p>}
               </div>
               <div>
-                <Label htmlFor="amount">Amount (₹)</Label>
+                <Label htmlFor="amount" required>Amount (₹)</Label>
                 <Input id="amount" type="number" step="0.01" {...register('amount')} disabled={!!editingRule} />
                 {errors.amount && <p className="text-xs text-red-500 mt-1">{errors.amount.message}</p>}
               </div>
               <div>
-                <Label htmlFor="type">Type</Label>
+                <Label htmlFor="type" required>Type</Label>
                 <select id="type" {...register('type')} disabled={!!editingRule}
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">
                   <option value="EXPENSE">Expense</option>
@@ -266,7 +266,7 @@ export default function RecurringRulesPage() {
                 </select>
               </div>
               <div>
-                <Label htmlFor="frequency">Frequency</Label>
+                <Label htmlFor="frequency" required>Frequency</Label>
                 <select id="frequency" {...register('frequency')}
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   {Object.entries(FREQUENCY_LABELS).map(([value, label]) => (
@@ -275,7 +275,7 @@ export default function RecurringRulesPage() {
                 </select>
               </div>
               <div>
-                <Label htmlFor="nextRunDate">Next Run Date</Label>
+                <Label htmlFor="nextRunDate" required>Next Run Date</Label>
                 <Input id="nextRunDate" type="date" {...register('nextRunDate')} />
                 {errors.nextRunDate && <p className="text-xs text-red-500 mt-1">{errors.nextRunDate.message}</p>}
               </div>
@@ -285,8 +285,8 @@ export default function RecurringRulesPage() {
                   <select id="categoryId" {...register('categoryId')}
                     className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                     <option value="">— None —</option>
-                    {ruleCategories.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
+                    {sortCategoriesByNameAsc(ruleCategories).map((c) => (
+                      <option key={c.id} value={c.id}>{getCategoryLabel(c, categories)}</option>
                     ))}
                   </select>
                 </div>
@@ -338,66 +338,64 @@ export default function RecurringRulesPage() {
                   <span>{rule.templateTransaction.type}</span>
                   <span>{FREQUENCY_LABELS[rule.frequency]}</span>
                   {rule.templateTransaction.category && (
-                    <span className="truncate">{rule.templateTransaction.category.name}</span>
+                    <span className="truncate">{getCategoryPath(rule.templateTransaction.category, categories)}</span>
                   )}
                   <span>Next: {new Date(rule.nextRunDate).toLocaleDateString('en-IN')}</span>
                 </div>
               </div>
-              {!isViewingOther && (
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    onClick={() => rule.isActive && applyMutation.mutate(rule)}
-                    disabled={!rule.isActive || applyMutation.isPending}
-                    className={cn(
-                      'p-1.5 rounded hover:bg-muted',
-                      rule.isActive
-                        ? 'text-primary hover:text-primary/80'
-                        : 'text-muted-foreground opacity-40 cursor-not-allowed',
-                    )}
-                    title={rule.isActive ? 'Apply now (create transaction for today)' : 'Rule is paused'}
-                  >
-                    <Zap className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => updateMutation.mutate({ id: rule.id, data: { isActive: !rule.isActive } })}
-                    className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                    title={rule.isActive ? 'Pause' : 'Resume'}
-                  >
-                    {rule.isActive ? <ToggleRight className="h-4 w-4 text-green-600" /> : <ToggleLeft className="h-4 w-4" />}
-                  </button>
-                  <button
-                    onClick={() => startEdit(rule)}
-                    className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                    title="Edit"
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </button>
-                  {deleteConfirmId === rule.id ? (
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => deleteMutation.mutate(rule.id)}
-                        className="text-xs text-red-600 hover:underline px-1"
-                      >
-                        Confirm
-                      </button>
-                      <button
-                        onClick={() => setDeleteConfirmId(null)}
-                        className="text-xs text-muted-foreground hover:underline px-1"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setDeleteConfirmId(rule.id)}
-                      className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-red-500"
-                      title="Delete"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  onClick={() => rule.isActive && applyMutation.mutate(rule)}
+                  disabled={!rule.isActive || applyMutation.isPending}
+                  className={cn(
+                    'p-1.5 rounded hover:bg-muted',
+                    rule.isActive
+                      ? 'text-primary hover:text-primary/80'
+                      : 'text-muted-foreground opacity-40 cursor-not-allowed',
                   )}
-                </div>
-              )}
+                  title={rule.isActive ? 'Apply now (create transaction for today)' : 'Rule is paused'}
+                >
+                  <Zap className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => updateMutation.mutate({ id: rule.id, data: { isActive: !rule.isActive } })}
+                  className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                  title={rule.isActive ? 'Pause' : 'Resume'}
+                >
+                  {rule.isActive ? <ToggleRight className="h-4 w-4 text-green-600" /> : <ToggleLeft className="h-4 w-4" />}
+                </button>
+                <button
+                  onClick={() => startEdit(rule)}
+                  className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                  title="Edit"
+                >
+                  <Pencil className="h-4 w-4" />
+                </button>
+                {deleteConfirmId === rule.id ? (
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => deleteMutation.mutate(rule.id)}
+                      className="text-xs text-red-600 hover:underline px-1"
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      onClick={() => setDeleteConfirmId(null)}
+                      className="text-xs text-muted-foreground hover:underline px-1"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setDeleteConfirmId(rule.id)}
+                    className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-red-500"
+                    title="Delete"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>

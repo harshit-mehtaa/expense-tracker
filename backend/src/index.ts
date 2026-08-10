@@ -8,7 +8,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 
-import { env, isDev } from './config/env';
+import { env, isDev, isTest } from './config/env';
 import { requireAuth } from './middleware/auth';
 import { errorHandler } from './middleware/errorHandler';
 import { asyncHandler } from './utils/asyncHandler';
@@ -35,11 +35,17 @@ import budgetsRouter from './routes/budgets';
 import recurringRouter from './routes/recurring';
 import snapshotsRouter from './routes/snapshots';
 import reportsRouter from './routes/reports';
+import categoryRulesRouter from './routes/categoryRules';
+import documentsRouter from './routes/documents';
 
 // Import service
 import { parseCSV, parsePDF, makeImportHash } from './services/importService';
 import { prisma } from './config/prisma';
 import { AppError } from './utils/AppError';
+import { applyCategoryRules } from './services/categoryRuleService';
+import { recordAuditLog } from './services/auditService';
+import { generateDueRecurringTransactionsForAllUsers } from './services/recurringService';
+import { resolveWriteUserId } from './utils/resolveTargetUserId';
 
 const app = express();
 
@@ -107,6 +113,8 @@ app.use('/api/budgets', budgetsRouter);
 app.use('/api/recurring', recurringRouter);
 app.use('/api/snapshots/net-worth', snapshotsRouter);
 app.use('/api/reports', reportsRouter);
+app.use('/api/category-rules', categoryRulesRouter);
+app.use('/api/documents', documentsRouter);
 
 // ── Bank Statement Import ─────────────────────────────────────────────────────
 app.post(
@@ -119,6 +127,7 @@ app.post(
     const accountId = req.body.bankAccountId as string | undefined;
     const bankHint = req.body.bank as string | undefined;
     const pdfPassword = req.body.pdfPassword as string | undefined;
+    const ownerUserId = await resolveWriteUserId(req);
 
     const isPDF = req.file.mimetype === 'application/pdf'
       || req.file.mimetype === 'application/x-pdf'
@@ -140,10 +149,12 @@ app.post(
       throw AppError.badRequest(`No transactions parsed. Errors: ${result.errors.slice(0, 3).map((e) => e.message).join(', ')}`);
     }
 
+    const categorized = await applyCategoryRules(ownerUserId, result.transactions);
+
     // Verify account belongs to user (if provided)
     if (accountId) {
       const account = await prisma.bankAccount.findFirst({
-        where: { id: accountId, userId: req.user!.userId },
+        where: { id: accountId, userId: ownerUserId },
       });
       if (!account) throw AppError.notFound('Bank account');
     }
@@ -151,8 +162,8 @@ app.post(
     // Compute import hashes upfront.
     // scopeId = accountId when linked to an account; userId otherwise.
     // This ensures deduplication works even without a linked account (re-import is always safe).
-    const scopeId = accountId ?? req.user!.userId;
-    const txsWithHash = result.transactions.map((tx) => ({
+    const scopeId = accountId ?? ownerUserId;
+    const txsWithHash = categorized.transactions.map((tx) => ({
       ...tx,
       hash: makeImportHash(tx.date, tx.amount, tx.type, tx.description, scopeId),
     }));
@@ -177,13 +188,16 @@ app.post(
         for (const t of toCreate) {
           await tx.transaction.create({
             data: {
-              userId: req.user!.userId,
+              userId: ownerUserId,
               bankAccountId: accountId ?? null,
               amount: t.amount,
               type: t.type,
+              categoryId: t.categoryId ?? null,
               description: t.description,
+              remark: t.remark ?? null,
               date: t.date,
-              paymentMode: null,
+              paymentMode: t.paymentMode ?? null,
+              balanceImpactApplied: true,
               importHash: t.hash,
             },
           });
@@ -207,9 +221,9 @@ app.post(
     }
 
     // Record import in audit table (filename sanitized to prevent stored XSS)
-    await prisma.bankStatementImport.create({
+    const importRecord = await prisma.bankStatementImport.create({
       data: {
-        userId: req.user!.userId,
+        userId: ownerUserId,
         bankAccountId: accountId ?? null,
         bankName: result.bank,
         rowCount: result.transactions.length,
@@ -220,11 +234,20 @@ app.post(
       },
     });
 
+    await recordAuditLog({
+      performedByUserId: req.user!.userId,
+      action: 'CREATE',
+      entityType: 'BankStatementImport',
+      entityId: importRecord.id,
+      newValue: importRecord,
+    });
+
     sendCreated(res, {
       bank: result.bank,
       total: result.transactions.length,
       imported,
       duplicatesSkipped: duplicates,
+      categorized: categorized.appliedCount,
       errors: errors.slice(0, 10),
       parseErrors: result.errors.slice(0, 10),
       warnings: result.warnings,
@@ -239,5 +262,26 @@ app.use(errorHandler);
 app.listen(env.PORT, () => {
   console.log(`🚀 Family Finance API running on port ${env.PORT} [${env.NODE_ENV}]`);
 });
+
+let recurringCatchUpRunning = false;
+async function runRecurringCatchUp() {
+  if (recurringCatchUpRunning) return;
+  recurringCatchUpRunning = true;
+  try {
+    const result = await generateDueRecurringTransactionsForAllUsers();
+    if (result.generated > 0) {
+      console.log(`[recurring] generated ${result.generated} transaction(s) for ${result.usersProcessed} user(s)`);
+    }
+  } catch (err) {
+    console.error('[recurring] catch-up failed', err);
+  } finally {
+    recurringCatchUpRunning = false;
+  }
+}
+
+if (!isTest) {
+  setTimeout(runRecurringCatchUp, 2_000);
+  setInterval(runRecurringCatchUp, 60 * 60 * 1000);
+}
 
 export default app;

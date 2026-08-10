@@ -1,7 +1,11 @@
 import dayjs from 'dayjs';
-import { Prisma, RecurringFrequency } from '@prisma/client';
+import { PaymentMode, Prisma, RecurringFrequency, TransactionType } from '@prisma/client';
 import prisma from '../config/prisma';
 import { AppError } from '../utils/AppError';
+import { ownerScopedWhere } from '../utils/resolveTargetUserId';
+
+const MAX_CATCH_UP_PER_RULE = 366;
+type DueRecurringRule = Prisma.RecurringRuleGetPayload<{ include: { templateTransaction: true } }>;
 
 function advanceDate(date: Date, frequency: RecurringFrequency): Date {
   const d = dayjs(date);
@@ -37,8 +41,8 @@ export async function createRecurringRule(userId: string, data: CreateRecurringR
         bankAccountId: data.bankAccountId,
         categoryId: data.categoryId,
         amount: data.amount,
-        type: data.type as Prisma.EnumTransactionTypeFilter['equals'],
-        paymentMode: data.paymentMode as Prisma.EnumPaymentModeFilter['equals'] | undefined,
+        type: data.type as TransactionType,
+        paymentMode: data.paymentMode as PaymentMode | undefined,
         description: data.description,
         date: nextRunDate,
         tags: data.tags ?? [],
@@ -57,7 +61,7 @@ export async function createRecurringRule(userId: string, data: CreateRecurringR
       },
       include: {
         templateTransaction: {
-          include: { category: { select: { name: true, color: true } } },
+          include: { category: { select: { id: true, name: true, color: true, icon: true, parentId: true, parent: { select: { id: true, name: true, icon: true, parentId: true } } } } },
         },
       },
     });
@@ -72,7 +76,7 @@ export async function listRecurringRules(userId: string) {
     include: {
       templateTransaction: {
         include: {
-          category: { select: { id: true, name: true, color: true, icon: true } },
+          category: { select: { id: true, name: true, color: true, icon: true, parentId: true, parent: { select: { id: true, name: true, icon: true, parentId: true } } } },
           bankAccount: { select: { bankName: true, accountNumberLast4: true } },
         },
       },
@@ -83,10 +87,11 @@ export async function listRecurringRules(userId: string) {
 
 export async function updateRecurringRule(
   ruleId: string,
-  userId: string,
+  requesterId: string,
   data: Partial<{ frequency: RecurringFrequency; nextRunDate: string; isActive: boolean }>,
+  requesterRole = 'MEMBER',
 ) {
-  const rule = await prisma.recurringRule.findFirst({ where: { id: ruleId, userId } });
+  const rule = await prisma.recurringRule.findFirst({ where: ownerScopedWhere(ruleId, requesterId, requesterRole) });
   if (!rule) throw AppError.notFound('Recurring rule');
 
   return prisma.recurringRule.update({
@@ -98,14 +103,14 @@ export async function updateRecurringRule(
     },
     include: {
       templateTransaction: {
-        include: { category: { select: { name: true, color: true } } },
+        include: { category: { select: { id: true, name: true, color: true, icon: true, parentId: true, parent: { select: { id: true, name: true, icon: true, parentId: true } } } } },
       },
     },
   });
 }
 
-export async function deleteRecurringRule(ruleId: string, userId: string) {
-  const rule = await prisma.recurringRule.findFirst({ where: { id: ruleId, userId } });
+export async function deleteRecurringRule(ruleId: string, requesterId: string, requesterRole = 'MEMBER') {
+  const rule = await prisma.recurringRule.findFirst({ where: ownerScopedWhere(ruleId, requesterId, requesterRole) });
   if (!rule) throw AppError.notFound('Recurring rule');
 
   await prisma.$transaction(async (tx) => {
@@ -119,10 +124,71 @@ export async function deleteRecurringRule(ruleId: string, userId: string) {
   });
 }
 
+function transactionBalanceDelta(type: string, amount: Prisma.Decimal | number): number {
+  const value = Number(amount);
+  return type === 'INCOME' ? value : -value;
+}
+
+async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<number> {
+  const template = rule.templateTransaction;
+  if (template.deletedAt) return 0;
+
+  let generated = 0;
+  let runDate = rule.nextRunDate;
+
+  while (runDate <= now && generated < MAX_CATCH_UP_PER_RULE) {
+    const dueDate = runDate;
+    const nextRunDate = advanceDate(dueDate, rule.frequency);
+
+    const created = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.recurringRule.updateMany({
+        where: {
+          id: rule.id,
+          isActive: true,
+          nextRunDate: dueDate,
+        },
+        data: { nextRunDate },
+      });
+      if (count === 0) return false;
+
+      await tx.transaction.create({
+        data: {
+          userId: template.userId,
+          bankAccountId: template.bankAccountId,
+          categoryId: template.categoryId,
+          amount: template.amount,
+          type: template.type,
+          paymentMode: template.paymentMode,
+          description: template.description,
+          date: dueDate,
+          tags: template.tags,
+          isRecurring: false,
+          gstAmount: template.gstAmount,
+        },
+      });
+
+      if (template.bankAccountId) {
+        await tx.bankAccount.update({
+          where: { id: template.bankAccountId },
+          data: { currentBalance: { increment: transactionBalanceDelta(template.type, template.amount) } },
+        });
+      }
+
+      return true;
+    });
+
+    if (!created) break;
+    generated++;
+    runDate = nextRunDate;
+  }
+
+  return generated;
+}
+
 /**
- * Generates transactions for all due recurring rules for a user.
- * Race-condition safe: uses an atomic updateMany with a nextRunDate guard
- * so concurrent calls (e.g. two dashboard loads) cannot generate duplicates.
+ * Generates all missed recurring transactions for a user.
+ * Race-condition safe: each occurrence advances nextRunDate with an atomic
+ * guard before the transaction is created, so concurrent jobs cannot duplicate.
  */
 export async function generateDueRecurringTransactions(userId: string): Promise<{ generated: number }> {
   const now = new Date();
@@ -134,44 +200,22 @@ export async function generateDueRecurringTransactions(userId: string): Promise<
   });
 
   let generated = 0;
-
-  for (const rule of dueRules) {
-    const template = rule.templateTransaction;
-    if (template.deletedAt) continue; // Template was deleted; skip silently
-
-    const nextNextRunDate = advanceDate(rule.nextRunDate, rule.frequency);
-
-    // Atomic guard: only advance nextRunDate if it hasn't been changed by a concurrent request
-    const { count } = await prisma.recurringRule.updateMany({
-      where: {
-        id: rule.id,
-        isActive: true,
-        nextRunDate: rule.nextRunDate, // Must still match — prevents duplicate generation
-      },
-      data: { nextRunDate: nextNextRunDate },
-    });
-
-    if (count === 0) continue; // Another request already ran this rule — skip
-
-    // Create the generated transaction (copy of template, not itself a template)
-    await prisma.transaction.create({
-      data: {
-        userId: template.userId,
-        bankAccountId: template.bankAccountId,
-        categoryId: template.categoryId,
-        amount: template.amount,
-        type: template.type,
-        paymentMode: template.paymentMode,
-        description: template.description,
-        date: rule.nextRunDate, // Use the original due date, not "now"
-        tags: template.tags,
-        isRecurring: false,
-        gstAmount: template.gstAmount,
-      },
-    });
-
-    generated++;
-  }
+  for (const rule of dueRules) generated += await generateRuleCatchUp(rule, now);
 
   return { generated };
+}
+
+export async function generateDueRecurringTransactionsForAllUsers(): Promise<{ generated: number; usersProcessed: number }> {
+  const users = await prisma.user.findMany({
+    where: { isActive: true, deletedAt: null },
+    select: { id: true },
+  });
+
+  let generated = 0;
+  for (const user of users) {
+    const result = await generateDueRecurringTransactions(user.id);
+    generated += result.generated;
+  }
+
+  return { generated, usersProcessed: users.length };
 }

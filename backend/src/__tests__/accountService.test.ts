@@ -76,16 +76,17 @@ describe('getAccounts', () => {
     );
   });
 
-  it('ADMIN with undefined userId: family-wide query (no userId filter), includes user name', async () => {
+  it('ADMIN with undefined userId: family-wide query (no userId filter), includes user owner fields', async () => {
     acctMock.findMany.mockResolvedValue([
-      { id: 'acct-1', bankName: 'HDFC', userId: 'u1', isActive: true, user: { name: 'Alice' } },
+      { id: 'acct-1', bankName: 'HDFC', userId: 'u1', isActive: true, user: { name: 'Alice', colorTag: '#0ea5e9' } },
     ]);
     const result = await getAccounts(undefined, 'admin-1', 'ADMIN');
     const call = acctMock.findMany.mock.calls[0][0];
     expect(call.where).not.toHaveProperty('userId');
     expect(call.where).toEqual({ isActive: true, user: { isActive: true, deletedAt: null } });
-    expect(call.include).toEqual({ user: { select: { name: true } } });
+    expect(call.include).toEqual({ user: { select: { name: true, colorTag: true } } });
     expect((result[0] as any).userName).toBe('Alice');
+    expect((result[0] as any).userColorTag).toBe('#0ea5e9');
     expect((result[0] as any).user).toBeUndefined();
   });
 
@@ -159,6 +160,63 @@ describe('createAccount', () => {
     expect(result).toBe(newAcct);
   });
 
+  it('stores the normalized full account number and derives the last 4 digits', async () => {
+    acctMock.create.mockResolvedValue(MOCK_ACCOUNT);
+
+    await createAccount('u1', {
+      bankName: 'HDFC',
+      accountType: 'SAVINGS',
+      accountNumber: '1234 5678-9012',
+    });
+
+    expect(acctMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          accountNumber: '123456789012',
+          accountNumberLast4: '9012',
+        }),
+      }),
+    );
+  });
+
+  it('stores the normalized full IFSC code and derives the IFSC prefix', async () => {
+    acctMock.create.mockResolvedValue(MOCK_ACCOUNT);
+
+    await createAccount('u1', {
+      bankName: 'HDFC',
+      accountType: 'SAVINGS',
+      ifscCode: 'hdfc 0001234',
+    } as any);
+
+    expect(acctMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          ifscCode: 'HDFC0001234',
+          ifscPrefix: 'HDFC',
+        }),
+      }),
+    );
+  });
+
+  it('keeps legacy IFSC prefix when full IFSC code is not provided', async () => {
+    acctMock.create.mockResolvedValue(MOCK_ACCOUNT);
+
+    await createAccount('u1', {
+      bankName: 'HDFC',
+      accountType: 'SAVINGS',
+      ifscPrefix: 'hdfc',
+    });
+
+    expect(acctMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          ifscCode: undefined,
+          ifscPrefix: 'HDFC',
+        }),
+      }),
+    );
+  });
+
   it('converts maturityDate string to Date', async () => {
     acctMock.create.mockResolvedValue(MOCK_ACCOUNT);
     await createAccount('u1', {
@@ -168,6 +226,32 @@ describe('createAccount', () => {
     });
     const createCall = acctMock.create.mock.calls[0][0];
     expect(createCall.data.maturityDate).toBeInstanceOf(Date);
+  });
+
+  it('stores card billing cycle details', async () => {
+    acctMock.create.mockResolvedValue(MOCK_ACCOUNT);
+
+    await createAccount('u1', {
+      bankName: 'ICICI',
+      accountType: 'CREDIT_CARD',
+      currentBalance: -25000,
+      creditLimit: 300000,
+      billingCycleStartDay: 2,
+      billingCycleEndDay: 1,
+      paymentDueDay: 18,
+    });
+
+    expect(acctMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          accountType: 'CREDIT_CARD',
+          creditLimit: 300000,
+          billingCycleStartDay: 2,
+          billingCycleEndDay: 1,
+          paymentDueDay: 18,
+        }),
+      }),
+    );
   });
 });
 
@@ -187,12 +271,56 @@ describe('updateAccount', () => {
     expect(result).toBe(updated);
   });
 
+  it('updates the full account number and last 4 together', async () => {
+    await updateAccount('acct-1', 'u1', 'MEMBER', { accountNumber: '0000 1111 2222' } as any);
+    expect(acctMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          accountNumber: '000011112222',
+          accountNumberLast4: '2222',
+        }),
+      }),
+    );
+  });
+
+  it('updates the full IFSC code and prefix together', async () => {
+    await updateAccount('acct-1', 'u1', 'MEMBER', { ifscCode: 'icic0005678' } as any);
+    expect(acctMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          ifscCode: 'ICIC0005678',
+          ifscPrefix: 'ICIC',
+        }),
+      }),
+    );
+  });
+
   it('converts maturityDate string to Date object when provided (true branch)', async () => {
     const updated = { ...MOCK_ACCOUNT, maturityDate: new Date('2026-03-31') };
     acctMock.update.mockResolvedValue(updated);
     await updateAccount('acct-1', 'u1', 'MEMBER', { maturityDate: '2026-03-31' } as any);
     const call = acctMock.update.mock.calls[0][0];
     expect(call.data.maturityDate).toBeInstanceOf(Date);
+  });
+
+  it('updates card billing cycle details', async () => {
+    await updateAccount('acct-1', 'u1', 'MEMBER', {
+      creditLimit: 250000,
+      billingCycleStartDay: 5,
+      billingCycleEndDay: 4,
+      paymentDueDay: 20,
+    } as any);
+
+    expect(acctMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          creditLimit: 250000,
+          billingCycleStartDay: 5,
+          billingCycleEndDay: 4,
+          paymentDueDay: 20,
+        }),
+      }),
+    );
   });
 
   it('propagates NotFound from getAccountById', async () => {

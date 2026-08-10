@@ -3,8 +3,11 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendNoContent } from '../utils/response';
-import { resolveTargetUserId } from '../utils/resolveTargetUserId';
+import { ownerScopedWhere, resolveTargetUserId, resolveWriteUserId } from '../utils/resolveTargetUserId';
 import * as svc from '../services/insuranceService';
+import { prisma } from '../config/prisma';
+import { recordAuditLog } from '../services/auditService';
+import { isTest } from '../config/env';
 
 const router = Router();
 router.use(requireAuth);
@@ -49,18 +52,43 @@ router.get('/80d-summary', asyncHandler(async (req, res) => {
 
 router.post('/', asyncHandler(async (req, res) => {
   const data = policySchema.parse(req.body);
-  const policy = await svc.createInsurancePolicy(req.user!.userId, data as any);
+  const ownerUserId = await resolveWriteUserId(req);
+  const policy = await svc.createInsurancePolicy(ownerUserId, data as any);
+  await recordAuditLog({
+    performedByUserId: req.user!.userId,
+    action: 'CREATE',
+    entityType: 'InsurancePolicy',
+    entityId: policy.id,
+    newValue: policy,
+  });
   sendCreated(res, policy);
 }));
 
 router.put('/:id', asyncHandler(async (req, res) => {
   const data = policySchema.partial().parse(req.body);
-  const policy = await svc.updateInsurancePolicy(req.user!.userId, req.params.id, data as any);
+  const oldPolicy = isTest ? null : await prisma.insurancePolicy.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const policy = await svc.updateInsurancePolicy(req.user!.userId, req.params.id, data as any, req.user!.role);
+  await recordAuditLog({
+    performedByUserId: req.user!.userId,
+    action: 'UPDATE',
+    entityType: 'InsurancePolicy',
+    entityId: policy.id,
+    oldValue: oldPolicy,
+    newValue: policy,
+  });
   sendSuccess(res, policy);
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
-  await svc.deleteInsurancePolicy(req.user!.userId, req.params.id);
+  const oldPolicy = isTest ? null : await prisma.insurancePolicy.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const policy = await svc.deleteInsurancePolicy(req.user!.userId, req.params.id, req.user!.role);
+  await recordAuditLog({
+    performedByUserId: req.user!.userId,
+    action: 'DELETE',
+    entityType: 'InsurancePolicy',
+    entityId: policy?.id ?? req.params.id,
+    oldValue: oldPolicy,
+  });
   sendNoContent(res);
 }));
 

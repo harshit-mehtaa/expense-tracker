@@ -1,5 +1,6 @@
 import { prisma } from '../config/prisma';
 import type { Prisma } from '@prisma/client';
+import { ownerScopedWhere } from '../utils/resolveTargetUserId';
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
 
@@ -24,21 +25,22 @@ export async function createForeignAsset(
 }
 
 export async function updateForeignAsset(
-  userId: string,
+  requesterId: string,
   id: string,
   data: Partial<Prisma.ForeignAssetDisclosureUncheckedUpdateInput>,
+  requesterRole = 'MEMBER',
 ) {
   const result = await prisma.foreignAssetDisclosure.updateMany({
-    where: { id, userId, deletedAt: null },
+    where: { ...ownerScopedWhere(id, requesterId, requesterRole), deletedAt: null },
     data,
   });
   if (result.count === 0) return null;
-  return prisma.foreignAssetDisclosure.findFirst({ where: { id, userId, deletedAt: null } });
+  return prisma.foreignAssetDisclosure.findFirst({ where: { id, deletedAt: null } });
 }
 
-export async function deleteForeignAsset(userId: string, id: string) {
+export async function deleteForeignAsset(requesterId: string, id: string, requesterRole = 'MEMBER') {
   const result = await prisma.foreignAssetDisclosure.updateMany({
-    where: { id, userId, deletedAt: null },
+    where: { ...ownerScopedWhere(id, requesterId, requesterRole), deletedAt: null },
     data: { deletedAt: new Date() },
   });
   return result.count > 0 ? { deleted: true } : null;

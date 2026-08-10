@@ -4,8 +4,11 @@ import { requireAuth, requireAdmin } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendNoContent, sendPaginated } from '../utils/response';
 import { getCurrentFY } from '../utils/financialYear';
-import { resolveTargetUserId } from '../utils/resolveTargetUserId';
+import { ownerScopedWhere, resolveTargetUserId, resolveWriteUserId } from '../utils/resolveTargetUserId';
 import * as svc from '../services/investmentService';
+import { prisma } from '../config/prisma';
+import { recordAuditLog } from '../services/auditService';
+import { isTest } from '../config/env';
 
 function parseFY(raw: unknown): string {
   const s = typeof raw === 'string' ? raw : '';
@@ -18,13 +21,15 @@ router.use(requireAuth);
 // ─── Portfolio ────────────────────────────────────────────────────────────────
 
 router.get('/portfolio-summary', asyncHandler(async (req, res) => {
-  const summary = await svc.getPortfolioSummary(req.user!.userId);
+  const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
+  const summary = await svc.getPortfolioSummary(targetUserId, req.user!.userId, req.user!.role);
   sendSuccess(res, summary);
 }));
 
 router.get('/80c-summary', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
-  const summary = await svc.get80CSummary(req.user!.userId, fy);
+  const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
+  const summary = await svc.get80CSummary(targetUserId, fy, req.user!.userId, req.user!.role);
   sendSuccess(res, summary);
 }));
 
@@ -38,7 +43,16 @@ router.get('/exchange-rates', asyncHandler(async (_req, res) => {
 router.put('/exchange-rates/:currency', requireAdmin, asyncHandler(async (req, res) => {
   const { currency } = req.params;
   const { rate } = z.object({ rate: z.number().positive() }).parse(req.body);
+  const oldRate = isTest ? null : await prisma.exchangeRate.findUnique({ where: { fromCurrency_toCurrency: { fromCurrency: currency.toUpperCase(), toCurrency: 'INR' } } });
   const updated = await svc.upsertExchangeRate(currency.toUpperCase(), rate, req.user!.userId);
+  await recordAuditLog({
+    performedByUserId: req.user!.userId,
+    action: oldRate ? 'UPDATE' : 'CREATE',
+    entityType: 'ExchangeRate',
+    entityId: updated.id,
+    oldValue: oldRate,
+    newValue: updated,
+  });
   sendSuccess(res, updated);
 }));
 
@@ -74,18 +88,24 @@ router.get('/fd/maturing-soon', asyncHandler(async (req, res) => {
 
 router.post('/fd', asyncHandler(async (req, res) => {
   const data = fdSchema.parse(req.body);
-  const fd = await svc.createFD(req.user!.userId, data as any);
+  const ownerUserId = await resolveWriteUserId(req);
+  const fd = await svc.createFD(ownerUserId, data as any);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'CREATE', entityType: 'FixedDeposit', entityId: fd.id, newValue: fd });
   sendCreated(res, fd);
 }));
 
 router.put('/fd/:id', asyncHandler(async (req, res) => {
   const data = fdSchema.partial().parse(req.body);
-  const fd = await svc.updateFD(req.user!.userId, req.params.id, data as any);
+  const oldFd = isTest ? null : await prisma.fixedDeposit.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const fd = await svc.updateFD(req.user!.userId, req.params.id, data as any, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'FixedDeposit', entityId: fd.id, oldValue: oldFd, newValue: fd });
   sendSuccess(res, fd);
 }));
 
 router.delete('/fd/:id', asyncHandler(async (req, res) => {
-  await svc.deleteFD(req.user!.userId, req.params.id);
+  const oldFd = isTest ? null : await prisma.fixedDeposit.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const fd = await svc.deleteFD(req.user!.userId, req.params.id, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'FixedDeposit', entityId: fd?.id ?? req.params.id, oldValue: oldFd });
   sendNoContent(res);
 }));
 
@@ -112,25 +132,34 @@ router.get('/rd', asyncHandler(async (req, res) => {
 
 router.post('/rd', asyncHandler(async (req, res) => {
   const data = rdSchema.parse(req.body);
-  const rd = await svc.createRD(req.user!.userId, data as any);
+  const ownerUserId = await resolveWriteUserId(req);
+  const rd = await svc.createRD(ownerUserId, data as any);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'CREATE', entityType: 'RecurringDeposit', entityId: rd.id, newValue: rd });
   sendCreated(res, rd);
 }));
 
 router.put('/rd/:id', asyncHandler(async (req, res) => {
   const data = rdSchema.partial().parse(req.body);
-  const rd = await svc.updateRD(req.user!.userId, req.params.id, data as any);
+  const oldRd = isTest ? null : await prisma.recurringDeposit.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const rd = await svc.updateRD(req.user!.userId, req.params.id, data as any, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'RecurringDeposit', entityId: rd.id, oldValue: oldRd, newValue: rd });
   sendSuccess(res, rd);
 }));
 
 router.delete('/rd/:id', asyncHandler(async (req, res) => {
-  await svc.deleteRD(req.user!.userId, req.params.id);
+  const oldRd = isTest ? null : await prisma.recurringDeposit.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const rd = await svc.deleteRD(req.user!.userId, req.params.id, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'RecurringDeposit', entityId: rd?.id ?? req.params.id, oldValue: oldRd });
   sendNoContent(res);
 }));
 
 // ─── SIPs ─────────────────────────────────────────────────────────────────────
 
 const sipSchema = z.object({
-  investmentId: z.string(),
+  investmentId: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
   fundName: z.string().min(1),
   folioNumber: z.string().optional(),
   monthlyAmount: z.number().positive(),
@@ -143,7 +172,9 @@ const sipSchema = z.object({
 
 router.get('/sip', asyncHandler(async (req, res) => {
   const status = req.query.status as any;
-  const sips = await svc.getSIPs(req.user!.userId, status);
+  const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
+  const effectiveUserId = req.user!.role === 'ADMIN' ? (targetUserId ?? req.user!.userId) : req.user!.userId;
+  const sips = await svc.getSIPs(effectiveUserId, status, req.user!.role);
   sendSuccess(res, sips);
 }));
 
@@ -155,18 +186,24 @@ router.get('/sip/upcoming', asyncHandler(async (req, res) => {
 
 router.post('/sip', asyncHandler(async (req, res) => {
   const data = sipSchema.parse(req.body);
-  const sip = await svc.createSIP(req.user!.userId, data as any);
+  const ownerUserId = await resolveWriteUserId(req);
+  const sip = await svc.createSIP(ownerUserId, data as any);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'CREATE', entityType: 'SIP', entityId: sip.id, newValue: sip });
   sendCreated(res, sip);
 }));
 
 router.put('/sip/:id', asyncHandler(async (req, res) => {
   const data = sipSchema.partial().parse(req.body);
-  const sip = await svc.updateSIP(req.user!.userId, req.params.id, data as any);
+  const oldSip = isTest ? null : await prisma.sIP.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const sip = await svc.updateSIP(req.user!.userId, req.params.id, data as any, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'SIP', entityId: sip.id, oldValue: oldSip, newValue: sip });
   sendSuccess(res, sip);
 }));
 
 router.delete('/sip/:id', asyncHandler(async (req, res) => {
-  await svc.deleteSIP(req.user!.userId, req.params.id);
+  const oldSip = isTest ? null : await prisma.sIP.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const sip = await svc.deleteSIP(req.user!.userId, req.params.id, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'SIP', entityId: sip?.id ?? req.params.id, oldValue: oldSip });
   sendNoContent(res);
 }));
 
@@ -178,7 +215,8 @@ router.post('/sip/:id/transactions', asyncHandler(async (req, res) => {
     amount: z.number().positive(),
     type: z.enum(['BUY', 'SELL', 'DIVIDEND']).default('BUY'),
   }).parse(req.body);
-  const tx = await svc.addSIPTransaction(req.user!.userId, req.params.id, body);
+  const tx = await svc.addSIPTransaction(req.user!.userId, req.params.id, body, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'CREATE', entityType: 'SIPTransaction', entityId: tx.id, newValue: tx });
   sendCreated(res, tx);
 }));
 
@@ -208,28 +246,36 @@ const investmentSchema = z.object({
 
 router.get('/', asyncHandler(async (req, res) => {
   const type = req.query.type as any;
+  const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
+  const effectiveUserId = req.user!.role === 'ADMIN' ? (targetUserId ?? req.user!.userId) : req.user!.userId;
   const rawPage = Number(req.query.page);
   const rawSize = Number(req.query.pageSize);
   const page = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1;
   const pageSize = Number.isFinite(rawSize) && rawSize >= 1 ? Math.min(100, Math.floor(rawSize)) : 25;
-  const { items, pagination } = await svc.getInvestments(req.user!.userId, type, page, pageSize);
+  const { items, pagination } = await svc.getInvestments(effectiveUserId, type, page, pageSize, req.user!.role);
   sendPaginated(res, items, pagination);
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
   const data = investmentSchema.parse(req.body);
-  const inv = await svc.createInvestment(req.user!.userId, data as any);
+  const ownerUserId = await resolveWriteUserId(req);
+  const inv = await svc.createInvestment(ownerUserId, data as any);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'CREATE', entityType: 'Investment', entityId: inv.id, newValue: inv });
   sendCreated(res, inv);
 }));
 
 router.put('/:id', asyncHandler(async (req, res) => {
   const data = investmentSchema.partial().parse(req.body);
-  const inv = await svc.updateInvestment(req.user!.userId, req.params.id, data as any);
+  const oldInv = isTest ? null : await prisma.investment.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const inv = await svc.updateInvestment(req.user!.userId, req.params.id, data as any, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'Investment', entityId: inv.id, oldValue: oldInv, newValue: inv });
   sendSuccess(res, inv);
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
-  await svc.deleteInvestment(req.user!.userId, req.params.id);
+  const oldInv = isTest ? null : await prisma.investment.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const inv = await svc.deleteInvestment(req.user!.userId, req.params.id, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'Investment', entityId: inv?.id ?? req.params.id, oldValue: oldInv });
   sendNoContent(res);
 }));
 
@@ -253,22 +299,33 @@ router.get('/gold', asyncHandler(async (req, res) => {
 
 router.post('/gold', asyncHandler(async (req, res) => {
   const data = goldSchema.parse(req.body);
-  const holding = await svc.createGoldHolding(req.user!.userId, data as any);
+  const ownerUserId = await resolveWriteUserId(req);
+  const holding = await svc.createGoldHolding(ownerUserId, data as any);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'CREATE', entityType: 'GoldHolding', entityId: holding.id, newValue: holding });
   sendCreated(res, holding);
 }));
 
 router.put('/gold/:id', asyncHandler(async (req, res) => {
   const data = goldSchema.partial().parse(req.body);
-  const holding = await svc.updateGoldHolding(req.user!.userId, req.params.id, data as any);
+  const oldHolding = isTest ? null : await prisma.goldHolding.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const holding = await svc.updateGoldHolding(req.user!.userId, req.params.id, data as any, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'GoldHolding', entityId: holding.id, oldValue: oldHolding, newValue: holding });
   sendSuccess(res, holding);
 }));
 
 router.delete('/gold/:id', asyncHandler(async (req, res) => {
-  await svc.deleteGoldHolding(req.user!.userId, req.params.id);
+  const oldHolding = isTest ? null : await prisma.goldHolding.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const holding = await svc.deleteGoldHolding(req.user!.userId, req.params.id, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'GoldHolding', entityId: holding?.id ?? req.params.id, oldValue: oldHolding });
   sendNoContent(res);
 }));
 
 // ─── Real Estate ──────────────────────────────────────────────────────────────
+
+const reOwnerSchema = z.object({
+  userId: z.string().min(1),
+  sharePercent: z.number().positive().max(100),
+});
 
 const reSchema = z.object({
   propertyType: z.enum(['RESIDENTIAL', 'COMMERCIAL', 'LAND', 'PLOT']),
@@ -280,6 +337,7 @@ const reSchema = z.object({
   loanId: z.string().optional(),
   rentalIncomeMonthly: z.number().optional(),
   notes: z.string().optional(),
+  owners: z.array(reOwnerSchema).min(1).optional(),
 });
 
 router.get('/real-estate', asyncHandler(async (req, res) => {
@@ -290,18 +348,24 @@ router.get('/real-estate', asyncHandler(async (req, res) => {
 
 router.post('/real-estate', asyncHandler(async (req, res) => {
   const data = reSchema.parse(req.body);
-  const prop = await svc.createRealEstate(req.user!.userId, data as any);
+  const ownerUserId = await resolveWriteUserId(req);
+  const prop = await svc.createRealEstate(ownerUserId, data as any);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'CREATE', entityType: 'RealEstate', entityId: prop.id, newValue: prop });
   sendCreated(res, prop);
 }));
 
 router.put('/real-estate/:id', asyncHandler(async (req, res) => {
   const data = reSchema.partial().parse(req.body);
-  const prop = await svc.updateRealEstate(req.user!.userId, req.params.id, data as any);
+  const oldProp = isTest ? null : await prisma.realEstate.findFirst({ where: { id: req.params.id } });
+  const prop = await svc.updateRealEstate(req.user!.userId, req.params.id, data as any, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'RealEstate', entityId: prop.id, oldValue: oldProp, newValue: prop });
   sendSuccess(res, prop);
 }));
 
 router.delete('/real-estate/:id', asyncHandler(async (req, res) => {
-  await svc.deleteRealEstate(req.user!.userId, req.params.id);
+  const oldProp = isTest ? null : await prisma.realEstate.findFirst({ where: { id: req.params.id } });
+  const prop = await svc.deleteRealEstate(req.user!.userId, req.params.id, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'RealEstate', entityId: prop?.id ?? req.params.id, oldValue: oldProp });
   sendNoContent(res);
 }));
 

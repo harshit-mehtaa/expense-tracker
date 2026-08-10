@@ -25,7 +25,7 @@ vi.mock('../../config/prisma', () => {
       update: vi.fn(),
       delete: vi.fn(),
     },
-    transaction: { groupBy: vi.fn() },
+    transaction: { groupBy: vi.fn(), findMany: vi.fn() },
     user: { findFirst: vi.fn() },
   };
   return { default: prisma, prisma };
@@ -70,6 +70,7 @@ beforeEach(() => {
   budgetMock.update.mockResolvedValue(MOCK_BUDGET);
   budgetMock.delete.mockResolvedValue(MOCK_BUDGET);
   txMock.groupBy.mockResolvedValue([]);
+  txMock.findMany.mockResolvedValue([]);
   userMock.findFirst.mockResolvedValue({ id: 'u2' }); // default: user found
 });
 
@@ -98,7 +99,7 @@ describe('GET /api/budgets/vs-actuals', () => {
 
   it('pctUsed is 0 when budget amount is zero (division-by-zero guard)', async () => {
     budgetMock.findMany.mockResolvedValue([{ ...MOCK_BUDGET, amount: 0, categoryId: 'cat-zero' }]);
-    txMock.groupBy.mockResolvedValue([{ categoryId: 'cat-zero', _sum: { amount: 100 } }]);
+    txMock.groupBy.mockResolvedValue([{ userId: 'u1', categoryId: 'cat-zero', _sum: { amount: 100 } }]);
     const res = await request(app).get('/api/budgets/vs-actuals?fy=2025-26');
     expect(res.status).toBe(200);
     // Line 77: Number(b.amount) > 0 ? ... : 0 — false branch when amount=0
@@ -108,8 +109,8 @@ describe('GET /api/budgets/vs-actuals', () => {
   it('skips null categoryId entries when building actualsMap', async () => {
     // actuals entry with categoryId: null must not crash (null-guard: a.categoryId check in forEach)
     txMock.groupBy.mockResolvedValue([
-      { categoryId: null, _sum: { amount: 500 } },
-      { categoryId: 'cat-1', _sum: { amount: 3000 } },
+      { userId: 'u1', categoryId: null, _sum: { amount: 500 } },
+      { userId: 'u1', categoryId: 'cat-1', _sum: { amount: 3000 } },
     ]);
     const res = await request(app).get('/api/budgets/vs-actuals?fy=2025-26');
     expect(res.status).toBe(200);
@@ -119,7 +120,7 @@ describe('GET /api/budgets/vs-actuals', () => {
 
   it('treats null _sum.amount as 0 via ?? operator (line 70 branch)', async () => {
     // categoryId is present (truthy) but _sum.amount is null → falls back to 0 via ??
-    txMock.groupBy.mockResolvedValue([{ categoryId: 'cat-1', _sum: { amount: null } }]);
+    txMock.groupBy.mockResolvedValue([{ userId: 'u1', categoryId: 'cat-1', _sum: { amount: null } }]);
     const res = await request(app).get('/api/budgets/vs-actuals?fy=2025-26');
     expect(res.status).toBe(200);
     expect(res.body.data[0].actual).toBe(0);

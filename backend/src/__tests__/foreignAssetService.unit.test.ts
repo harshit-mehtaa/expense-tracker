@@ -106,7 +106,7 @@ describe('updateForeignAsset', () => {
       data: { closingValueINR: 600000 },
     });
     expect(faMock.findFirst).toHaveBeenCalledWith({
-      where: { id: 'fa-1', userId: 'u1', deletedAt: null },
+      where: { id: 'fa-1', deletedAt: null },
     });
     expect(result).toEqual(updated);
   });

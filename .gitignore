@@ -41,6 +41,12 @@ Thumbs.db
 postgres_data/
 uploads_data/
 
+# Database backups — contain real financial data, never commit
+backups/
+
+# AI coding orchestrator (machine-local tooling)
+.claude/
+
 # Coverage
 coverage/
 .nyc_output/

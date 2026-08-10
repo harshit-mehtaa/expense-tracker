@@ -109,7 +109,7 @@ describe('GET /api/investments/80c-summary', () => {
   it('returns 200 with 80C tracker', async () => {
     const res = await request(app).get('/api/investments/80c-summary?fy=2024-25');
     expect(res.status).toBe(200);
-    expect(m(svc.get80CSummary)).toHaveBeenCalledWith('u1', '2024-25');
+    expect(m(svc.get80CSummary)).toHaveBeenCalledWith(undefined, '2024-25', 'u1', 'ADMIN');
   });
 
   it('falls back to current FY when fy param is absent (parseFY non-string path)', async () => {
@@ -120,7 +120,7 @@ describe('GET /api/investments/80c-summary', () => {
       const res = await request(app).get('/api/investments/80c-summary');
       expect(res.status).toBe(200);
       // parseFY(undefined) → typeof undefined !== 'string' → s='' → regex fails → getCurrentFY()
-      expect(m(svc.get80CSummary)).toHaveBeenCalledWith('u1', '2025-26');
+      expect(m(svc.get80CSummary)).toHaveBeenCalledWith(undefined, '2025-26', 'u1', 'ADMIN');
     } finally {
       vi.useRealTimers();
     }
@@ -303,6 +303,13 @@ describe('POST /api/investments/sip', () => {
     expect(res.status).toBe(201);
   });
 
+  it('returns 201 when SIP creation omits an existing investment', async () => {
+    const { investmentId: _, ...payload } = VALID_SIP;
+    const res = await request(app).post('/api/investments/sip').send(payload);
+    expect(res.status).toBe(201);
+    expect(m(svc.createSIP)).toHaveBeenCalledWith('u1', expect.not.objectContaining({ investmentId: expect.any(String) }));
+  });
+
   it('returns 422 when sipDate is out of range (>28)', async () => {
     const res = await request(app).post('/api/investments/sip').send({ ...VALID_SIP, sipDate: 31 });
     expect(res.status).toBe(422);
@@ -371,23 +378,23 @@ describe('GET /api/investments', () => {
 
   it('passes valid page number through (truthy branch, line 213)', async () => {
     await request(app).get('/api/investments?page=2');
-    expect(m(svc.getInvestments)).toHaveBeenCalledWith('u1', undefined, 2, expect.any(Number));
+    expect(m(svc.getInvestments)).toHaveBeenCalledWith('u1', undefined, 2, expect.any(Number), 'ADMIN');
   });
 
   it('clamps page=0 to page=1', async () => {
     await request(app).get('/api/investments?page=0');
-    expect(m(svc.getInvestments)).toHaveBeenCalledWith('u1', undefined, 1, expect.any(Number));
+    expect(m(svc.getInvestments)).toHaveBeenCalledWith('u1', undefined, 1, expect.any(Number), 'ADMIN');
   });
 
   it('falls back to page=1 when page is not a finite number', async () => {
     await request(app).get('/api/investments?page=invalid');
     // Number('invalid') is NaN → Number.isFinite(NaN) is false → defaults to 1
-    expect(m(svc.getInvestments)).toHaveBeenCalledWith('u1', undefined, 1, expect.any(Number));
+    expect(m(svc.getInvestments)).toHaveBeenCalledWith('u1', undefined, 1, expect.any(Number), 'ADMIN');
   });
 
   it('caps pageSize=200 to 100', async () => {
     await request(app).get('/api/investments?pageSize=200');
-    expect(m(svc.getInvestments)).toHaveBeenCalledWith('u1', undefined, expect.any(Number), 100);
+    expect(m(svc.getInvestments)).toHaveBeenCalledWith('u1', undefined, expect.any(Number), 100, 'ADMIN');
   });
 });
 

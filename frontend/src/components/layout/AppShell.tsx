@@ -3,10 +3,8 @@ import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { CommandPalette } from '@/components/shared/CommandPalette';
-import { useRecurringAutoGenerate } from '@/hooks/useRecurringAutoGenerate';
 
 export function AppShell() {
-  useRecurringAutoGenerate();
   const [showPalette, setShowPalette] = useState(false);
 
   useEffect(() => {
@@ -23,9 +21,9 @@ export function AppShell() {
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar />
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <Header />
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-6">
           <Outlet />
         </main>
       </div>

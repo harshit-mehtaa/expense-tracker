@@ -4,12 +4,15 @@ import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess, sendCreated } from '../utils/response';
 import { getCurrentFY } from '../utils/financialYear';
-import { resolveTargetUserId } from '../utils/resolveTargetUserId';
+import { ownerScopedWhere, resolveTargetUserId, resolveWriteUserId } from '../utils/resolveTargetUserId';
 import * as svc from '../services/taxService';
 import * as cgSvc from '../services/capitalGainsService';
 import * as osSvc from '../services/otherIncomeService';
 import * as hpSvc from '../services/housePropertyService';
 import * as faSvc from '../services/foreignAssetService';
+import { prisma } from '../config/prisma';
+import { recordAuditLog } from '../services/auditService';
+import { isTest } from '../config/env';
 
 /** Validate and return a safe FY string; falls back to current FY on bad input */
 function parseFY(raw: unknown): string {
@@ -33,6 +36,7 @@ router.get('/profile', asyncHandler(async (req, res) => {
 
 router.post('/profile', asyncHandler(async (req, res) => {
   const fy = parseFY(req.query.fy);
+  const ownerUserId = await resolveWriteUserId(req);
   const data = z.object({
     regime: z.enum(['OLD', 'NEW']).optional(),
     grossSalary: z.number().optional(),
@@ -50,7 +54,18 @@ router.post('/profile', asyncHandler(async (req, res) => {
     taxPaidTds: z.number().optional(),
     taxPaidSelfAssessment: z.number().optional(),
   }).parse(req.body);
-  const profile = await svc.upsertTaxProfile(req.user!.userId, fy, data as any);
+  const oldProfile = isTest ? null : await prisma.taxProfile.findUnique({
+    where: { userId_fyYear: { userId: ownerUserId, fyYear: fy } },
+  });
+  const profile = await svc.upsertTaxProfile(ownerUserId, fy, data as any);
+  await recordAuditLog({
+    performedByUserId: req.user!.userId,
+    action: oldProfile ? 'UPDATE' : 'CREATE',
+    entityType: 'TaxProfile',
+    entityId: profile.id,
+    oldValue: oldProfile,
+    newValue: profile,
+  });
   sendSuccess(res, profile);
 }));
 
@@ -138,20 +153,26 @@ router.get('/capital-gains/summary', asyncHandler(async (req, res) => {
 
 router.post('/capital-gains', asyncHandler(async (req, res) => {
   const data = cgEntrySchema.parse(req.body);
-  const entry = await cgSvc.createCapitalGain(req.user!.userId, data as any);
+  const ownerUserId = await resolveWriteUserId(req);
+  const entry = await cgSvc.createCapitalGain(ownerUserId, data as any);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'CREATE', entityType: 'CapitalGainEntry', entityId: entry.id, newValue: entry });
   sendCreated(res, entry);
 }));
 
 router.put('/capital-gains/:id', asyncHandler(async (req, res) => {
   const data = cgEntrySchema.partial().parse(req.body);
-  const entry = await cgSvc.updateCapitalGain(req.user!.userId, req.params.id, data as any);
+  const oldEntry = isTest ? null : await prisma.capitalGainEntry.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const entry = await cgSvc.updateCapitalGain(req.user!.userId, req.params.id, data as any, req.user!.role);
   if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'CapitalGainEntry', entityId: entry.id, oldValue: oldEntry, newValue: entry });
   sendSuccess(res, entry);
 }));
 
 router.delete('/capital-gains/:id', asyncHandler(async (req, res) => {
-  const entry = await cgSvc.deleteCapitalGain(req.user!.userId, req.params.id);
+  const oldEntry = isTest ? null : await prisma.capitalGainEntry.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const entry = await cgSvc.deleteCapitalGain(req.user!.userId, req.params.id, req.user!.role);
   if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'CapitalGainEntry', entityId: req.params.id, oldValue: oldEntry, newValue: entry });
   sendSuccess(res, { deleted: true });
 }));
 
@@ -189,20 +210,26 @@ router.get('/other-income/summary', asyncHandler(async (req, res) => {
 
 router.post('/other-income', asyncHandler(async (req, res) => {
   const data = osEntrySchema.parse(req.body);
-  const entry = await osSvc.createOtherIncome(req.user!.userId, data as any);
+  const ownerUserId = await resolveWriteUserId(req);
+  const entry = await osSvc.createOtherIncome(ownerUserId, data as any);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'CREATE', entityType: 'OtherSourceIncome', entityId: entry.id, newValue: entry });
   sendCreated(res, entry);
 }));
 
 router.put('/other-income/:id', asyncHandler(async (req, res) => {
   const data = osEntrySchema.partial().parse(req.body);
-  const entry = await osSvc.updateOtherIncome(req.user!.userId, req.params.id, data as any);
+  const oldEntry = isTest ? null : await prisma.otherSourceIncome.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const entry = await osSvc.updateOtherIncome(req.user!.userId, req.params.id, data as any, req.user!.role);
   if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'OtherSourceIncome', entityId: entry.id, oldValue: oldEntry, newValue: entry });
   sendSuccess(res, entry);
 }));
 
 router.delete('/other-income/:id', asyncHandler(async (req, res) => {
-  const entry = await osSvc.deleteOtherIncome(req.user!.userId, req.params.id);
+  const oldEntry = isTest ? null : await prisma.otherSourceIncome.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const entry = await osSvc.deleteOtherIncome(req.user!.userId, req.params.id, req.user!.role);
   if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'OtherSourceIncome', entityId: req.params.id, oldValue: oldEntry, newValue: entry });
   sendSuccess(res, { deleted: true });
 }));
 
@@ -243,20 +270,26 @@ router.get('/house-property/summary', asyncHandler(async (req, res) => {
 
 router.post('/house-property', asyncHandler(async (req, res) => {
   const data = hpEntrySchema.parse(req.body);
-  const entry = await hpSvc.createHouseProperty(req.user!.userId, data as any);
+  const ownerUserId = await resolveWriteUserId(req);
+  const entry = await hpSvc.createHouseProperty(ownerUserId, data as any);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'CREATE', entityType: 'HousePropertyDetail', entityId: entry.id, newValue: entry });
   sendCreated(res, entry);
 }));
 
 router.put('/house-property/:id', asyncHandler(async (req, res) => {
   const data = hpEntrySchema.partial().parse(req.body);
-  const entry = await hpSvc.updateHouseProperty(req.user!.userId, req.params.id, data as any);
+  const oldEntry = isTest ? null : await prisma.housePropertyDetail.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const entry = await hpSvc.updateHouseProperty(req.user!.userId, req.params.id, data as any, req.user!.role);
   if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'HousePropertyDetail', entityId: entry.id, oldValue: oldEntry, newValue: entry });
   sendSuccess(res, entry);
 }));
 
 router.delete('/house-property/:id', asyncHandler(async (req, res) => {
-  const entry = await hpSvc.deleteHouseProperty(req.user!.userId, req.params.id);
+  const oldEntry = isTest ? null : await prisma.housePropertyDetail.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const entry = await hpSvc.deleteHouseProperty(req.user!.userId, req.params.id, req.user!.role);
   if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'HousePropertyDetail', entityId: req.params.id, oldValue: oldEntry, newValue: entry });
   sendSuccess(res, { deleted: true });
 }));
 
@@ -294,20 +327,26 @@ router.get('/foreign-assets/summary', asyncHandler(async (req, res) => {
 
 router.post('/foreign-assets', asyncHandler(async (req, res) => {
   const data = faEntrySchema.parse(req.body);
-  const entry = await faSvc.createForeignAsset(req.user!.userId, data as any);
+  const ownerUserId = await resolveWriteUserId(req);
+  const entry = await faSvc.createForeignAsset(ownerUserId, data as any);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'CREATE', entityType: 'ForeignAssetDisclosure', entityId: entry.id, newValue: entry });
   sendCreated(res, entry);
 }));
 
 router.put('/foreign-assets/:id', asyncHandler(async (req, res) => {
   const data = faEntrySchema.partial().parse(req.body);
-  const entry = await faSvc.updateForeignAsset(req.user!.userId, req.params.id, data as any);
+  const oldEntry = isTest ? null : await prisma.foreignAssetDisclosure.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const entry = await faSvc.updateForeignAsset(req.user!.userId, req.params.id, data as any, req.user!.role);
   if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'ForeignAssetDisclosure', entityId: entry.id, oldValue: oldEntry, newValue: entry });
   sendSuccess(res, entry);
 }));
 
 router.delete('/foreign-assets/:id', asyncHandler(async (req, res) => {
-  const entry = await faSvc.deleteForeignAsset(req.user!.userId, req.params.id);
+  const oldEntry = isTest ? null : await prisma.foreignAssetDisclosure.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const entry = await faSvc.deleteForeignAsset(req.user!.userId, req.params.id, req.user!.role);
   if (!entry) { res.status(404).json({ error: 'Not found' }); return; }
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'ForeignAssetDisclosure', entityId: req.params.id, oldValue: oldEntry, newValue: entry });
   sendSuccess(res, { deleted: true });
 }));
 

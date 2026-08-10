@@ -183,6 +183,7 @@ describe('getLoans', () => {
     const result = await getLoans('u1');
     expect(loanMock.findMany).toHaveBeenCalledWith({
       where: { userId: 'u1' },
+      include: { user: { select: { name: true } } },
       orderBy: { emiDate: 'asc' },
     });
     expect(result).toHaveLength(1);
@@ -193,6 +194,7 @@ describe('getLoans', () => {
     await getLoans();
     expect(loanMock.findMany).toHaveBeenCalledWith({
       where: {},
+      include: { user: { select: { name: true } } },
       orderBy: { emiDate: 'asc' },
     });
   });

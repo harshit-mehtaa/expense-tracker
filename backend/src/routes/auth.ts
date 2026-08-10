@@ -20,15 +20,41 @@ const authRateLimit = rateLimit({
 });
 
 // Cookie configuration — SameSite differs by environment (plan-challenger fix #3)
-const COOKIE_OPTIONS = {
+const COOKIE_OPTIONS_BASE = {
   httpOnly: true,
   secure: !isDev,
   /* c8 ignore next -- isDev=true branch only reachable in development */
   sameSite: (isDev ? 'lax' : 'strict') as 'lax' | 'strict',
-  domain: env.COOKIE_DOMAIN,
   path: '/',
   maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
 };
+
+const LOCAL_COOKIE_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
+function getCookieOptions(req: Request) {
+  const configuredDomain = env.COOKIE_DOMAIN.trim();
+  const requestHost = req.hostname.replace(/^\[|\]$/g, '');
+  const shouldSetDomain = configuredDomain
+    && !LOCAL_COOKIE_HOSTS.has(configuredDomain)
+    && !LOCAL_COOKIE_HOSTS.has(requestHost);
+
+  return {
+    ...COOKIE_OPTIONS_BASE,
+    ...(shouldSetDomain ? { domain: configuredDomain } : {}),
+  };
+}
+
+function setRefreshCookie(req: Request, res: Response, token: string): void {
+  res.cookie('refreshToken', token, getCookieOptions(req));
+}
+
+function clearRefreshCookie(req: Request, res: Response): void {
+  const configuredDomain = env.COOKIE_DOMAIN.trim();
+  res.clearCookie('refreshToken', { ...getCookieOptions(req), maxAge: 0 });
+  if (configuredDomain) {
+    res.clearCookie('refreshToken', { ...COOKIE_OPTIONS_BASE, domain: configuredDomain, maxAge: 0 });
+  }
+}
 
 // ── Validation schemas ────────────────────────────────────────────────────────
 
@@ -54,7 +80,7 @@ router.post(
     const body = loginSchema.parse(req.body);
     const { tokens, user } = await authService.login(body.email, body.password);
 
-    res.cookie('refreshToken', tokens.refreshToken, COOKIE_OPTIONS);
+    setRefreshCookie(req, res, tokens.refreshToken);
 
     sendSuccess(res, {
       user: {
@@ -84,7 +110,7 @@ router.post(
 
     const tokens = await authService.refreshTokens(refreshToken);
 
-    res.cookie('refreshToken', tokens.refreshToken, COOKIE_OPTIONS);
+    setRefreshCookie(req, res, tokens.refreshToken);
     sendSuccess(res, { accessToken: tokens.accessToken }, 'Token refreshed');
   }),
 );
@@ -99,7 +125,7 @@ router.post(
       await authService.logout(refreshToken);
     }
 
-    res.clearCookie('refreshToken', { ...COOKIE_OPTIONS, maxAge: 0 });
+    clearRefreshCookie(req, res);
     sendSuccess(res, null, 'Logged out successfully');
   }),
 );

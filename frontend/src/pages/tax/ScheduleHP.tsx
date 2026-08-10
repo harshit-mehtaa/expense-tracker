@@ -62,7 +62,7 @@ export default function ScheduleHP({ fy, viewUserId }: Props) {
   };
 
   const createMutation = useMutation({
-    mutationFn: (data: object) => taxApi.createHouseProperty(data),
+    mutationFn: (data: object) => taxApi.createHouseProperty(data, viewUserId),
     onSuccess: () => { invalidate(); setShowForm(false); reset(); },
   });
 
@@ -125,7 +125,7 @@ export default function ScheduleHP({ fy, viewUserId }: Props) {
                     {p.incomeFromHP < 0 ? '−' : ''}{formatCurrency(Math.abs(p.incomeFromHP))}
                     <span className="text-xs font-normal text-gray-400 ml-1">{p.incomeFromHP < 0 ? 'loss' : 'income'}</span>
                   </p>
-                  {raw && !viewUserId && (
+                  {raw && (
                     <div className="flex gap-2 text-xs">
                       <button onClick={() => startEdit(raw)} className="text-blue-600 hover:underline">Edit</button>
                       <button onClick={() => deleteMutation.mutate(p.id)} className="text-red-500 hover:underline">Delete</button>
@@ -164,17 +164,15 @@ export default function ScheduleHP({ fy, viewUserId }: Props) {
         </div>
       )}
 
-      {/* Add button — hidden when viewing another member's data */}
+      {/* Add button */}
       <div className="flex justify-between items-center">
         <h3 className="font-medium text-gray-700">House Properties</h3>
-        {!viewUserId && (
-          <button
-            onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
-            className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
-          >
-            + Add Property
-          </button>
-        )}
+        <button
+          onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
+          className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+        >
+          + Add Property
+        </button>
       </div>
 
       {/* Form */}
@@ -183,12 +181,12 @@ export default function ScheduleHP({ fy, viewUserId }: Props) {
           <input type="hidden" {...register('fyYear')} />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Property Name</label>
+              <label className="field-required block text-sm font-medium mb-1">Property Name</label>
               <input {...register('propertyName')} className="input" placeholder="e.g. Flat in Mumbai" />
               {errors.propertyName && <p className="text-red-500 text-xs mt-1">{errors.propertyName.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Usage</label>
+              <label className="field-required block text-sm font-medium mb-1">Usage</label>
               <select {...register('usage')} className="input">
                 <option value="">Select usage</option>
                 {Object.entries(USAGE_LABELS).map(([v, l]) => (
@@ -201,18 +199,18 @@ export default function ScheduleHP({ fy, viewUserId }: Props) {
             {usage !== 'SELF_OCCUPIED' && (
               <>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Gross Annual Rent (₹)</label>
+                  <label className="block text-sm font-medium mb-1">Gross Annual Rent (₹, optional)</label>
                   <input type="number" step="0.01" {...register('grossAnnualRent')} className="input" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Municipal Taxes Paid (₹)</label>
+                  <label className="block text-sm font-medium mb-1">Municipal Taxes Paid (₹, optional)</label>
                   <input type="number" step="0.01" {...register('municipalTaxesPaid')} className="input" />
                 </div>
               </>
             )}
 
             <div>
-              <label className="block text-sm font-medium mb-1">Home Loan Interest (₹) — Sec 24(b)</label>
+              <label className="block text-sm font-medium mb-1">Home Loan Interest (₹, optional) — Sec 24(b)</label>
               <input type="number" step="0.01" {...register('homeLoanInterest')} className="input" />
               {usage === 'SELF_OCCUPIED' && (
                 <p className="text-xs text-gray-400 mt-1">Capped at ₹2L for self-occupied (old regime only)</p>
@@ -232,7 +230,7 @@ export default function ScheduleHP({ fy, viewUserId }: Props) {
             </div>
 
             <div className="md:col-span-2">
-              <label className="block text-sm font-medium mb-1">Notes</label>
+              <label className="block text-sm font-medium mb-1">Notes (optional)</label>
               <input {...register('notes')} className="input" placeholder="Optional" />
             </div>
           </div>

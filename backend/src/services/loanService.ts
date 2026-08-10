@@ -1,26 +1,29 @@
 import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
+import { ownerScopedWhere } from '../utils/resolveTargetUserId';
 import type { Prisma } from '@prisma/client';
 
 export async function getLoans(userId?: string) {
-  return prisma.loan.findMany({
+  const rows = await prisma.loan.findMany({
     where: userId ? { userId } : {},
+    include: { user: { select: { name: true } } },
     orderBy: { emiDate: 'asc' },
   });
+  return rows.map(({ user, ...loan }) => ({ ...loan, userName: user?.name ?? '' }));
 }
 
 export async function createLoan(userId: string, data: Omit<Prisma.LoanCreateInput, 'user'>) {
-  return prisma.loan.create({ data: { ...data, userId } });
+  return prisma.loan.create({ data: { ...data, userId } as Prisma.LoanUncheckedCreateInput });
 }
 
-export async function updateLoan(userId: string, id: string, data: Prisma.LoanUpdateInput) {
-  const loan = await prisma.loan.findFirst({ where: { id, userId } });
+export async function updateLoan(requesterId: string, id: string, data: Prisma.LoanUpdateInput, requesterRole = 'MEMBER') {
+  const loan = await prisma.loan.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!loan) throw AppError.notFound('Loan');
   return prisma.loan.update({ where: { id }, data });
 }
 
-export async function deleteLoan(userId: string, id: string) {
-  const loan = await prisma.loan.findFirst({ where: { id, userId } });
+export async function deleteLoan(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  const loan = await prisma.loan.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!loan) throw AppError.notFound('Loan');
   return prisma.loan.delete({ where: { id } });
 }

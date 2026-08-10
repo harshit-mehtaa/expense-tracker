@@ -61,6 +61,9 @@ vi.mock('../config/prisma', () => {
       update: vi.fn(),
       delete: vi.fn(),
     },
+    user: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     insurancePolicy: {
       findMany: vi.fn().mockResolvedValue([]),
     },
@@ -113,6 +116,7 @@ const sipMock = prisma.sIP as any;
 const sipTxMock = prisma.sIPTransaction as any;
 const goldMock = prisma.goldHolding as any;
 const reMock = prisma.realEstate as any;
+const userMock = (prisma as any).user;
 const insMock = prisma.insurancePolicy as any;
 
 const MOCK_INV = {
@@ -145,6 +149,7 @@ beforeEach(() => {
   goldMock.findFirst.mockResolvedValue({ id: 'gold-1', userId: 'u1' });
   reMock.findMany.mockResolvedValue([]);
   reMock.findFirst.mockResolvedValue({ id: 're-1', userId: 'u1' });
+  userMock.findMany.mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]);
   insMock.findMany.mockResolvedValue([]);
 });
 
@@ -712,6 +717,28 @@ describe('updateFD', () => {
     expect(fdMock.update).toHaveBeenCalledWith({ where: { id: 'fd-1' }, data: { status: 'MATURED' } });
   });
 
+  it('recalculates maturityAmount when financial fields change', async () => {
+    fdMock.findFirst.mockResolvedValue({
+      id: 'fd-1',
+      userId: 'u1',
+      principalAmount: 100000,
+      interestRate: 7,
+      tenureMonths: 12,
+      interestPayoutType: 'CUMULATIVE',
+    });
+    fdMock.update.mockResolvedValue({ id: 'fd-1' });
+
+    await updateFD('u1', 'fd-1', { principalAmount: 125000 } as any);
+
+    expect(fdMock.update).toHaveBeenCalledWith({
+      where: { id: 'fd-1' },
+      data: expect.objectContaining({
+        principalAmount: 125000,
+        maturityAmount: expect.any(Number),
+      }),
+    });
+  });
+
   it('throws NotFound when FD does not exist', async () => {
     fdMock.findFirst.mockResolvedValue(null);
     await expect(updateFD('u1', 'fd-x', {})).rejects.toThrow(/not found/i);
@@ -820,13 +847,19 @@ describe('updateRD / deleteRD', () => {
   });
 
   it('updates RD when found', async () => {
-    const existing = { id: 'rd-1', userId: 'u1', depositAmount: 2000 };
-    const updated = { ...existing, depositAmount: 3000 };
+    const existing = { id: 'rd-1', userId: 'u1', monthlyInstallment: 2000, interestRate: 7, tenureMonths: 12 };
+    const updated = { ...existing, monthlyInstallment: 3000 };
     rdMock.findFirst.mockResolvedValue(existing);
     rdMock.update.mockResolvedValue(updated);
-    const result = await updateRD('u1', 'rd-1', { depositAmount: 3000 });
+    const result = await updateRD('u1', 'rd-1', { monthlyInstallment: 3000 });
     expect(rdMock.findFirst).toHaveBeenCalledWith({ where: { id: 'rd-1', userId: 'u1' } });
-    expect(rdMock.update).toHaveBeenCalledWith({ where: { id: 'rd-1' }, data: { depositAmount: 3000 } });
+    expect(rdMock.update).toHaveBeenCalledWith({
+      where: { id: 'rd-1' },
+      data: expect.objectContaining({
+        monthlyInstallment: 3000,
+        maturityAmount: expect.any(Number),
+      }),
+    });
     expect(result).toEqual(updated);
   });
 
@@ -937,7 +970,7 @@ describe('getSIPsUpcoming — overflow window', () => {
 });
 
 describe('createSIP', () => {
-  it('creates SIP with investment connect and returns with investment included', async () => {
+  it('creates SIP with scalar foreign keys and returns with investment included', async () => {
     const sipResult = { id: 'sip-new', investment: MOCK_INV };
     sipMock.create.mockResolvedValue(sipResult);
 
@@ -949,16 +982,77 @@ describe('createSIP', () => {
       status: 'ACTIVE',
     } as any);
 
+    expect(invMock.findFirst).toHaveBeenCalledWith({
+      where: { id: 'inv-1', userId: 'u1' },
+      select: { id: true },
+    });
     expect(sipMock.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           userId: 'u1',
-          investment: { connect: { id: 'inv-1' } },
+          investmentId: 'inv-1',
         }),
-        include: { investment: true },
+        include: { investment: true, bankAccount: true },
       }),
     );
     expect(result).toBe(sipResult);
+  });
+
+  it('creates a mutual-fund investment automatically when investmentId is omitted', async () => {
+    const startDate = new Date('2025-01-01');
+    const sipResult = { id: 'sip-auto', investment: { ...MOCK_INV, id: 'inv-auto' } };
+    invMock.create.mockResolvedValue({ id: 'inv-auto' });
+    sipMock.create.mockResolvedValue(sipResult);
+
+    const result = await createSIP('u1', {
+      fundName: 'Axis Bluechip',
+      folioNumber: 'FOLIO123',
+      sipDate: 10,
+      monthlyAmount: 5000,
+      startDate,
+      status: 'ACTIVE',
+    } as any);
+
+    expect(invMock.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 'u1',
+        type: 'MUTUAL_FUND',
+        name: 'Axis Bluechip',
+        currency: 'INR',
+        unitsOrQuantity: 0,
+        purchasePricePerUnit: 0,
+        currentPricePerUnit: 0,
+        purchaseDate: startDate,
+        folioNumber: 'FOLIO123',
+        notes: 'Auto-created from SIP setup',
+      }),
+    });
+    expect(sipMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: 'u1',
+          investmentId: 'inv-auto',
+          fundName: 'Axis Bluechip',
+        }),
+        include: { investment: true, bankAccount: true },
+      }),
+    );
+    expect(result).toBe(sipResult);
+  });
+
+  it('throws when the linked investment does not belong to the user', async () => {
+    invMock.findFirst.mockResolvedValue(null);
+
+    await expect(createSIP('u1', {
+      investmentId: 'inv-other',
+      fundName: 'Axis Bluechip',
+      sipDate: 10,
+      monthlyAmount: 5000,
+      startDate: new Date('2025-01-01'),
+      status: 'ACTIVE',
+    } as any)).rejects.toThrow(/investment/i);
+
+    expect(sipMock.create).not.toHaveBeenCalled();
   });
 });
 
@@ -975,8 +1069,26 @@ describe('updateSIP / deleteSIP / addSIPTransaction', () => {
     sipMock.update.mockResolvedValue(updated);
     const result = await updateSIP('u1', 'sip-1', { amount: 7000 });
     expect(sipMock.findFirst).toHaveBeenCalledWith({ where: { id: 'sip-1', userId: 'u1' } });
-    expect(sipMock.update).toHaveBeenCalledWith({ where: { id: 'sip-1' }, data: { amount: 7000 } });
+    expect(sipMock.update).toHaveBeenCalledWith({
+      where: { id: 'sip-1' },
+      data: { amount: 7000 },
+      include: { investment: true, bankAccount: true },
+    });
     expect(result).toEqual(updated);
+  });
+
+  it('validates replacement investment ownership when SIP investment changes', async () => {
+    const existing = { id: 'sip-1', userId: 'u1', investmentId: 'inv-old' };
+    sipMock.findFirst.mockResolvedValue(existing);
+    invMock.findFirst.mockResolvedValue({ id: 'inv-new' });
+    sipMock.update.mockResolvedValue({ ...existing, investmentId: 'inv-new' });
+
+    await updateSIP('u1', 'sip-1', { investmentId: 'inv-new' } as any);
+
+    expect(invMock.findFirst).toHaveBeenCalledWith({
+      where: { id: 'inv-new', userId: 'u1' },
+      select: { id: true },
+    });
   });
 
   it('throws NotFound for deleteSIP when not found', async () => {
@@ -1098,12 +1210,12 @@ describe('updateGoldHolding / deleteGoldHolding', () => {
 describe('getRealEstate', () => {
   it('MEMBER: scopes to requesterId, aggregates summary metrics', async () => {
     reMock.findMany.mockResolvedValue([
-      { purchasePrice: 5000000, currentValue: 6000000, rentalIncomeMonthly: 25000, loan: null },
-      { purchasePrice: 3000000, currentValue: 3500000, rentalIncomeMonthly: null, loan: null },
+      { userId: 'u1', purchasePrice: 5000000, currentValue: 6000000, rentalIncomeMonthly: 25000, loan: null, owners: [{ userId: 'u1', sharePercent: 100, user: { id: 'u1', name: 'Alice', email: 'a@b.com', colorTag: null } }] },
+      { userId: 'u1', purchasePrice: 3000000, currentValue: 3500000, rentalIncomeMonthly: null, loan: null, owners: [{ userId: 'u1', sharePercent: 100, user: { id: 'u1', name: 'Alice', email: 'a@b.com', colorTag: null } }] },
     ]);
     const result = await getRealEstate(undefined, 'u1', 'MEMBER');
     const call = reMock.findMany.mock.calls[0][0];
-    expect(call.where).toEqual({ userId: 'u1' });
+    expect(call.where).toEqual({ OR: [{ userId: 'u1' }, { owners: { some: { userId: 'u1' } } }] });
     expect(result.summary.totalPurchase).toBe(8000000);
     expect(result.summary.totalCurrent).toBe(9500000);
     expect(result.summary.totalMonthlyRental).toBe(25000);
@@ -1114,37 +1226,72 @@ describe('getRealEstate', () => {
     reMock.findMany.mockResolvedValue([]);
     await getRealEstate('u2', 'admin-1', 'ADMIN');
     const call = reMock.findMany.mock.calls[0][0];
-    expect(call.where).toEqual({ userId: 'u2' });
+    expect(call.where).toEqual({ OR: [{ userId: 'u2' }, { owners: { some: { userId: 'u2' } } }] });
   });
 
   it('ADMIN with undefined userId: family-wide query, includes user name', async () => {
     reMock.findMany.mockResolvedValueOnce([
-      { id: 're-1', purchasePrice: 5000000, currentValue: 6000000, rentalIncomeMonthly: null, loan: null, user: { name: 'Bob' } },
+      { id: 're-1', purchasePrice: 5000000, currentValue: 6000000, rentalIncomeMonthly: null, loan: null, owners: [], user: { name: 'Bob' } },
     ]);
     const result = await getRealEstate(undefined, 'admin-1', 'ADMIN');
     const call = reMock.findMany.mock.calls[0][0];
     expect(call.where).toEqual({ user: { isActive: true, deletedAt: null } });
-    expect(call.include).toMatchObject({ loan: true, user: { select: { name: true } } });
+    expect(call.include).toMatchObject({ loan: true, owners: expect.any(Object), user: { select: { name: true } } });
     expect((result.properties[0] as any).userName).toBe('Bob');
     expect((result.properties[0] as any).user).toBeUndefined();
   });
 
   it('ADMIN family-wide: falls back to empty string when user.name is null (line 478 ?? branch)', async () => {
     reMock.findMany.mockResolvedValueOnce([
-      { id: 're-1', purchasePrice: 5000000, currentValue: 6000000, rentalIncomeMonthly: null, loan: null, user: { name: null } },
+      { id: 're-1', purchasePrice: 5000000, currentValue: 6000000, rentalIncomeMonthly: null, loan: null, owners: [], user: { name: null } },
     ]);
     const result = await getRealEstate(undefined, 'admin-1', 'ADMIN');
     expect((result.properties[0] as any).userName).toBe('');
+  });
+
+  it('member summaries count only the selected owner share', async () => {
+    reMock.findMany.mockResolvedValue([
+      {
+        userId: 'u1',
+        purchasePrice: 10000000,
+        currentValue: 12000000,
+        rentalIncomeMonthly: 40000,
+        loan: null,
+        owners: [
+          { userId: 'u1', sharePercent: 60, user: { id: 'u1', name: 'Alice', email: 'a@b.com', colorTag: null } },
+          { userId: 'u2', sharePercent: 40, user: { id: 'u2', name: 'Bob', email: 'b@b.com', colorTag: null } },
+        ],
+      },
+    ]);
+
+    const result = await getRealEstate(undefined, 'u2', 'MEMBER');
+
+    expect(result.summary.totalPurchase).toBe(4000000);
+    expect(result.summary.totalCurrent).toBe(4800000);
+    expect(result.summary.totalMonthlyRental).toBe(16000);
+    expect((result.properties[0] as any).sharePercent).toBe(40);
   });
 });
 
 describe('createRealEstate / updateRealEstate / deleteRealEstate', () => {
   it('creates real estate with userId merged', async () => {
-    reMock.create.mockResolvedValue({ id: 're-new' });
+    reMock.create.mockResolvedValue({ id: 're-new', userId: 'u1', purchasePrice: 5000000, currentValue: 5000000, rentalIncomeMonthly: null, owners: [] });
     await createRealEstate('u1', { purchasePrice: 5000000 } as any);
     expect(reMock.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ userId: 'u1' }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: 'u1',
+          owners: { create: [{ userId: 'u1', sharePercent: 100 }] },
+        }),
+      }),
     );
+  });
+
+  it('rejects owner shares that do not total 100%', async () => {
+    await expect(createRealEstate('u1', {
+      purchasePrice: 5000000,
+      owners: [{ userId: 'u1', sharePercent: 90 }],
+    } as any)).rejects.toThrow(/100%/i);
   });
 
   it('throws NotFound for updateRealEstate when not found', async () => {
@@ -1164,11 +1311,40 @@ describe('createRealEstate / updateRealEstate / deleteRealEstate', () => {
   });
 
   it('updates real estate when found', async () => {
-    const updated = { id: 're-1', currentValue: 7000000 };
+    const updated = { id: 're-1', userId: 'u1', purchasePrice: 5000000, currentValue: 7000000, rentalIncomeMonthly: null, owners: [] };
     reMock.update.mockResolvedValue(updated);
     const result = await updateRealEstate('u1', 're-1', { currentValue: 7000000 });
-    expect(reMock.update).toHaveBeenCalledWith({ where: { id: 're-1' }, data: { currentValue: 7000000 } });
-    expect(result).toEqual(updated);
+    expect(reMock.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 're-1' }, data: { currentValue: 7000000 } }));
+    expect(result.currentValue).toBe(7000000);
+  });
+
+  it('updates owner shares when provided', async () => {
+    const updated = {
+      id: 're-1',
+      userId: 'u1',
+      purchasePrice: 5000000,
+      currentValue: 7000000,
+      rentalIncomeMonthly: null,
+      owners: [
+        { userId: 'u1', sharePercent: 50, user: { id: 'u1', name: 'Alice', email: 'a@b.com', colorTag: null } },
+        { userId: 'u2', sharePercent: 50, user: { id: 'u2', name: 'Bob', email: 'b@b.com', colorTag: null } },
+      ],
+    };
+    reMock.update.mockResolvedValue(updated);
+
+    const result = await updateRealEstate('u1', 're-1', {
+      owners: [{ userId: 'u1', sharePercent: 50 }, { userId: 'u2', sharePercent: 50 }],
+    } as any);
+
+    expect(reMock.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        owners: {
+          deleteMany: {},
+          create: [{ userId: 'u1', sharePercent: 50 }, { userId: 'u2', sharePercent: 50 }],
+        },
+      }),
+    }));
+    expect((result as any).owners).toHaveLength(2);
   });
 });
 

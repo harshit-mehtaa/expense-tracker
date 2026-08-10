@@ -6,9 +6,23 @@ import { sendSuccess, sendCreated, sendNoContent } from '../utils/response';
 import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import { getFYRange, getCurrentFY } from '../utils/financialYear';
+import { recordAuditLog } from '../services/auditService';
+import { ownerScopedWhere, resolveTargetUserId, resolveWriteUserId } from '../utils/resolveTargetUserId';
+import { getNetExpenseByUserCategory } from '../utils/refundReporting';
 
 const router = Router();
 router.use(requireAuth);
+
+function compareBudgetCategoryNames(
+  a: { category?: { name?: string | null } | null; userName?: string | null },
+  b: { category?: { name?: string | null } | null; userName?: string | null },
+) {
+  const categoryCompare = (a.category?.name ?? 'Unknown').localeCompare(b.category?.name ?? 'Unknown', undefined, {
+    sensitivity: 'base',
+  });
+  if (categoryCompare !== 0) return categoryCompare;
+  return (a.userName ?? '').localeCompare(b.userName ?? '', undefined, { sensitivity: 'base' });
+}
 
 const budgetSchema = z.object({
   categoryId: z.string(),
@@ -20,12 +34,17 @@ const budgetSchema = z.object({
 });
 
 router.get('/', asyncHandler(async (req, res) => {
+  const targetUserId = await resolveTargetUserId(req);
+  const effectiveUserId = req.user!.role === 'ADMIN' ? targetUserId : req.user!.userId;
   const budgets = await prisma.budget.findMany({
-    where: { userId: req.user!.userId },
-    include: { category: true },
+    where: effectiveUserId ? { userId: effectiveUserId } : {},
+    include: { category: { include: { parent: true } }, user: { select: { name: true } } },
     orderBy: { createdAt: 'desc' },
   });
-  sendSuccess(res, budgets);
+  const result = budgets
+    .map(({ user, ...budget }) => ({ ...budget, userName: user?.name ?? '' }))
+    .sort(compareBudgetCategoryNames);
+  sendSuccess(res, result);
 }));
 
 const CUID_RE = /^[a-z0-9]{20,30}$/i;
@@ -51,53 +70,72 @@ router.get('/vs-actuals', asyncHandler(async (req, res) => {
 
   const budgets = await prisma.budget.findMany({
     where: effectiveUserId ? { userId: effectiveUserId } : {},
-    include: { category: true },
+    include: { category: { include: { parent: true } }, user: { select: { name: true } } },
   });
 
-  const actuals = await prisma.transaction.groupBy({
-    by: ['categoryId'],
-    where: {
-      ...(effectiveUserId ? { userId: effectiveUserId } : {}),
-      deletedAt: null,
-      type: 'EXPENSE',
-      date: { gte: start, lt: end },
-    },
-    _sum: { amount: true },
-  });
+  const actualsMap = await getNetExpenseByUserCategory(
+    effectiveUserId ? { userId: effectiveUserId } : {},
+    { gte: start, lt: end },
+    budgets.map((b) => b.categoryId),
+  );
 
-  const actualsMap: Record<string, number> = {};
-  actuals.forEach((a) => {
-    if (a.categoryId) actualsMap[a.categoryId] = Number(a._sum.amount ?? 0);
-  });
-
-  const result = budgets.map((b) => ({
-    ...b,
-    actual: actualsMap[b.categoryId] ?? 0,
-    remaining: Math.max(Number(b.amount) - (actualsMap[b.categoryId] ?? 0), 0),
-    pctUsed: Number(b.amount) > 0 ? ((actualsMap[b.categoryId] ?? 0) / Number(b.amount)) * 100 : 0,
-  }));
+  const result = budgets
+    .map(({ user, ...b }) => {
+      const actual = actualsMap.get(`${b.userId}:${b.categoryId}`) ?? 0;
+      return {
+        ...b,
+        userName: user?.name ?? '',
+        actual,
+        remaining: Math.max(Number(b.amount) - actual, 0),
+        pctUsed: Number(b.amount) > 0 ? (actual / Number(b.amount)) * 100 : 0,
+      };
+    })
+    .sort(compareBudgetCategoryNames);
 
   sendSuccess(res, result);
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
   const data = budgetSchema.parse(req.body);
-  const budget = await prisma.budget.create({ data: { ...data, userId: req.user!.userId } });
+  const ownerUserId = await resolveWriteUserId(req);
+  const budget = await prisma.budget.create({ data: { ...data, userId: ownerUserId } });
+  await recordAuditLog({
+    performedByUserId: req.user!.userId,
+    action: 'CREATE',
+    entityType: 'Budget',
+    entityId: budget.id,
+    newValue: budget,
+  });
   sendCreated(res, budget);
 }));
 
 router.put('/:id', asyncHandler(async (req, res) => {
-  const b = await prisma.budget.findFirst({ where: { id: req.params.id, userId: req.user!.userId } });
+  const b = await prisma.budget.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
   if (!b) throw AppError.notFound('Budget');
   const data = budgetSchema.partial().parse(req.body);
   const updated = await prisma.budget.update({ where: { id: req.params.id }, data });
+  await recordAuditLog({
+    performedByUserId: req.user!.userId,
+    action: 'UPDATE',
+    entityType: 'Budget',
+    entityId: updated.id,
+    oldValue: b,
+    newValue: updated,
+  });
   sendSuccess(res, updated);
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
-  const b = await prisma.budget.findFirst({ where: { id: req.params.id, userId: req.user!.userId } });
+  const b = await prisma.budget.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
   if (!b) throw AppError.notFound('Budget');
   await prisma.budget.delete({ where: { id: req.params.id } });
+  await recordAuditLog({
+    performedByUserId: req.user!.userId,
+    action: 'DELETE',
+    entityType: 'Budget',
+    entityId: b.id,
+    oldValue: b,
+  });
   sendNoContent(res);
 }));
 

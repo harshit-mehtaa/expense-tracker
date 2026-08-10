@@ -1,20 +1,65 @@
 import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
-import type { Prisma } from '@prisma/client';
+import { ownerScopedWhere } from '../utils/resolveTargetUserId';
+import { TransactionType, type Prisma } from '@prisma/client';
+
+const policyPaymentInclude = {
+  transactions: {
+    where: {
+      deletedAt: null,
+      type: TransactionType.EXPENSE,
+    },
+    orderBy: { date: 'desc' as const },
+    take: 1,
+    select: {
+      id: true,
+      amount: true,
+      date: true,
+      description: true,
+    },
+  },
+};
+
+function withPaymentStatus<T extends Record<string, any>>(rows: T[]) {
+  return rows.map((row) => {
+    const { transactions = [], user, ...policy } = row;
+    const lastPayment = transactions[0];
+
+    return {
+      ...policy,
+      ...(user !== undefined ? { userName: user?.name ?? '' } : {}),
+      isPaid: Boolean(lastPayment),
+      lastPaidTransactionId: lastPayment?.id ?? null,
+      lastPaidDate: lastPayment?.date ?? null,
+      lastPaidAmount: lastPayment ? Number(lastPayment.amount) : null,
+      lastPaidDescription: lastPayment?.description ?? null,
+    };
+  });
+}
 
 export async function getInsurancePolicies(userId: string | undefined, requesterId: string, requesterRole: string) {
   if (requesterRole !== 'ADMIN') {
-    return prisma.insurancePolicy.findMany({ where: { userId: requesterId }, orderBy: { premiumDueDate: 'asc' } });
+    const rows = await prisma.insurancePolicy.findMany({
+      where: { userId: requesterId },
+      include: policyPaymentInclude,
+      orderBy: { premiumDueDate: 'asc' },
+    });
+    return withPaymentStatus(rows);
   }
   if (userId) {
-    return prisma.insurancePolicy.findMany({ where: { userId }, orderBy: { premiumDueDate: 'asc' } });
+    const rows = await prisma.insurancePolicy.findMany({
+      where: { userId },
+      include: policyPaymentInclude,
+      orderBy: { premiumDueDate: 'asc' },
+    });
+    return withPaymentStatus(rows);
   }
   const rows = await prisma.insurancePolicy.findMany({
     where: { user: { isActive: true, deletedAt: null } },
-    include: { user: { select: { name: true } } },
+    include: { user: { select: { name: true } }, ...policyPaymentInclude },
     orderBy: [{ user: { name: 'asc' } }, { premiumDueDate: 'asc' }],
   });
-  return rows.map(({ user, ...rest }) => ({ ...rest, userName: user?.name ?? '' }));
+  return withPaymentStatus(rows);
 }
 
 export async function getPremiumCalendar(userId: string) {
@@ -37,14 +82,19 @@ export async function createInsurancePolicy(userId: string, data: Omit<Prisma.In
   return prisma.insurancePolicy.create({ data: { ...data, userId } });
 }
 
-export async function updateInsurancePolicy(userId: string, id: string, data: Prisma.InsurancePolicyUpdateInput) {
-  const policy = await prisma.insurancePolicy.findFirst({ where: { id, userId } });
+export async function updateInsurancePolicy(
+  requesterId: string,
+  id: string,
+  data: Prisma.InsurancePolicyUpdateInput,
+  requesterRole = 'MEMBER',
+) {
+  const policy = await prisma.insurancePolicy.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!policy) throw AppError.notFound('Insurance policy');
   return prisma.insurancePolicy.update({ where: { id }, data });
 }
 
-export async function deleteInsurancePolicy(userId: string, id: string) {
-  const policy = await prisma.insurancePolicy.findFirst({ where: { id, userId } });
+export async function deleteInsurancePolicy(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  const policy = await prisma.insurancePolicy.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!policy) throw AppError.notFound('Insurance policy');
   return prisma.insurancePolicy.delete({ where: { id } });
 }

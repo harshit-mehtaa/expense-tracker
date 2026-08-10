@@ -1,6 +1,7 @@
 import { prisma } from '../config/prisma';
 import type { Prisma, CapitalGainAssetType } from '@prisma/client';
 import { getFYRange } from '../utils/financialYear';
+import { ownerScopedWhere } from '../utils/resolveTargetUserId';
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
 
@@ -25,21 +26,22 @@ export async function createCapitalGain(
 }
 
 export async function updateCapitalGain(
-  userId: string,
+  requesterId: string,
   id: string,
   data: Partial<Prisma.CapitalGainEntryUncheckedUpdateInput>,
+  requesterRole = 'MEMBER',
 ) {
   const result = await prisma.capitalGainEntry.updateMany({
-    where: { id, userId, deletedAt: null },
+    where: { ...ownerScopedWhere(id, requesterId, requesterRole), deletedAt: null },
     data,
   });
   if (result.count === 0) return null;
   return prisma.capitalGainEntry.findUnique({ where: { id } });
 }
 
-export async function deleteCapitalGain(userId: string, id: string) {
+export async function deleteCapitalGain(requesterId: string, id: string, requesterRole = 'MEMBER') {
   const result = await prisma.capitalGainEntry.updateMany({
-    where: { id, userId, deletedAt: null },
+    where: { ...ownerScopedWhere(id, requesterId, requesterRole), deletedAt: null },
     data: { deletedAt: new Date() },
   });
   return result.count > 0 ? { deleted: true } : null;

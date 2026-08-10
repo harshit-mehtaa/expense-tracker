@@ -6,6 +6,9 @@ import { sendSuccess, sendCreated, sendNoContent } from '../utils/response';
 import { AppError } from '../utils/AppError';
 import { prisma } from '../config/prisma';
 import * as svc from '../services/loanService';
+import { recordAuditLog } from '../services/auditService';
+import { isTest } from '../config/env';
+import { ownerScopedWhere, resolveWriteUserId } from '../utils/resolveTargetUserId';
 
 const router = Router();
 router.use(requireAuth);
@@ -64,18 +67,43 @@ router.post('/:id/prepayment-simulation', asyncHandler(async (req, res) => {
 
 router.post('/', asyncHandler(async (req, res) => {
   const data = loanSchema.parse(req.body);
-  const loan = await svc.createLoan(req.user!.userId, data as any);
+  const ownerUserId = await resolveWriteUserId(req);
+  const loan = await svc.createLoan(ownerUserId, data as any);
+  await recordAuditLog({
+    performedByUserId: req.user!.userId,
+    action: 'CREATE',
+    entityType: 'Loan',
+    entityId: loan.id,
+    newValue: loan,
+  });
   sendCreated(res, loan);
 }));
 
 router.put('/:id', asyncHandler(async (req, res) => {
   const data = loanSchema.partial().parse(req.body);
-  const loan = await svc.updateLoan(req.user!.userId, req.params.id, data as any);
+  const oldLoan = isTest ? null : await prisma.loan.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const loan = await svc.updateLoan(req.user!.userId, req.params.id, data as any, req.user!.role);
+  await recordAuditLog({
+    performedByUserId: req.user!.userId,
+    action: 'UPDATE',
+    entityType: 'Loan',
+    entityId: loan.id,
+    oldValue: oldLoan,
+    newValue: loan,
+  });
   sendSuccess(res, loan);
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
-  await svc.deleteLoan(req.user!.userId, req.params.id);
+  const oldLoan = isTest ? null : await prisma.loan.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const loan = await svc.deleteLoan(req.user!.userId, req.params.id, req.user!.role);
+  await recordAuditLog({
+    performedByUserId: req.user!.userId,
+    action: 'DELETE',
+    entityType: 'Loan',
+    entityId: loan?.id ?? req.params.id,
+    oldValue: oldLoan,
+  });
   sendNoContent(res);
 }));
 

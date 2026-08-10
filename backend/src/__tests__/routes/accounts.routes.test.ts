@@ -78,13 +78,111 @@ describe('POST /api/accounts', () => {
     expect(createMock).toHaveBeenCalled();
   });
 
+  it('accepts credit card accounts', async () => {
+    const res = await request(app).post('/api/accounts').send({
+      ...VALID_BODY,
+      accountType: 'CREDIT_CARD',
+      currentBalance: -25000,
+      creditLimit: 300000,
+      billingCycleStartDay: 2,
+      billingCycleEndDay: 1,
+      paymentDueDay: 18,
+    });
+    expect(res.status).toBe(201);
+    expect(createMock).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({
+        accountType: 'CREDIT_CARD',
+        currentBalance: -25000,
+        creditLimit: 300000,
+        billingCycleStartDay: 2,
+        billingCycleEndDay: 1,
+        paymentDueDay: 18,
+      }),
+    );
+  });
+
+  it('accepts debit and prepaid card account types', async () => {
+    const debitRes = await request(app).post('/api/accounts').send({ ...VALID_BODY, accountType: 'DEBIT_CARD' });
+    const prepaidRes = await request(app).post('/api/accounts').send({ ...VALID_BODY, accountType: 'PREPAID_CARD' });
+
+    expect(debitRes.status).toBe(201);
+    expect(prepaidRes.status).toBe(201);
+  });
+
+  it('accepts a full account number instead of only last 4 digits', async () => {
+    const res = await request(app).post('/api/accounts').send({ ...VALID_BODY, accountNumber: '1234 5678 9012' });
+    expect(res.status).toBe(201);
+    expect(createMock).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ accountNumber: '1234 5678 9012' }),
+    );
+  });
+
+  it('accepts and normalizes a full IFSC code', async () => {
+    const res = await request(app).post('/api/accounts').send({ ...VALID_BODY, ifscCode: 'hdfc0001234' });
+    expect(res.status).toBe(201);
+    expect(createMock).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ ifscCode: 'HDFC0001234' }),
+    );
+  });
+
+  it('ignores empty optional form fields', async () => {
+    const res = await request(app).post('/api/accounts').send({
+      ...VALID_BODY,
+      ifscPrefix: '',
+      ifscCode: '',
+      accountNumber: '',
+      accountNumberLast4: '',
+      upiId: '',
+      maturityDate: '',
+      interestRate: '',
+    });
+
+    expect(res.status).toBe(201);
+    expect(createMock).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({
+        ifscPrefix: undefined,
+        ifscCode: undefined,
+        accountNumber: undefined,
+        accountNumberLast4: undefined,
+        upiId: undefined,
+        maturityDate: undefined,
+        interestRate: undefined,
+      }),
+    );
+  });
+
+  it('returns 422 when IFSC code is invalid', async () => {
+    const res = await request(app).post('/api/accounts').send({ ...VALID_BODY, ifscCode: 'HDFC1234' });
+    expect(res.status).toBe(422);
+  });
+
   it('returns 422 when bankName is empty', async () => {
     const res = await request(app).post('/api/accounts').send({ ...VALID_BODY, bankName: '' });
     expect(res.status).toBe(422);
   });
 
+  it('returns 422 when bankName is the selector-only Other option', async () => {
+    const res = await request(app).post('/api/accounts').send({ ...VALID_BODY, bankName: 'Other' });
+    expect(res.status).toBe(422);
+  });
+
   it('returns 422 when accountType is invalid', async () => {
     const res = await request(app).post('/api/accounts').send({ ...VALID_BODY, accountType: 'INVALID' });
+    expect(res.status).toBe(422);
+  });
+
+  it('returns 422 when billing cycle days are outside 1-31', async () => {
+    const res = await request(app).post('/api/accounts').send({
+      ...VALID_BODY,
+      accountType: 'CREDIT_CARD',
+      billingCycleStartDay: 0,
+      billingCycleEndDay: 32,
+      paymentDueDay: 45,
+    });
     expect(res.status).toBe(422);
   });
 });
@@ -111,8 +209,9 @@ describe('POST /api/accounts/:id/reconcile', () => {
     expect(res.status).toBe(200);
   });
 
-  it('returns 422 when actualBalance is negative', async () => {
+  it('allows negative balances for credit card reconciliation', async () => {
     const res = await request(app).post('/api/accounts/acc-1/reconcile').send({ actualBalance: -100 });
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(200);
+    expect(reconcileMock).toHaveBeenCalledWith('acc-1', 'u1', 'ADMIN', -100, undefined);
   });
 });

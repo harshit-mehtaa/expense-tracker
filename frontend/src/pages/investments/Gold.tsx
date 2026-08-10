@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { investmentsApi, GoldHolding } from '@/api/investments';
+import { formatINR } from '@/lib/indianFormat';
 
 const GOLD_TYPES: Record<string, string> = {
   PHYSICAL: 'Physical Gold', SGB: 'Sovereign Gold Bond', GOLD_ETF: 'Gold ETF', DIGITAL: 'Digital Gold',
@@ -48,7 +49,7 @@ export default function GoldPage() {
   const invalidateGold = () => qc.invalidateQueries({ queryKey: ['gold'] });
 
   const createGoldMutation = useMutation({
-    mutationFn: (data: GoldForm) => investmentsApi.createGold(data),
+    mutationFn: (data: GoldForm) => investmentsApi.createGold(data, viewUserId ? { targetUserId: viewUserId } : undefined),
     onSuccess: () => { invalidateGold(); setShowGoldForm(false); goldForm.reset(); },
   });
 
@@ -159,24 +160,22 @@ export default function GoldPage() {
                   <p className="text-xs text-muted-foreground mt-0.5">{(h as any).userName}</p>
                 )}
               </div>
-              {!isViewingFamilyWide && (
-                <div className="flex items-center gap-1">
-                  <Button variant="ghost" size="icon" onClick={() => openEditModal(h)} title="Edit holding">
-                    <SquarePen className="h-4 w-4" />
-                  </Button>
-                  <Button variant="ghost" size="icon" onClick={() => deleteGoldMutation.mutate(h.id)}>
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
-                </div>
-              )}
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="icon" onClick={() => openEditModal(h)} title="Edit holding">
+                  <SquarePen className="h-4 w-4" />
+                </Button>
+                <Button variant="ghost" size="icon" onClick={() => deleteGoldMutation.mutate(h.id)}>
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div><p className="text-muted-foreground">Quantity</p><p className="font-semibold">{h.quantityGrams}g</p></div>
               <div><p className="text-muted-foreground">Current Value</p><INRDisplay amount={h.quantityGrams * h.currentPricePerGram} className="font-semibold" /></div>
-              <div><p className="text-muted-foreground">Buy Rate</p><p>₹{h.purchasePricePerGram.toLocaleString('en-IN')}/g</p></div>
+              <div><p className="text-muted-foreground">Buy Rate</p><p>{formatINR(h.purchasePricePerGram)}/g</p></div>
               <div>
                 <p className="text-muted-foreground">Current Rate</p>
-                {!isViewingFamilyWide && editingGoldId === h.id ? (
+                {editingGoldId === h.id ? (
                   <div className="flex items-center gap-1 mt-0.5">
                     <Input
                       type="number"
@@ -198,12 +197,10 @@ export default function GoldPage() {
                   </div>
                 ) : (
                   <div className="flex items-center gap-1 group">
-                    <p>₹{h.currentPricePerGram.toLocaleString('en-IN')}/g</p>
-                    {!isViewingFamilyWide && (
-                      <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setEditingGoldId(h.id); setEditGoldValue(String(h.currentPricePerGram)); }} title="Update price">
-                        <Pencil className="h-3 w-3" />
-                      </Button>
-                    )}
+                    <p>{formatINR(h.currentPricePerGram)}/g</p>
+                    <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setEditingGoldId(h.id); setEditGoldValue(String(h.currentPricePerGram)); }} title="Update price">
+                      <Pencil className="h-3 w-3" />
+                    </Button>
                   </div>
                 )}
               </div>
@@ -231,15 +228,15 @@ export default function GoldPage() {
             <form onSubmit={goldForm.handleSubmit((data) => createGoldMutation.mutate(data))} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1 col-span-2">
-                  <Label>Type</Label>
+                  <Label required>Type</Label>
                   <select {...goldForm.register('type')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                     {Object.entries(GOLD_TYPES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                   </select>
                 </div>
-                <div className="space-y-1"><Label>Quantity (grams)</Label><Input {...goldForm.register('quantityGrams')} type="number" step="0.001" /></div>
-                <div className="space-y-1"><Label>Buy Price (₹/g)</Label><Input {...goldForm.register('purchasePricePerGram')} type="number" step="0.01" /></div>
-                <div className="space-y-1"><Label>Current Price (₹/g)</Label><Input {...goldForm.register('currentPricePerGram')} type="number" step="0.01" /></div>
-                <div className="space-y-1"><Label>Purchase Date</Label><Input {...goldForm.register('purchaseDate')} type="date" /></div>
+                <div className="space-y-1"><Label required>Quantity (grams)</Label><Input {...goldForm.register('quantityGrams')} type="number" step="0.001" /></div>
+                <div className="space-y-1"><Label required>Buy Price (₹/g)</Label><Input {...goldForm.register('purchasePricePerGram')} type="number" step="0.01" /></div>
+                <div className="space-y-1"><Label required>Current Price (₹/g)</Label><Input {...goldForm.register('currentPricePerGram')} type="number" step="0.01" /></div>
+                <div className="space-y-1"><Label required>Purchase Date</Label><Input {...goldForm.register('purchaseDate')} type="date" /></div>
                 <div className="col-span-2 space-y-1"><Label>Description (optional)</Label><Input {...goldForm.register('description')} /></div>
                 <div className="col-span-2 space-y-1"><Label>Notes (optional)</Label><Input {...goldForm.register('notes')} /></div>
               </div>
@@ -264,15 +261,15 @@ export default function GoldPage() {
             <form onSubmit={editGoldForm.handleSubmit((data) => updateGoldMutation.mutate({ id: editingGoldHolding.id, ...data }))} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1 col-span-2">
-                  <Label>Type</Label>
+                  <Label required>Type</Label>
                   <select {...editGoldForm.register('type')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                     {Object.entries(GOLD_TYPES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                   </select>
                 </div>
-                <div className="space-y-1"><Label>Quantity (grams)</Label><Input {...editGoldForm.register('quantityGrams')} type="number" step="0.001" /></div>
-                <div className="space-y-1"><Label>Buy Price (₹/g)</Label><Input {...editGoldForm.register('purchasePricePerGram')} type="number" step="0.01" /></div>
-                <div className="space-y-1"><Label>Current Price (₹/g)</Label><Input {...editGoldForm.register('currentPricePerGram')} type="number" step="0.01" /></div>
-                <div className="space-y-1"><Label>Purchase Date</Label><Input {...editGoldForm.register('purchaseDate')} type="date" /></div>
+                <div className="space-y-1"><Label required>Quantity (grams)</Label><Input {...editGoldForm.register('quantityGrams')} type="number" step="0.001" /></div>
+                <div className="space-y-1"><Label required>Buy Price (₹/g)</Label><Input {...editGoldForm.register('purchasePricePerGram')} type="number" step="0.01" /></div>
+                <div className="space-y-1"><Label required>Current Price (₹/g)</Label><Input {...editGoldForm.register('currentPricePerGram')} type="number" step="0.01" /></div>
+                <div className="space-y-1"><Label required>Purchase Date</Label><Input {...editGoldForm.register('purchaseDate')} type="date" /></div>
                 <div className="col-span-2 space-y-1"><Label>Description (optional)</Label><Input {...editGoldForm.register('description')} /></div>
                 <div className="col-span-2 space-y-1"><Label>Notes (optional)</Label><Input {...editGoldForm.register('notes')} /></div>
               </div>

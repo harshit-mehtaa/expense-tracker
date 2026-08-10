@@ -2,7 +2,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useNavigate } from 'react-router-dom';
-import { IndianRupee, TrendingUp, Shield, BarChart3 } from 'lucide-react';
+import { BarChart3, Eye, EyeOff, IndianRupee, Shield, TrendingUp } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -26,6 +26,7 @@ export default function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem('theme');
@@ -45,8 +46,16 @@ export default function LoginPage() {
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<LoginFormData>({ resolver: zodResolver(loginSchema) });
+
+  const fillDemoAdmin = () => {
+    setValue('email', 'harshit@mehta.local', { shouldValidate: true });
+    setValue('password', 'Admin@1234', { shouldValidate: true });
+    setShowPassword(true);
+    setError(null);
+  };
 
   const onSubmit = async (data: LoginFormData) => {
     setError(null);
@@ -115,11 +124,11 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
             <div className="space-y-1.5">
-              <Label htmlFor="email" className="text-sm font-medium">Email</Label>
+              <Label htmlFor="email" className="text-sm font-medium" required>Email</Label>
               <Input
                 id="email"
                 type="email"
-                placeholder="admin@family.local"
+                placeholder="harshit@mehta.local"
                 autoComplete="email"
                 {...register('email')}
               />
@@ -129,13 +138,24 @@ export default function LoginPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="password" className="text-sm font-medium">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                {...register('password')}
-              />
+              <Label htmlFor="password" className="text-sm font-medium" required>Password</Label>
+              <div className="relative">
+                <Input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  className="pr-10"
+                  {...register('password')}
+                />
+                <button
+                  type="button"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="absolute inset-y-0 right-0 flex w-10 items-center justify-center rounded-r-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => setShowPassword((value) => !value)}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
               {errors.password && (
                 <p className="text-xs text-destructive">{errors.password.message}</p>
               )}
@@ -150,6 +170,12 @@ export default function LoginPage() {
             <Button type="submit" className="w-full" size="default" disabled={isSubmitting}>
               {isSubmitting ? 'Signing in...' : 'Sign in'}
             </Button>
+
+            {import.meta.env.DEV && (
+              <Button type="button" variant="outline" className="w-full" onClick={fillDemoAdmin} disabled={isSubmitting}>
+                Use admin demo
+              </Button>
+            )}
           </form>
 
           <p className="mt-6 text-center text-xs text-muted-foreground">

@@ -10,12 +10,13 @@ import type {
 const unwrap = <T>(res: { data: { data: T } }): T => res.data.data;
 
 const uid = (id?: string) => (id ? `&targetUserId=${id}` : '');
+const targetParams = (id?: string) => (id ? { targetUserId: id } : {});
 
 export const taxApi = {
   getProfile: (fy: string, viewUserId?: string) =>
     api.get<{ data: any }>(`/tax/profile?fy=${fy}${uid(viewUserId)}`).then(unwrap),
-  saveProfile: (fy: string, data: object) =>
-    api.post<{ data: any }>(`/tax/profile?fy=${fy}`, data).then(unwrap),
+  saveProfile: (fy: string, data: object, viewUserId?: string) =>
+    api.post<{ data: any }>(`/tax/profile?fy=${fy}`, data, { params: targetParams(viewUserId) }).then(unwrap),
   getSummary: (fy: string, viewUserId?: string) =>
     api.get<{ data: any }>(`/tax/summary?fy=${fy}${uid(viewUserId)}`).then(unwrap),
   get80CTracker: (fy: string, viewUserId?: string) =>
@@ -28,8 +29,8 @@ export const taxApi = {
   // ─── Capital Gains ─────────────────────────────────────────────────────────
   listCapitalGains: (fy: string, viewUserId?: string) =>
     api.get<{ data: CapitalGainEntry[] }>(`/tax/capital-gains?fy=${fy}${uid(viewUserId)}`).then(unwrap),
-  createCapitalGain: (data: object) =>
-    api.post<{ data: CapitalGainEntry }>('/tax/capital-gains', data).then(unwrap),
+  createCapitalGain: (data: object, viewUserId?: string) =>
+    api.post<{ data: CapitalGainEntry }>('/tax/capital-gains', data, { params: targetParams(viewUserId) }).then(unwrap),
   updateCapitalGain: (id: string, data: object) =>
     api.put<{ data: CapitalGainEntry }>(`/tax/capital-gains/${id}`, data).then(unwrap),
   deleteCapitalGain: (id: string) =>
@@ -40,8 +41,8 @@ export const taxApi = {
   // ─── Other Income ──────────────────────────────────────────────────────────
   listOtherIncome: (fy: string, viewUserId?: string) =>
     api.get<{ data: OtherSourceIncome[] }>(`/tax/other-income?fy=${fy}${uid(viewUserId)}`).then(unwrap),
-  createOtherIncome: (data: object) =>
-    api.post<{ data: OtherSourceIncome }>('/tax/other-income', data).then(unwrap),
+  createOtherIncome: (data: object, viewUserId?: string) =>
+    api.post<{ data: OtherSourceIncome }>('/tax/other-income', data, { params: targetParams(viewUserId) }).then(unwrap),
   updateOtherIncome: (id: string, data: object) =>
     api.put<{ data: OtherSourceIncome }>(`/tax/other-income/${id}`, data).then(unwrap),
   deleteOtherIncome: (id: string) =>
@@ -52,8 +53,8 @@ export const taxApi = {
   // ─── House Property ────────────────────────────────────────────────────────
   listHouseProperty: (fy: string, viewUserId?: string) =>
     api.get<{ data: HousePropertyDetail[] }>(`/tax/house-property?fy=${fy}${uid(viewUserId)}`).then(unwrap),
-  createHouseProperty: (data: object) =>
-    api.post<{ data: HousePropertyDetail }>('/tax/house-property', data).then(unwrap),
+  createHouseProperty: (data: object, viewUserId?: string) =>
+    api.post<{ data: HousePropertyDetail }>('/tax/house-property', data, { params: targetParams(viewUserId) }).then(unwrap),
   updateHouseProperty: (id: string, data: object) =>
     api.put<{ data: HousePropertyDetail }>(`/tax/house-property/${id}`, data).then(unwrap),
   deleteHouseProperty: (id: string) =>
@@ -64,8 +65,8 @@ export const taxApi = {
   // ─── Foreign Assets (Schedule FA) ──────────────────────────────────────────
   listForeignAssets: (fy: string, viewUserId?: string) =>
     api.get<{ data: ForeignAssetDisclosure[] }>(`/tax/foreign-assets?fy=${fy}${uid(viewUserId)}`).then(unwrap),
-  createForeignAsset: (data: object) =>
-    api.post<{ data: ForeignAssetDisclosure }>('/tax/foreign-assets', data).then(unwrap),
+  createForeignAsset: (data: object, viewUserId?: string) =>
+    api.post<{ data: ForeignAssetDisclosure }>('/tax/foreign-assets', data, { params: targetParams(viewUserId) }).then(unwrap),
   updateForeignAsset: (id: string, data: object) =>
     api.put<{ data: ForeignAssetDisclosure }>(`/tax/foreign-assets/${id}`, data).then(unwrap),
   deleteForeignAsset: (id: string) =>

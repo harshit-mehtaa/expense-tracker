@@ -14,6 +14,7 @@ import { taxApi } from '@/api/tax';
 import { loansApi } from '@/api/loans';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { cn } from '@/lib/utils';
+import { formatINR } from '@/lib/indianFormat';
 import { CHART_PALETTE, CustomTooltip } from '@/lib/chartUtils';
 import InsightsTab from './InsightsTab';
 import FYHistoryTab from './FYHistoryTab';
@@ -113,11 +114,9 @@ export default function TaxCentrePage() {
     queryFn: () => taxApi.getProfile(selectedFY, viewUserId),
   });
 
-  // Loans for Sec 24(b) suggestion — only fetch when editing own profile
   const { data: loans = [] } = useQuery({
     queryKey: ['loans', viewUserId],
     queryFn: () => loansApi.getAll(viewUserId),
-    enabled: !isViewingOther,
   });
   // Upper-bound estimate: outstandingBalance × annualRate — actual deductible may be lower
   const sec24bSuggestion = loans
@@ -132,7 +131,7 @@ export default function TaxCentrePage() {
   const selectedRegime = watch('regime') ?? profile?.regime ?? 'OLD';
 
   const saveMutation = useMutation({
-    mutationFn: (data: ProfileForm) => taxApi.saveProfile(selectedFY, data),
+    mutationFn: (data: ProfileForm) => taxApi.saveProfile(selectedFY, data, viewUserId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tax-summary', selectedFY, viewUserId] });
       qc.invalidateQueries({ queryKey: ['tax-profile', selectedFY, viewUserId] });
@@ -312,29 +311,15 @@ export default function TaxCentrePage() {
             </div>
           )}
 
-          {/* Profile Form — read-only when viewing another member */}
+          {/* Profile Form */}
           <div className="rounded-lg border bg-card p-6">
             <h2 className="font-semibold mb-4">
               {isViewingOther ? `${selectedMemberName}'s Income & Tax Profile` : 'Income & Tax Profile'}
             </h2>
-            {isViewingOther ? (
-              /* Read-only view for another member's profile */
-              profile ? (
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-                  <div><span className="text-muted-foreground">Regime:</span> <span className="font-medium">{profile.regime ?? '—'}</span></div>
-                  <div><span className="text-muted-foreground">Gross Salary:</span> <span className="font-medium">₹{(profile.grossSalary ?? 0).toLocaleString('en-IN')}</span></div>
-                  <div><span className="text-muted-foreground">80C:</span> <span className="font-medium">₹{(profile.deduction80C ?? 0).toLocaleString('en-IN')}</span></div>
-                  <div><span className="text-muted-foreground">TDS Paid:</span> <span className="font-medium">₹{(profile.taxPaidTds ?? 0).toLocaleString('en-IN')}</span></div>
-                  <div><span className="text-muted-foreground">Advance Tax:</span> <span className="font-medium">₹{(profile.taxPaidAdvance ?? 0).toLocaleString('en-IN')}</span></div>
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">No profile found for this member.</p>
-              )
-            ) : (
-              <form onSubmit={handleSubmit((data) => saveMutation.mutate(data))} className="space-y-4">
+            <form onSubmit={handleSubmit((data) => saveMutation.mutate(data))} className="space-y-4">
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                   <div className="space-y-1 col-span-full md:col-span-1">
-                    <Label>Tax Regime</Label>
+                    <Label required>Tax Regime</Label>
                     <select {...register('regime')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                       <option value="OLD">Old Regime — with deductions</option>
                       <option value="NEW">New Regime — lower slabs, fewer deductions</option>
@@ -361,7 +346,7 @@ export default function TaxCentrePage() {
                         <Input {...register('rentPaidMonthly')} type="number" />
                       </div>
                       <div className="space-y-1">
-                        <Label>City Type</Label>
+                        <Label required>City Type</Label>
                         <select {...register('cityType')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                           <option value="METRO">Metro (Mumbai/Delhi/Kolkata/Chennai)</option>
                           <option value="NON_METRO">Non-Metro</option>
@@ -370,13 +355,13 @@ export default function TaxCentrePage() {
                       <div className="space-y-1">
                         <Label>80C — Investments &amp; Ins. (₹)</Label>
                         <Input {...register('deduction80C')} type="number" max={150000} placeholder="Max ₹1,50,000" />
-                        {tracker80C && tracker80C.utilized > 0 && !isViewingOther && (
+                        {tracker80C && tracker80C.utilized > 0 && (
                           <button
                             type="button"
                             onClick={() => setValue('deduction80C', Math.min(tracker80C.utilized, 150000), { shouldDirty: true })}
                             className="text-xs text-primary underline-offset-2 hover:underline mt-0.5"
                           >
-                            Detected from investments: ₹{Math.min(tracker80C.utilized, 150000).toLocaleString('en-IN')} — use this?
+                            Detected from investments: {formatINR(Math.min(tracker80C.utilized, 150000))} — use this?
                           </button>
                         )}
                       </div>
@@ -387,13 +372,13 @@ export default function TaxCentrePage() {
                       <div className="space-y-1">
                         <Label>Sec 24(b) — Home Loan Int. (₹)</Label>
                         <Input {...register('deduction24B')} type="number" max={200000} placeholder="Max ₹2,00,000" />
-                        {sec24bSuggestion > 0 && !isViewingOther && (
+                        {sec24bSuggestion > 0 && (
                           <button
                             type="button"
                             onClick={() => setValue('deduction24B', Math.round(sec24bSuggestion), { shouldDirty: true })}
                             className="text-xs text-primary underline-offset-2 hover:underline mt-0.5"
                           >
-                            Est. from loans: ~₹{Math.round(sec24bSuggestion).toLocaleString('en-IN')} →
+                            Est. from loans: ~{formatINR(Math.round(sec24bSuggestion))} →
                           </button>
                         )}
                       </div>
@@ -445,7 +430,6 @@ export default function TaxCentrePage() {
                   </Button>
                 </div>
               </form>
-            )}
           </div>
 
           {/* Old vs New Regime Comparison */}
@@ -528,7 +512,7 @@ export default function TaxCentrePage() {
                           <Cell key={i} fill={entry.color} />
                         ))}
                       </Pie>
-                      <Tooltip content={<CustomTooltip formatter={(v) => `₹${v.toLocaleString('en-IN')}`} />} />
+                      <Tooltip content={<CustomTooltip formatter={(v) => formatINR(Number(v))} />} />
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
@@ -560,7 +544,7 @@ export default function TaxCentrePage() {
       {/* 80C Tracker Tab */}
       {activeTab === '80c' && tracker80C && (
         <div className="space-y-6">
-          {selectedRegime === 'NEW' && !isViewingOther && (
+          {selectedRegime === 'NEW' && (
             <div className="rounded-lg border border-amber-400 bg-amber-50 dark:bg-amber-950 p-4 text-sm text-amber-800 dark:text-amber-200">
               <strong>Not applicable in New Regime.</strong> Section 80C deductions are not available under the New Tax Regime.
               Switch to Old Regime in your tax profile to benefit from these deductions.
@@ -625,7 +609,7 @@ export default function TaxCentrePage() {
                 type="number"
                 value={projectedTax ?? ''}
                 onChange={(e) => setProjectedTax(e.target.value ? Number(e.target.value) : null)}
-                placeholder={`${Math.round(advanceSummaryTax).toLocaleString('en-IN')} (from profile)`}
+                placeholder={`${formatINR(Math.round(advanceSummaryTax))} (from profile)`}
               />
             </div>
             <div className="pb-1 space-y-1">
@@ -688,7 +672,7 @@ export default function TaxCentrePage() {
             <p className="text-sm text-muted-foreground">Minimum of: (a) Actual HRA received, (b) Rent paid − 10% of basic, (c) 50%/40% of basic (metro/non-metro)</p>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
-                <Label>Basic Salary (₹ / year)</Label>
+                <Label required>Basic Salary (₹ / year)</Label>
                 <Input
                   type="number"
                   value={hraParams.basicSalary}
@@ -715,7 +699,7 @@ export default function TaxCentrePage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label>City</Label>
+                <Label required>City</Label>
                 <select
                   value={hraParams.city}
                   onChange={(e) => setHraParams((p) => ({ ...p, city: e.target.value }))}

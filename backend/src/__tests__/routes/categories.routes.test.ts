@@ -19,6 +19,7 @@ vi.mock('../../config/prisma', () => {
       findMany: vi.fn(),
       create: vi.fn(),
       findFirst: vi.fn(),
+      count: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
     },
@@ -45,6 +46,7 @@ beforeEach(() => {
   catMock.findMany.mockResolvedValue([MOCK_CAT]);
   catMock.create.mockResolvedValue({ ...MOCK_CAT, id: 'cat-new' });
   catMock.findFirst.mockResolvedValue(MOCK_CAT);
+  catMock.count.mockResolvedValue(0);
   catMock.update.mockResolvedValue(MOCK_CAT);
   catMock.delete.mockResolvedValue(MOCK_CAT);
   budgetMock.count.mockResolvedValue(0);
@@ -74,6 +76,14 @@ describe('POST /api/categories', () => {
     });
   });
 
+  it('assigns a default icon when one is not provided', async () => {
+    const res = await request(app).post('/api/categories').send({ name: 'Salon', type: 'EXPENSE' });
+    expect(res.status).toBe(201);
+    expect(catMock.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ name: 'Salon', type: 'EXPENSE', icon: '💇' }),
+    });
+  });
+
   it('returns 422 when name is empty', async () => {
     const res = await request(app).post('/api/categories').send({ name: '', type: 'EXPENSE' });
     expect(res.status).toBe(422);
@@ -82,6 +92,56 @@ describe('POST /api/categories', () => {
   it('returns 422 when type is invalid', async () => {
     const res = await request(app).post('/api/categories').send({ name: 'Food', type: 'INVALID' });
     expect(res.status).toBe(422);
+  });
+
+  it('accepts emoji icons', async () => {
+    const res = await request(app)
+      .post('/api/categories')
+      .send({ name: 'Groceries', type: 'EXPENSE', icon: '🛒' });
+
+    expect(res.status).toBe(201);
+    expect(catMock.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ name: 'Groceries', type: 'EXPENSE', icon: '🛒' }),
+    });
+  });
+
+  it('creates a child category under a same-type parent', async () => {
+    catMock.findFirst.mockResolvedValueOnce({ id: 'cmparentcategory0000000001', type: 'EXPENSE', parentId: null });
+
+    const res = await request(app)
+      .post('/api/categories')
+      .send({ name: 'Netflix', type: 'EXPENSE', parentId: 'cmparentcategory0000000001' });
+
+    expect(res.status).toBe(201);
+    expect(catMock.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        name: 'Netflix',
+        type: 'EXPENSE',
+        parentId: 'cmparentcategory0000000001',
+      }),
+    });
+  });
+
+  it('rejects child category when parent type differs', async () => {
+    catMock.findFirst.mockResolvedValueOnce({ id: 'cmparentcategory0000000001', type: 'INCOME', parentId: null });
+
+    const res = await request(app)
+      .post('/api/categories')
+      .send({ name: 'Netflix', type: 'EXPENSE', parentId: 'cmparentcategory0000000001' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('same type');
+  });
+
+  it('uses a default icon when create receives a blank icon', async () => {
+    const res = await request(app)
+      .post('/api/categories')
+      .send({ name: 'Groceries', type: 'EXPENSE', icon: '   ' });
+
+    expect(res.status).toBe(201);
+    expect(catMock.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ icon: '🛒' }),
+    });
   });
 
   it('transforms empty string color to undefined (strips the field)', async () => {
@@ -118,6 +178,47 @@ describe('PUT /api/categories/:id', () => {
     const res = await request(app).put('/api/categories/cat-1').send({ name: 'Dining' });
     expect(res.status).toBe(200);
     expect(catMock.update).toHaveBeenCalled();
+  });
+
+  it('updates emoji icon', async () => {
+    const res = await request(app).put('/api/categories/cat-1').send({ icon: '🧾' });
+    expect(res.status).toBe(200);
+    expect(catMock.update).toHaveBeenCalledWith({
+      where: { id: 'cat-1' },
+      data: expect.objectContaining({ icon: '🧾' }),
+    });
+  });
+
+  it('clears emoji icon when empty string is sent', async () => {
+    const res = await request(app).put('/api/categories/cat-1').send({ icon: '' });
+    expect(res.status).toBe(200);
+    expect(catMock.update).toHaveBeenCalledWith({
+      where: { id: 'cat-1' },
+      data: expect.objectContaining({ icon: null }),
+    });
+  });
+
+  it('updates parent category', async () => {
+    catMock.findFirst
+      .mockResolvedValueOnce(MOCK_CAT)
+      .mockResolvedValueOnce({ id: 'cmparentcategory0000000001', type: 'EXPENSE', parentId: null });
+
+    const res = await request(app)
+      .put('/api/categories/cat-1')
+      .send({ parentId: 'cmparentcategory0000000001' });
+
+    expect(res.status).toBe(200);
+    expect(catMock.update).toHaveBeenCalledWith({
+      where: { id: 'cat-1' },
+      data: expect.objectContaining({ parentId: 'cmparentcategory0000000001' }),
+    });
+  });
+
+  it('rejects moving category under itself', async () => {
+    const id = 'cmolduqjx003i9vmqbwslrvh7';
+    catMock.findFirst.mockResolvedValueOnce({ ...MOCK_CAT, id });
+    const res = await request(app).put(`/api/categories/${id}`).send({ parentId: id });
+    expect(res.status).toBe(400);
   });
 
   it('returns 404 when category not found', async () => {
@@ -181,6 +282,13 @@ describe('DELETE /api/categories/:id', () => {
     const res = await request(app).delete('/api/categories/cat-1');
     expect(res.status).toBe(409);
     expect(res.body.message).toContain('2 budgets');
+  });
+
+  it('returns 409 when category has child categories', async () => {
+    catMock.count.mockResolvedValueOnce(2);
+    const res = await request(app).delete('/api/categories/cat-1');
+    expect(res.status).toBe(409);
+    expect(res.body.message).toContain('sub-categories');
   });
 
   it('returns 409 with singular "budget" (not "1 budgets") when only one budget uses it', async () => {

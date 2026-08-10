@@ -71,19 +71,21 @@ beforeEach(() => {
 describe('getInsurancePolicies', () => {
   it('MEMBER: scopes to requesterId, ordered by premiumDueDate', async () => {
     const result = await getInsurancePolicies(undefined, 'u1', 'MEMBER');
-    expect(policyMock.findMany).toHaveBeenCalledWith({
+    expect(policyMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { userId: 'u1' },
+      include: expect.objectContaining({ transactions: expect.any(Object) }),
       orderBy: { premiumDueDate: 'asc' },
-    });
+    }));
     expect(result).toHaveLength(1);
   });
 
   it('ADMIN with userId: scopes to specified member', async () => {
     await getInsurancePolicies('u2', 'admin-1', 'ADMIN');
-    expect(policyMock.findMany).toHaveBeenCalledWith({
+    expect(policyMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { userId: 'u2' },
+      include: expect.objectContaining({ transactions: expect.any(Object) }),
       orderBy: { premiumDueDate: 'asc' },
-    });
+    }));
   });
 
   it('ADMIN with undefined userId: family-wide query, includes user name', async () => {
@@ -93,7 +95,7 @@ describe('getInsurancePolicies', () => {
     const result = await getInsurancePolicies(undefined, 'admin-1', 'ADMIN');
     const call = policyMock.findMany.mock.calls[0][0];
     expect(call.where).toEqual({ user: { isActive: true, deletedAt: null } });
-    expect(call.include).toEqual({ user: { select: { name: true } } });
+    expect(call.include).toEqual(expect.objectContaining({ user: { select: { name: true } }, transactions: expect.any(Object) }));
     expect((result[0] as any).userName).toBe('Alice');
     expect((result[0] as any).user).toBeUndefined();
   });
@@ -104,6 +106,23 @@ describe('getInsurancePolicies', () => {
     ]);
     const result = await getInsurancePolicies(undefined, 'admin-1', 'ADMIN');
     expect((result[0] as any).userName).toBe('');
+  });
+
+  it('adds paid status from the latest linked transaction', async () => {
+    policyMock.findMany.mockResolvedValueOnce([
+      {
+        ...MOCK_POLICY,
+        transactions: [
+          { id: 'tx-1', amount: 2000, date: new Date('2026-05-01T00:00:00.000Z'), description: 'Premium' },
+        ],
+      },
+    ]);
+
+    const result = await getInsurancePolicies(undefined, 'u1', 'MEMBER');
+
+    expect((result[0] as any).isPaid).toBe(true);
+    expect((result[0] as any).lastPaidTransactionId).toBe('tx-1');
+    expect((result[0] as any).lastPaidAmount).toBe(2000);
   });
 });
 

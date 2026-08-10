@@ -26,6 +26,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const sessionRestored = useRef(false);
+  const authEpoch = useRef(0);
 
   const fetchCurrentUser = useCallback(async () => {
     try {
@@ -45,13 +46,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     sessionRestored.current = true;
 
     const restoreSession = async () => {
+      const restoreEpoch = authEpoch.current;
       try {
         const response = await api.post<{ data: { accessToken: string } }>('/auth/refresh');
+        if (authEpoch.current !== restoreEpoch) return;
         setAccessToken(response.data.data.accessToken);
-        await fetchCurrentUser();
+
+        const me = await api.get<{ data: User }>('/auth/me');
+        if (authEpoch.current !== restoreEpoch) return;
+        setUser(me.data.data);
       } catch {
-        setUser(null);
-        setAccessToken(null);
+        if (authEpoch.current === restoreEpoch) {
+          setUser(null);
+          setAccessToken(null);
+        }
       } finally {
         setIsLoading(false);
       }
@@ -63,6 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Listen for forced logout (e.g., refresh token expired)
   useEffect(() => {
     const handleLogout = () => {
+      authEpoch.current += 1;
       setUser(null);
       setAccessToken(null);
     };
@@ -71,6 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
+    authEpoch.current += 1;
     const response = await api.post<{ data: { user: User; accessToken: string } }>('/auth/login', {
       email,
       password,
@@ -80,6 +90,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    authEpoch.current += 1;
     try {
       await api.post('/auth/logout');
     } finally {

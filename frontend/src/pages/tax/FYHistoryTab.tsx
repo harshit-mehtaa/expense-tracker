@@ -3,6 +3,7 @@ import { TrendingUp, TrendingDown } from 'lucide-react';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { taxApi } from '@/api/tax';
 import { cn } from '@/lib/utils';
+import { formatINR } from '@/lib/indianFormat';
 
 interface FYHistoryTabProps {
   fyOptions: string[];
@@ -127,7 +128,7 @@ export default function FYHistoryTab({ fyOptions, viewUserId }: FYHistoryTabProp
                             ? <TrendingUp className="h-3 w-3" />
                             : <TrendingDown className="h-3 w-3" />
                           }
-                          ₹{Math.abs(taxDelta).toLocaleString('en-IN')}
+                          {formatINR(Math.abs(taxDelta))}
                         </span>
                       )}
                     </div>

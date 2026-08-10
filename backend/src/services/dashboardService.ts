@@ -1,7 +1,12 @@
-import { Prisma, LoanType } from '@prisma/client';
+import { Prisma, LoanType, TransactionType } from '@prisma/client';
 import prisma from '../config/prisma';
 import { getFYRange, getCurrentFY, getPreviousFY, getMonthStart } from '../utils/financialYear';
 import { generateDueRecurringTransactions } from './recurringService';
+import {
+  getNetExpenseByUserCategory,
+  getNetExpenseTotal,
+  reportingIncomeWhere,
+} from '../utils/refundReporting';
 
 export async function getDashboardSummary(userId: string, requesterRole: string, fy?: string, targetUserId?: string) {
   // Lazy trigger: generate any due recurring transactions before computing the summary.
@@ -68,13 +73,19 @@ export async function getCashflow(userId: string, requesterRole: string, fy?: st
     SELECT
       EXTRACT(MONTH FROM date AT TIME ZONE 'Asia/Kolkata')::int AS month,
       EXTRACT(YEAR FROM date AT TIME ZONE 'Asia/Kolkata')::int AS year,
-      SUM(CASE WHEN type = 'INCOME' THEN amount ELSE 0 END)::float AS income,
-      SUM(CASE WHEN type = 'EXPENSE' THEN amount ELSE 0 END)::float AS expense
+      SUM(CASE WHEN type = 'INCOME' AND "refundForTransactionId" IS NULL THEN amount ELSE 0 END)::float AS income,
+      SUM(CASE
+        WHEN type = 'EXPENSE' THEN amount
+        WHEN type = 'INCOME' AND "refundForTransactionId" IS NOT NULL THEN -amount
+        ELSE 0
+      END)::float AS expense
     FROM "Transaction"
     WHERE
       date >= ${start}
       AND date <= ${end}
       AND "deletedAt" IS NULL
+      AND "transferPairId" IS NULL
+      AND "sipId" IS NULL
       ${effectiveUserId ? Prisma.sql`AND "userId" = ${effectiveUserId}` : Prisma.empty}
     GROUP BY month, year
     ORDER BY year, month
@@ -137,6 +148,15 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string, t
           premiumAmount: true,
           premiumDueDate: true,
           premiumFrequency: true,
+          transactions: {
+            where: {
+              deletedAt: null,
+              type: TransactionType.EXPENSE,
+            },
+            orderBy: { date: 'desc' },
+            take: 1,
+            select: { id: true, date: true },
+          },
         },
       }),
       // Loan EMIs
@@ -210,6 +230,7 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string, t
     if (nextOccurrence < now) nextOccurrence.setMonth(nextOccurrence.getMonth() + 1);
     /* c8 ignore next -- dayOfMonth 1-31 can never produce nextOccurrence > thirtyDaysOut for the pinned test month */
     if (nextOccurrence > thirtyDaysOut) continue;
+    if (isInsurancePremiumPaidForOccurrence(policy, nextOccurrence)) continue;
     const daysUntil = Math.ceil((nextOccurrence.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
     alerts.push({
       type: 'INSURANCE_PREMIUM' as const,
@@ -293,19 +314,14 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string, t
       const actualsMap: Record<string, number> = {};
       await Promise.all(
         Object.values(buckets).map(async (bucket) => {
-          const rows = await prisma.transaction.groupBy({
-            by: ['categoryId'],
-            where: {
-              userId,
-              deletedAt: null,
-              type: 'EXPENSE',
-              categoryId: { in: bucket.categoryIds },
-              date: { gte: bucket.start, lte: bucket.end },
-            },
-            _sum: { amount: true },
-          });
-          rows.forEach((r) => {
-            if (r.categoryId) actualsMap[r.categoryId] = (actualsMap[r.categoryId] ?? 0) + Number(r._sum.amount ?? 0);
+          const rows = await getNetExpenseByUserCategory(
+            { userId },
+            { gte: bucket.start, lte: bucket.end },
+            bucket.categoryIds,
+          );
+          rows.forEach((total, key) => {
+            const [, categoryId] = key.split(':');
+            if (categoryId) actualsMap[categoryId] = (actualsMap[categoryId] ?? 0) + total;
           });
         }),
       );
@@ -334,19 +350,57 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string, t
   return alerts.sort((a, b) => a.daysUntilDue - b.daysUntilDue);
 }
 
+function getPremiumCycleMonths(frequency?: string | null): number | null {
+  switch (frequency) {
+    case 'MONTHLY':
+      return 1;
+    case 'QUARTERLY':
+      return 3;
+    case 'HALF_YEARLY':
+      return 6;
+    case 'ANNUALLY':
+      return 12;
+    case 'SINGLE':
+      return null;
+    default:
+      return 1;
+  }
+}
+
+function subtractMonths(date: Date, months: number): Date {
+  const copy = new Date(date);
+  copy.setMonth(copy.getMonth() - months);
+  return copy;
+}
+
+function isInsurancePremiumPaidForOccurrence(
+  policy: { premiumFrequency?: string | null; transactions?: { date: Date }[] },
+  dueDate: Date,
+) {
+  const lastPayment = policy.transactions?.[0];
+  if (!lastPayment) return false;
+
+  const cycleMonths = getPremiumCycleMonths(policy.premiumFrequency);
+  if (cycleMonths == null) return true;
+
+  const cycleStart = subtractMonths(dueDate, cycleMonths);
+  const dueEnd = new Date(dueDate);
+  dueEnd.setHours(23, 59, 59, 999);
+  return lastPayment.date > cycleStart && lastPayment.date <= dueEnd;
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
+
+function compareCategoryNames(a: string, b: string) {
+  return a.localeCompare(b, undefined, { sensitivity: 'base' });
+}
 
 async function getIncomeForPeriod(
   userFilter: Prisma.TransactionWhereInput,
   range: { start: Date; end: Date },
 ): Promise<number> {
   const result = await prisma.transaction.aggregate({
-    where: {
-      ...userFilter,
-      type: 'INCOME',
-      date: { gte: range.start, lte: range.end },
-      deletedAt: null,
-    },
+    where: reportingIncomeWhere(userFilter, { gte: range.start, lte: range.end }),
     _sum: { amount: true },
   });
   return Number(result._sum.amount ?? 0);
@@ -356,20 +410,14 @@ async function getExpenseForPeriod(
   userFilter: Prisma.TransactionWhereInput,
   range: { start: Date; end: Date },
 ): Promise<number> {
-  const result = await prisma.transaction.aggregate({
-    where: {
-      ...userFilter,
-      type: 'EXPENSE',
-      date: { gte: range.start, lte: range.end },
-      deletedAt: null,
-    },
-    _sum: { amount: true },
-  });
-  return Number(result._sum.amount ?? 0);
+  return getNetExpenseTotal(userFilter, { gte: range.start, lte: range.end });
 }
 
 async function fetchAssetBreakdown(userId?: string) {
   const where = userId ? { userId } : {};
+  const realEstateWhere: Prisma.RealEstateWhereInput = userId
+    ? { OR: [{ userId }, { owners: { some: { userId } } }] }
+    : {};
 
   const [accounts, fds, rds, investments, gold, realestate] = await Promise.all([
     prisma.bankAccount.findMany({
@@ -394,8 +442,15 @@ async function fetchAssetBreakdown(userId?: string) {
       select: { type: true, description: true, quantityGrams: true, purchasePricePerGram: true, currentPricePerGram: true },
     }),
     prisma.realEstate.findMany({
-      where,
-      select: { propertyName: true, propertyType: true, purchasePrice: true, currentValue: true },
+      where: realEstateWhere,
+      select: {
+        userId: true,
+        propertyName: true,
+        propertyType: true,
+        purchasePrice: true,
+        currentValue: true,
+        owners: { select: { userId: true, sharePercent: true } },
+      },
     }),
   ]);
 
@@ -446,7 +501,20 @@ async function fetchAssetBreakdown(userId?: string) {
   const gold_ = goldItems.reduce((s, g) => s + g.currentValue, 0);
 
   const realEstateItems = realestate
-    .map((p) => ({ propertyName: p.propertyName, propertyType: p.propertyType, amount: Number(p.purchasePrice), currentValue: Number(p.currentValue) }))
+    .map((p) => {
+      const owners = p.owners ?? [];
+      const sharePercent = userId
+        ? Number(owners.find((owner) => owner.userId === userId)?.sharePercent ?? (p.userId === userId || owners.length === 0 ? 100 : 0))
+        : 100;
+      const shareMultiplier = sharePercent / 100;
+      return {
+        propertyName: p.propertyName,
+        propertyType: p.propertyType,
+        amount: Number(p.purchasePrice) * shareMultiplier,
+        currentValue: Number(p.currentValue) * shareMultiplier,
+        sharePercent: userId ? sharePercent : undefined,
+      };
+    })
     .sort((a, b) => b.amount - a.amount);
   const realEstate = realEstateItems.reduce((s, p) => s + p.currentValue, 0);
 
@@ -563,12 +631,17 @@ export async function getFamilyOverview(fy: string) {
         "userId",
         EXTRACT(MONTH FROM date AT TIME ZONE 'Asia/Kolkata')::int AS month,
         EXTRACT(YEAR FROM date AT TIME ZONE 'Asia/Kolkata')::int AS year,
-        SUM(amount)::float AS expense
+        SUM(CASE
+          WHEN type = 'EXPENSE' THEN amount
+          WHEN type = 'INCOME' AND "refundForTransactionId" IS NOT NULL THEN -amount
+          ELSE 0
+        END)::float AS expense
       FROM "Transaction"
-      WHERE type = 'EXPENSE'
-        AND date >= ${start}
+      WHERE date >= ${start}
         AND date <= ${end}
         AND "deletedAt" IS NULL
+        AND "transferPairId" IS NULL
+        AND "sipId" IS NULL
       GROUP BY "userId", month, year
       ORDER BY year, month
     `,
@@ -607,7 +680,7 @@ export async function getProfitAndLoss(
   const userFilter: Prisma.TransactionWhereInput = effectiveUserId ? { userId: effectiveUserId } : {};
 
   // Summary + monthly series + expense categories + income categories — all in parallel
-  const [totalIncome, totalExpense, monthlyResults, expenseCategoryRows, incomeCategoryRows] =
+  const [totalIncome, totalExpense, monthlyResults, expenseCategoryMap, incomeCategoryRows] =
     await Promise.all([
       getIncomeForPeriod(userFilter, { start, end }),
       getExpenseForPeriod(userFilter, { start, end }),
@@ -616,29 +689,29 @@ export async function getProfitAndLoss(
         SELECT
           EXTRACT(MONTH FROM date AT TIME ZONE 'Asia/Kolkata')::int AS month,
           EXTRACT(YEAR FROM date AT TIME ZONE 'Asia/Kolkata')::int AS year,
-          SUM(CASE WHEN type = 'INCOME' THEN amount ELSE 0 END)::float AS income,
-          SUM(CASE WHEN type = 'EXPENSE' THEN amount ELSE 0 END)::float AS expense
+          SUM(CASE WHEN type = 'INCOME' AND "refundForTransactionId" IS NULL THEN amount ELSE 0 END)::float AS income,
+          SUM(CASE
+            WHEN type = 'EXPENSE' THEN amount
+            WHEN type = 'INCOME' AND "refundForTransactionId" IS NOT NULL THEN -amount
+            ELSE 0
+          END)::float AS expense
         FROM "Transaction"
         WHERE
           date >= ${start}
           AND date <= ${end}
           AND "deletedAt" IS NULL
+          AND "transferPairId" IS NULL
+          AND "sipId" IS NULL
           ${effectiveUserId ? Prisma.sql`AND "userId" = ${effectiveUserId}` : Prisma.empty}
         GROUP BY month, year
         ORDER BY year, month
       `,
       // Expense categories
-      prisma.transaction.groupBy({
-        by: ['categoryId'],
-        where: { ...userFilter, deletedAt: null, type: 'EXPENSE', date: { gte: start, lte: end } },
-        _sum: { amount: true },
-        orderBy: { _sum: { amount: 'desc' } },
-        take: 15,
-      }),
+      getNetExpenseByUserCategory(userFilter, { gte: start, lte: end }),
       // Income categories
       prisma.transaction.groupBy({
         by: ['categoryId'],
-        where: { ...userFilter, deletedAt: null, type: 'INCOME', date: { gte: start, lte: end } },
+        where: reportingIncomeWhere(userFilter, { gte: start, lte: end }),
         _sum: { amount: true },
         orderBy: { _sum: { amount: 'desc' } },
         take: 15,
@@ -646,6 +719,17 @@ export async function getProfitAndLoss(
     ]);
 
   // Resolve category names for both sets
+  const expenseCategoryRows = [...expenseCategoryMap.entries()]
+    .map(([key, total]) => ({ categoryId: key.split(':')[1] || null, total }))
+    .reduce((acc, row) => {
+      const existing = acc.find((item) => item.categoryId === row.categoryId);
+      if (existing) existing.total += row.total;
+      else acc.push(row);
+      return acc;
+    }, [] as { categoryId: string | null; total: number }[])
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 15);
+
   const allCategoryIds = [
     ...expenseCategoryRows.map((r) => r.categoryId),
     ...incomeCategoryRows.map((r) => r.categoryId),
@@ -654,12 +738,22 @@ export async function getProfitAndLoss(
   const categories = await prisma.category.findMany({ where: { id: { in: allCategoryIds } } });
   const catMap = Object.fromEntries(categories.map((c) => [c.id, c]));
 
-  const mapCategories = (rows: typeof expenseCategoryRows) =>
-    rows.map((r) => ({
-      categoryId: r.categoryId,
-      categoryName: r.categoryId ? (catMap[r.categoryId]?.name ?? 'Uncategorized') : 'Uncategorized',
-      total: Number(r._sum.amount ?? 0),
-    }));
+  const mapExpenseCategories = (rows: typeof expenseCategoryRows) =>
+    rows
+      .map((r) => ({
+        categoryId: r.categoryId,
+        categoryName: r.categoryId ? (catMap[r.categoryId]?.name ?? 'Uncategorized') : 'Uncategorized',
+        total: r.total,
+      }))
+      .sort((a, b) => compareCategoryNames(a.categoryName, b.categoryName));
+  const mapIncomeCategories = (rows: typeof incomeCategoryRows) =>
+    rows
+      .map((r) => ({
+        categoryId: r.categoryId,
+        categoryName: r.categoryId ? (catMap[r.categoryId]?.name ?? 'Uncategorized') : 'Uncategorized',
+        total: Number(r._sum.amount ?? 0),
+      }))
+      .sort((a, b) => compareCategoryNames(a.categoryName, b.categoryName));
 
   // Build zero-padded 12-month series (Apr to Mar)
   const monthNames = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
@@ -686,8 +780,8 @@ export async function getProfitAndLoss(
     fy: currentFY,
     summary: { totalIncome, totalExpense, netSavings, savingsRate },
     monthly,
-    expenseCategories: mapCategories(expenseCategoryRows),
-    incomeCategories: mapCategories(incomeCategoryRows),
+    expenseCategories: mapExpenseCategories(expenseCategoryRows),
+    incomeCategories: mapIncomeCategories(incomeCategoryRows),
   };
 }
 
@@ -705,20 +799,25 @@ export async function getTrialBalance(
   const dateFilter = { date: { gte: start, lte: end } };
 
   // Expense categories (debit side) and income categories (credit side) — no take limit (full trial balance)
-  const [expenseRows, incomeRows] = await Promise.all([
+  const [expenseMap, incomeRows] = await Promise.all([
+    getNetExpenseByUserCategory(userFilter, dateFilter.date),
     prisma.transaction.groupBy({
       by: ['categoryId'],
-      where: { ...userFilter, deletedAt: null, type: 'EXPENSE', ...dateFilter },
-      _sum: { amount: true },
-      orderBy: { _sum: { amount: 'desc' } },
-    }),
-    prisma.transaction.groupBy({
-      by: ['categoryId'],
-      where: { ...userFilter, deletedAt: null, type: 'INCOME', ...dateFilter },
+      where: reportingIncomeWhere(userFilter, dateFilter.date),
       _sum: { amount: true },
       orderBy: { _sum: { amount: 'desc' } },
     }),
   ]);
+
+  const expenseRows = [...expenseMap.entries()]
+    .map(([key, total]) => ({ categoryId: key.split(':')[1] || null, total }))
+    .reduce((acc, row) => {
+      const existing = acc.find((item) => item.categoryId === row.categoryId);
+      if (existing) existing.total += row.total;
+      else acc.push(row);
+      return acc;
+    }, [] as { categoryId: string | null; total: number }[])
+    .sort((a, b) => b.total - a.total);
 
   // Resolve category names — deduplicate IDs to avoid duplicate DB rows in the IN query
   const allCategoryIds = [
@@ -740,7 +839,7 @@ export async function getTrialBalance(
     ...expenseRows.map((r) => ({
       accountName: resolveName(r.categoryId),
       type: 'DEBIT' as const,
-      debit: Number(r._sum.amount ?? 0),
+      debit: r.total,
       credit: 0,
     })),
     ...incomeRows.map((r) => ({
@@ -749,7 +848,7 @@ export async function getTrialBalance(
       debit: 0,
       credit: Number(r._sum.amount ?? 0),
     })),
-  ];
+  ].sort((a, b) => compareCategoryNames(a.accountName, b.accountName));
 
   const rawTotalExpenses = entries.filter((e) => e.type === 'DEBIT').reduce((s, e) => s + e.debit, 0);
   const rawTotalIncome = entries.filter((e) => e.type === 'CREDIT').reduce((s, e) => s + e.credit, 0);

@@ -1,8 +1,6 @@
 # Development overrides — applied automatically by docker compose
 # Enables hot-reload by mounting source directories as volumes
 
-version: '3.9'
-
 services:
   migrate:
     # --transpile-only on the seed: backend depends on migrate completing successfully, so a

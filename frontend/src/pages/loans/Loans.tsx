@@ -221,6 +221,7 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
           </div>
           <h3 className="font-semibold mt-1">{loan.lenderName}</h3>
           {loan.loanAccountNumber && <p className="text-xs text-muted-foreground">Ac: ···{loan.loanAccountNumber.slice(-4)}</p>}
+          {loan.userName && <p className="text-xs text-muted-foreground mt-0.5">{loan.userName}</p>}
         </div>
         {!readOnly && (
           <div className="flex gap-1">
@@ -337,7 +338,7 @@ export default function LoansPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: LoanForm) => loansApi.create(data),
+    mutationFn: (data: LoanForm) => loansApi.create(data, viewUserId ? { targetUserId: viewUserId } : undefined),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['loans'] }); setShowForm(false); reset(); },
   });
 
@@ -435,7 +436,6 @@ export default function LoansPage() {
               loan={loan}
               onEdit={() => startEdit(loan)}
               onDelete={() => deleteMutation.mutate(loan.id)}
-              readOnly={isViewingFamilyWide}
             />
           ))}
         </div>
@@ -448,54 +448,54 @@ export default function LoansPage() {
             <form onSubmit={handleSubmit((data) => editing ? updateMutation.mutate({ id: editing.id, data }) : createMutation.mutate(data))} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <Label>Loan Type</Label>
+                  <Label required>Loan Type</Label>
                   <select {...register('loanType')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                     {Object.entries(LOAN_TYPES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <Label>Lender Name</Label>
+                  <Label required>Lender Name</Label>
                   <Input {...register('lenderName')} placeholder="HDFC Bank, SBI…" />
                   {errors.lenderName && <p className="text-xs text-destructive">{errors.lenderName.message}</p>}
                 </div>
                 <div className="space-y-1">
-                  <Label>Loan Account Number</Label>
+                  <Label>Loan Account Number (optional)</Label>
                   <Input {...register('loanAccountNumber')} placeholder="Optional" />
                 </div>
                 <div className="space-y-1">
-                  <Label>Principal Amount (₹)</Label>
+                  <Label required>Principal Amount (₹)</Label>
                   <Input {...register('principalAmount')} type="number" />
                 </div>
                 <div className="space-y-1">
-                  <Label>Outstanding Balance (₹)</Label>
+                  <Label required>Outstanding Balance (₹)</Label>
                   <Input {...register('outstandingBalance')} type="number" />
                 </div>
                 <div className="space-y-1">
-                  <Label>Interest Rate (% p.a.)</Label>
+                  <Label required>Interest Rate (% p.a.)</Label>
                   <Input {...register('interestRate')} type="number" step="0.01" />
                 </div>
                 <div className="space-y-1">
-                  <Label>EMI Amount (₹)</Label>
+                  <Label required>EMI Amount (₹)</Label>
                   <Input {...register('emiAmount')} type="number" />
                 </div>
                 <div className="space-y-1">
-                  <Label>EMI Date (1-28)</Label>
+                  <Label required>EMI Date (1-28)</Label>
                   <Input {...register('emiDate')} type="number" min="1" max="28" />
                 </div>
                 <div className="space-y-1">
-                  <Label>Tenure (months)</Label>
+                  <Label required>Tenure (months)</Label>
                   <Input {...register('tenureMonths')} type="number" />
                 </div>
                 <div className="space-y-1">
-                  <Label>Disbursement Date</Label>
+                  <Label required>Disbursement Date</Label>
                   <Input {...register('disbursementDate')} type="date" />
                 </div>
                 <div className="space-y-1">
-                  <Label>End Date</Label>
+                  <Label required>End Date</Label>
                   <Input {...register('endDate')} type="date" />
                 </div>
                 <div className="space-y-1">
-                  <Label>Prepayment Charges (%)</Label>
+                  <Label>Prepayment Charges (%, optional)</Label>
                   <Input {...register('prepaymentChargesPct')} type="number" step="0.01" />
                 </div>
               </div>

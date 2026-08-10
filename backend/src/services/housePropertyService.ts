@@ -1,5 +1,6 @@
 import { prisma } from '../config/prisma';
 import type { Prisma } from '@prisma/client';
+import { ownerScopedWhere } from '../utils/resolveTargetUserId';
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
 
@@ -24,21 +25,22 @@ export async function createHouseProperty(
 }
 
 export async function updateHouseProperty(
-  userId: string,
+  requesterId: string,
   id: string,
   data: Partial<Prisma.HousePropertyDetailUncheckedUpdateInput>,
+  requesterRole = 'MEMBER',
 ) {
   const result = await prisma.housePropertyDetail.updateMany({
-    where: { id, userId, deletedAt: null },
+    where: { ...ownerScopedWhere(id, requesterId, requesterRole), deletedAt: null },
     data,
   });
   if (result.count === 0) return null;
   return prisma.housePropertyDetail.findUnique({ where: { id } });
 }
 
-export async function deleteHouseProperty(userId: string, id: string) {
+export async function deleteHouseProperty(requesterId: string, id: string, requesterRole = 'MEMBER') {
   const result = await prisma.housePropertyDetail.updateMany({
-    where: { id, userId, deletedAt: null },
+    where: { ...ownerScopedWhere(id, requesterId, requesterRole), deletedAt: null },
     data: { deletedAt: new Date() },
   });
   return result.count > 0 ? { deleted: true } : null;

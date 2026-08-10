@@ -6,9 +6,14 @@ import { computeNetWorthStatement, getProfitAndLoss, getTrialBalance } from '../
 import { prisma } from '../config/prisma';
 import { getFYRange, validateFY } from '../utils/financialYear';
 import { resolveTargetUserId } from '../utils/resolveTargetUserId';
+import { getNetExpenseByUserCategory } from '../utils/refundReporting';
 
 const router = Router();
 router.use(requireAuth);
+
+function compareCategoryNames(a: string, b: string) {
+  return a.localeCompare(b, undefined, { sensitivity: 'base' });
+}
 
 router.get(
   '/spending-by-category',
@@ -20,23 +25,29 @@ router.get(
     const effectiveUserId = role === 'ADMIN' ? targetUserId : userId;
     const userFilter = effectiveUserId ? { userId: effectiveUserId } : {};
 
-    const data = await prisma.transaction.groupBy({
-      by: ['categoryId'],
-      where: { ...userFilter, deletedAt: null, type: 'EXPENSE', date: { gte: start, lt: end } },
-      _sum: { amount: true },
-      orderBy: { _sum: { amount: 'desc' } },
-    });
+    const expenseMap = await getNetExpenseByUserCategory(userFilter, { gte: start, lt: end });
+    const data = [...expenseMap.entries()]
+      .map(([key, total]) => ({ categoryId: key.split(':')[1] || null, total }))
+      .reduce((acc, row) => {
+        const existing = acc.find((item) => item.categoryId === row.categoryId);
+        if (existing) existing.total += row.total;
+        else acc.push(row);
+        return acc;
+      }, [] as { categoryId: string | null; total: number }[])
+      .sort((a, b) => b.total - a.total);
 
     const categories = await prisma.category.findMany({
       where: { id: { in: data.map((d) => d.categoryId!).filter(Boolean) } },
     });
     const catMap = Object.fromEntries(categories.map((c) => [c.id, c]));
 
-    const result = data.map((d) => ({
-      categoryId: d.categoryId,
-      category: d.categoryId ? catMap[d.categoryId] : null,
-      total: Number(d._sum.amount ?? 0),
-    }));
+    const result = data
+      .map((d) => ({
+        categoryId: d.categoryId,
+        category: d.categoryId ? catMap[d.categoryId] : null,
+        total: d.total,
+      }))
+      .sort((a, b) => compareCategoryNames(a.category?.name ?? 'Uncategorized', b.category?.name ?? 'Uncategorized'));
 
     sendSuccess(res, result);
   }),

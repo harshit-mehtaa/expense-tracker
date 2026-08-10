@@ -136,7 +136,7 @@ describe('PUT /api/insurance/:id', () => {
   it('returns 200 on successful update', async () => {
     const res = await request(app).put('/api/insurance/pol-1').send({ providerName: 'HDFC Life' });
     expect(res.status).toBe(200);
-    expect(updateMock).toHaveBeenCalledWith('u1', 'pol-1', expect.objectContaining({ providerName: 'HDFC Life' }));
+    expect(updateMock).toHaveBeenCalledWith('u1', 'pol-1', expect.objectContaining({ providerName: 'HDFC Life' }), 'ADMIN');
   });
 
   it('propagates 404 from service', async () => {
@@ -153,6 +153,6 @@ describe('DELETE /api/insurance/:id', () => {
   it('returns 204 on successful deletion', async () => {
     const res = await request(app).delete('/api/insurance/pol-1');
     expect(res.status).toBe(204);
-    expect(deleteMock).toHaveBeenCalledWith('u1', 'pol-1');
+    expect(deleteMock).toHaveBeenCalledWith('u1', 'pol-1', 'ADMIN');
   });
 });

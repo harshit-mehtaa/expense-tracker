@@ -16,6 +16,7 @@ export interface Loan {
   isTaxDeductible: boolean;
   section24bEligible: boolean;
   prepaymentChargesPct: number;
+  userName?: string;
 }
 
 export interface AmortizationRow {
@@ -45,7 +46,8 @@ export function normalizeLoan(l: Loan): Loan {
 
 export const loansApi = {
   getAll: (targetUserId?: string) => api.get<{ data: Loan[] }>('/loans', { params: targetUserId ? { targetUserId } : {} }).then(unwrap).then((loans) => loans.map(normalizeLoan)),
-  create: (data: object) => api.post<{ data: Loan }>('/loans', data).then(unwrap).then(normalizeLoan),
+  create: (data: object, opts?: { targetUserId?: string }) =>
+    api.post<{ data: Loan }>('/loans', data, { params: opts?.targetUserId ? { targetUserId: opts.targetUserId } : {} }).then(unwrap).then(normalizeLoan),
   update: (id: string, data: object) => api.put<{ data: Loan }>(`/loans/${id}`, data).then(unwrap).then(normalizeLoan),
   delete: (id: string) => api.delete(`/loans/${id}`),
   getAmortization: (id: string) => api.get<{ data: { loan: Loan; schedule: AmortizationRow[]; summary: any } }>(`/loans/${id}/amortization-schedule`).then(unwrap).then((r) => ({ ...r, loan: normalizeLoan(r.loan) })),

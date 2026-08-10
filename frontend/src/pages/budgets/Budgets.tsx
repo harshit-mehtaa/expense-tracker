@@ -12,6 +12,7 @@ import { useFY } from '@/contexts/FYContext';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import api from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { getCategoryLabel, getCategoryPath, sortCategoriesByNameAsc } from '@/lib/categoryUtils';
 
 function useBudgets(fy: string, targetUserId?: string) {
   return useQuery({
@@ -48,7 +49,6 @@ export default function BudgetsPage() {
 
   const { data: budgets = [], isLoading } = useBudgets(selectedFY, viewUserId);
   const { data: categories = [] } = useCategories();
-  const isViewingOtherMember = isAdmin && viewUserId !== undefined;
   const isViewingFamilyWide = isAdmin && !viewUserId;
   const expenseCategories = categories.filter((c: any) => c.type === 'EXPENSE');
 
@@ -58,7 +58,9 @@ export default function BudgetsPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: BudgetForm) => api.post('/budgets', data),
+    mutationFn: (data: BudgetForm) => api.post('/budgets', data, {
+      params: viewUserId ? { targetUserId: viewUserId } : {},
+    }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['budgets-actuals'] }); setShowForm(false); reset(); },
   });
 
@@ -69,6 +71,15 @@ export default function BudgetsPage() {
 
   const totalBudgeted = budgets.reduce((s: number, b: any) => s + Number(b.amount), 0);
   const totalActual = budgets.reduce((s: number, b: any) => s + b.actual, 0);
+  const sortedBudgets = [...budgets].sort((a: any, b: any) => {
+    const aCategory = a.category ? getCategoryPath(a.category, categories) : 'Unknown';
+    const bCategory = b.category ? getCategoryPath(b.category, categories) : 'Unknown';
+    const categoryCompare = aCategory.localeCompare(bCategory, undefined, {
+      sensitivity: 'base',
+    });
+    if (categoryCompare !== 0) return categoryCompare;
+    return (a.userName ?? '').localeCompare(b.userName ?? '', undefined, { sensitivity: 'base' });
+  });
 
   return (
     <div className="space-y-6">
@@ -102,7 +113,7 @@ export default function BudgetsPage() {
             </div>
           )}
         </div>
-        {!isViewingOtherMember && !isViewingFamilyWide && (
+        {!isViewingFamilyWide && (
           <Button onClick={() => setShowForm(true)}><PlusCircle className="h-4 w-4 mr-2" /> Add Budget</Button>
         )}
       </div>
@@ -138,7 +149,7 @@ export default function BudgetsPage() {
         </div>
       ) : (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {budgets.map((budget: any) => {
+          {sortedBudgets.map((budget: any) => {
             const pct = budget.pctUsed;
             const isOver = pct > 100;
             return (
@@ -149,13 +160,16 @@ export default function BudgetsPage() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     {budget.category?.icon && <span>{budget.category.icon}</span>}
-                    <p className="font-semibold">{budget.category?.name ?? 'Unknown'}</p>
+                    <p className="font-semibold">
+                      {budget.category ? getCategoryPath(budget.category, categories) : 'Unknown'}
+                    </p>
+                    {isViewingFamilyWide && budget.userName && (
+                      <span className="text-xs text-muted-foreground">{budget.userName}</span>
+                    )}
                   </div>
-                  {!isViewingOtherMember && (
-                    <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(budget.id)}>
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
-                  )}
+                  <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(budget.id)}>
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
                 </div>
 
                 {/* Circular-ish progress: simple bar */}
@@ -193,21 +207,21 @@ export default function BudgetsPage() {
             <h2 className="text-xl font-semibold mb-4">Add Budget</h2>
             <form onSubmit={handleSubmit((data) => createMutation.mutate({ ...data, fyYear: selectedFY }))} className="space-y-4">
               <div className="space-y-1">
-                <Label>Category</Label>
+                <Label required>Category</Label>
                 <select {...register('categoryId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                   <option value="">— Select category —</option>
-                  {expenseCategories.map((c: any) => (
-                    <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ` : ''}{c.name}</option>
+                  {sortCategoriesByNameAsc(expenseCategories).map((c: any) => (
+                    <option key={c.id} value={c.id}>{getCategoryLabel(c, categories)}</option>
                   ))}
                 </select>
                 {errors.categoryId && <p className="text-xs text-destructive">{errors.categoryId.message}</p>}
               </div>
               <div className="space-y-1">
-                <Label>Amount (₹)</Label>
+                <Label required>Amount (₹)</Label>
                 <Input {...register('amount')} type="number" placeholder="Monthly budget amount" />
               </div>
               <div className="space-y-1">
-                <Label>Period</Label>
+                <Label required>Period</Label>
                 <select {...register('period')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                   <option value="MONTHLY">Monthly</option>
                   <option value="QUARTERLY">Quarterly</option>

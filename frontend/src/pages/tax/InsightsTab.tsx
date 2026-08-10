@@ -1,6 +1,7 @@
 import { CheckCircle, AlertCircle, TrendingDown, TrendingUp } from 'lucide-react';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { cn } from '@/lib/utils';
+import { formatINR, formatINRShort } from '@/lib/indianFormat';
 
 interface InsightsTabProps {
   summary: any;
@@ -67,7 +68,7 @@ export default function InsightsTab({ summary, tracker80C, profile }: InsightsTa
       limit: tracker80C.limit,
       remaining: s80CRemaining,
       savings: taxSaved(s80CRemaining, marginalRate),
-      action: `Invest ₹${s80CRemaining.toLocaleString('en-IN')} more in ELSS/PPF/NPS before 31 March`,
+      action: `Invest ${formatINR(s80CRemaining)} more in ELSS/PPF/NPS before 31 March`,
     },
     {
       label: '80D — Health Insurance',
@@ -76,7 +77,7 @@ export default function InsightsTab({ summary, tracker80C, profile }: InsightsTa
       remaining: s80DRemaining,
       savings: taxSaved(s80DRemaining, marginalRate),
       note: '₹25K self + ₹25K parents (higher limits for senior parents apply at ITR filing)',
-      action: `Pay health insurance premium of ₹${s80DRemaining.toLocaleString('en-IN')} to fill 80D headroom`,
+      action: `Pay health insurance premium of ${formatINR(s80DRemaining)} to fill 80D headroom`,
     },
     {
       label: '80CCD(1B) — NPS Extra',
@@ -85,7 +86,7 @@ export default function InsightsTab({ summary, tracker80C, profile }: InsightsTa
       remaining: npsRemaining,
       savings: taxSaved(npsRemaining, marginalRate),
       note: 'Additional deduction over and above 80C limit',
-      action: `Top-up NPS Tier-I with ₹${npsRemaining.toLocaleString('en-IN')} under 80CCD(1B)`,
+      action: `Top-up NPS Tier-I with ${formatINR(npsRemaining)} under 80CCD(1B)`,
     },
   ].filter((r) => r.remaining > 0);
 
@@ -106,8 +107,8 @@ export default function InsightsTab({ summary, tracker80C, profile }: InsightsTa
             <p className="text-muted-foreground">Tax + Cess</p>
             <INRDisplay amount={summary.oldRegime.tax} className="text-xl font-bold" />
             {summary.oldRegime.refund > 0
-              ? <p className="text-green-600 text-xs">Refund: ₹{summary.oldRegime.refund.toLocaleString('en-IN')}</p>
-              : <p className="text-orange-600 text-xs">Due: ₹{summary.oldRegime.taxAfterPaid.toLocaleString('en-IN')}</p>
+              ? <p className="text-green-600 text-xs">Refund: {formatINR(summary.oldRegime.refund)}</p>
+              : <p className="text-orange-600 text-xs">Due: {formatINR(summary.oldRegime.taxAfterPaid)}</p>
             }
             {summary.electedRegime === 'OLD' && <p className="text-xs text-primary font-medium">✓ Currently elected</p>}
           </div>
@@ -119,8 +120,8 @@ export default function InsightsTab({ summary, tracker80C, profile }: InsightsTa
             <p className="text-muted-foreground">Tax + Cess</p>
             <INRDisplay amount={summary.newRegime.tax} className="text-xl font-bold" />
             {summary.newRegime.refund > 0
-              ? <p className="text-green-600 text-xs">Refund: ₹{summary.newRegime.refund.toLocaleString('en-IN')}</p>
-              : <p className="text-orange-600 text-xs">Due: ₹{summary.newRegime.taxAfterPaid.toLocaleString('en-IN')}</p>
+              ? <p className="text-green-600 text-xs">Refund: {formatINR(summary.newRegime.refund)}</p>
+              : <p className="text-orange-600 text-xs">Due: {formatINR(summary.newRegime.taxAfterPaid)}</p>
             }
             {summary.electedRegime === 'NEW' && <p className="text-xs text-primary font-medium">✓ Currently elected</p>}
           </div>
@@ -136,7 +137,7 @@ export default function InsightsTab({ summary, tracker80C, profile }: InsightsTa
             <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
             <span>
               Switching to the <strong>{betterRegime} Regime</strong> would save{' '}
-              <strong>₹{regimeSavings.toLocaleString('en-IN')}</strong> this FY.
+              <strong>{formatINR(regimeSavings)}</strong> this FY.
               Update your Tax Regime in the Tax Summary → Income &amp; Tax Profile form.
             </span>
           </div>
@@ -151,7 +152,7 @@ export default function InsightsTab({ summary, tracker80C, profile }: InsightsTa
             {totalPotentialSavings > 0 && (
               <div className="flex items-center gap-1 text-sm text-green-700 dark:text-green-400 font-medium">
                 <TrendingDown className="h-4 w-4" />
-                Max additional savings: ₹{totalPotentialSavings.toLocaleString('en-IN')}
+                Max additional savings: {formatINR(totalPotentialSavings)}
                 <span className="text-xs font-normal text-muted-foreground ml-1">(approx.)</span>
               </div>
             )}
@@ -203,7 +204,7 @@ export default function InsightsTab({ summary, tracker80C, profile }: InsightsTa
                         <td className="text-right py-3">
                           <span className="inline-flex items-center gap-1 rounded-full bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 px-2 py-0.5 text-xs font-semibold">
                             <TrendingDown className="h-3 w-3" />
-                            ₹{row.savings.toLocaleString('en-IN')}
+                            {formatINR(row.savings)}
                           </span>
                         </td>
                       </tr>
@@ -221,7 +222,7 @@ export default function InsightsTab({ summary, tracker80C, profile }: InsightsTa
                       <TrendingUp className="h-4 w-4 text-primary mt-0.5 shrink-0" />
                       <span>
                         {row.action} — saves approximately{' '}
-                        <span className="text-green-600 font-medium">₹{row.savings.toLocaleString('en-IN')}</span> in tax
+                        <span className="text-green-600 font-medium">{formatINR(row.savings)}</span> in tax
                         at ~{marginalRate}% marginal rate.
                       </span>
                     </li>
@@ -230,7 +231,7 @@ export default function InsightsTab({ summary, tracker80C, profile }: InsightsTa
                 <p className="text-xs text-muted-foreground pt-1">
                   * Savings are approximate. Actual tax saved depends on your final taxable income.
                   Marginal rate estimated at {marginalRate}% based on current taxable income of{' '}
-                  ₹{(summary.oldRegime.taxableIncome / 100000).toFixed(1)}L.
+                  {formatINRShort(summary.oldRegime.taxableIncome)}.
                 </p>
               </div>
             </div>

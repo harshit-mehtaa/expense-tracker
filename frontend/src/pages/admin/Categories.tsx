@@ -9,6 +9,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import api from '@/lib/api';
 import { cn } from '@/lib/utils';
+import {
+  getCategoryLabel,
+  getCategoryPath,
+  isCategoryDescendant,
+  sortCategoriesByNameAsc,
+} from '@/lib/categoryUtils';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -18,6 +24,9 @@ interface Category {
   type: 'INCOME' | 'EXPENSE' | 'ASSET' | 'LIABILITY';
   icon?: string | null;
   color?: string | null;
+  parentId?: string | null;
+  parent?: Category | null;
+  _count?: { children: number };
   isDefault: boolean;
   userId: string | null;
 }
@@ -27,7 +36,8 @@ interface Category {
 const categorySchema = z.object({
   name: z.string().min(1, 'Name is required').max(50, 'Maximum 50 characters'),
   type: z.enum(['INCOME', 'EXPENSE', 'ASSET', 'LIABILITY'], { required_error: 'Type is required' }),
-  icon: z.string().max(10).optional(),
+  icon: z.string().trim().max(30, 'Maximum 30 characters').optional(),
+  parentId: z.string().optional(),
   color: z
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/, 'Enter a valid hex color (e.g. #22c55e)')
@@ -57,6 +67,34 @@ const COLOR_PRESETS = [
   '#22c55e', '#10b981', '#3b82f6', '#8b5cf6', '#f59e0b',
   '#ef4444', '#f97316', '#ec4899', '#14b8a6', '#64748b',
 ];
+
+const EMOJI_PRESETS = [
+  '🍽️', '🥦', '🛒', '🍕', '💊', '🏥', '📺', '💇', '🏠',
+  '🚗', '💡', '🎓', '🎬', '✈️', '💼', '💰', '📈', '🏦',
+  '🧾', '🎁', '🛡️', '📱', '👕', '💳',
+];
+
+type CategoryPayload = {
+  name?: string;
+  type?: Category['type'];
+  icon?: string | null;
+  parentId?: string | null;
+  color?: string;
+};
+
+function buildCategoryPayload(data: CategoryForm | EditCategoryForm): CategoryPayload {
+  const payload: CategoryPayload = { ...data };
+  if ('icon' in payload) {
+    payload.icon = payload.icon?.trim() ? payload.icon.trim() : null;
+  }
+  if ('color' in payload && !payload.color?.trim()) {
+    delete payload.color;
+  }
+  if ('parentId' in payload) {
+    payload.parentId = payload.parentId?.trim() ? payload.parentId : null;
+  }
+  return payload;
+}
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -90,7 +128,7 @@ export default function CategoriesPage() {
     formState: { errors },
   } = useForm<CategoryForm>({
     resolver: zodResolver(categorySchema),
-    defaultValues: { type: 'EXPENSE', color: COLOR_PRESETS[0] },
+    defaultValues: { type: 'EXPENSE', color: COLOR_PRESETS[0], parentId: '' },
   });
 
   // ── Edit form ──────────────────────────────────────────────────────────────
@@ -105,10 +143,18 @@ export default function CategoriesPage() {
 
   // ── Mutations ──────────────────────────────────────────────────────────────
   const [addError, setAddError] = useState<string | null>(null);
+  const invalidateCategoryData = () => {
+    qc.invalidateQueries({ queryKey: ['categories'] });
+    qc.invalidateQueries({ queryKey: ['categories', 'all'] });
+    qc.invalidateQueries({ queryKey: ['transactions'] });
+    qc.invalidateQueries({ queryKey: ['category-rules'] });
+    qc.invalidateQueries({ queryKey: ['budgets-actuals'] });
+  };
+
   const addMutation = useMutation({
-    mutationFn: (data: CategoryForm) => api.post('/categories', data),
+    mutationFn: (data: CategoryForm) => api.post('/categories', buildCategoryPayload(data)),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['categories'] });
+      invalidateCategoryData();
       setShowAdd(false);
       reset();
       setAddError(null);
@@ -121,9 +167,9 @@ export default function CategoriesPage() {
   const [editError, setEditError] = useState<string | null>(null);
   const editMutation = useMutation({
     mutationFn: ({ id, ...data }: EditCategoryForm & { id: string }) =>
-      api.put(`/categories/${id}`, data),
+      api.put(`/categories/${id}`, buildCategoryPayload(data)),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['categories'] });
+      invalidateCategoryData();
       setEditCat(null);
       setEditError(null);
     },
@@ -135,7 +181,7 @@ export default function CategoriesPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/categories/${id}`),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['categories'] });
+      invalidateCategoryData();
       setDeleteCat(null);
       setDeleteError(null);
     },
@@ -147,7 +193,13 @@ export default function CategoriesPage() {
   // ── Helpers ────────────────────────────────────────────────────────────────
   const openEdit = (cat: Category) => {
     setEditError(null);
-    editReset({ name: cat.name, type: cat.type, icon: cat.icon ?? '', color: cat.color ?? '' });
+    editReset({
+      name: cat.name,
+      type: cat.type,
+      parentId: cat.parentId ?? '',
+      icon: cat.icon ?? '',
+      color: cat.color ?? '',
+    });
     setEditCat(cat);
     setActiveMenu(null);
   };
@@ -167,6 +219,16 @@ export default function CategoriesPage() {
 
   const addColor = watch('color');
   const editColor = editWatch('color');
+  const addIcon = watch('icon');
+  const editIcon = editWatch('icon');
+  const addType = watch('type');
+  const editType = editWatch('type') ?? editCat?.type;
+  const addParentOptions = sortCategoriesByNameAsc(categories.filter((c) => c.type === addType));
+  const editParentOptions = sortCategoriesByNameAsc(categories.filter((c) => (
+    c.type === editType
+    && c.id !== editCat?.id
+    && (!editCat || !isCategoryDescendant(c, editCat.id, categories))
+  )));
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -253,13 +315,13 @@ export default function CategoriesPage() {
               className="space-y-4"
             >
               <div className="space-y-1.5">
-                <Label htmlFor="add-name">Name</Label>
+                <Label htmlFor="add-name" required>Name</Label>
                 <Input id="add-name" placeholder="e.g. Groceries" {...register('name')} />
                 {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="add-type">Type</Label>
+                <Label htmlFor="add-type" required>Type</Label>
                 <select
                   id="add-type"
                   {...register('type')}
@@ -274,12 +336,41 @@ export default function CategoriesPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="add-icon">Icon (emoji)</Label>
-                <Input id="add-icon" placeholder="e.g. 🛒" maxLength={10} {...register('icon')} />
+                <Label htmlFor="add-parent">Parent category (optional)</Label>
+                <select
+                  id="add-parent"
+                  {...register('parentId')}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                >
+                  <option value="">No parent</option>
+                  {addParentOptions.map((c) => (
+                    <option key={c.id} value={c.id}>{getCategoryLabel(c, categories)}</option>
+                  ))}
+                </select>
+                {errors.parentId && <p className="text-xs text-destructive">{errors.parentId.message}</p>}
               </div>
 
               <div className="space-y-1.5">
-                <Label>Color</Label>
+                <Label htmlFor="add-icon">Icon (emoji, optional)</Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="add-icon"
+                    placeholder="e.g. 🛒"
+                    maxLength={30}
+                    {...register('icon')}
+                  />
+                  <IconPreview icon={addIcon} />
+                </div>
+                <EmojiPicker
+                  selected={addIcon}
+                  onSelect={(emoji) => setValue('icon', emoji, { shouldDirty: true, shouldValidate: true })}
+                  onClear={() => setValue('icon', '', { shouldDirty: true, shouldValidate: true })}
+                />
+                {errors.icon && <p className="text-xs text-destructive">{errors.icon.message}</p>}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Color (optional)</Label>
                 <div className="flex items-center gap-2 flex-wrap">
                   {COLOR_PRESETS.map((c) => (
                     <button
@@ -331,13 +422,13 @@ export default function CategoriesPage() {
               className="space-y-4"
             >
               <div className="space-y-1.5">
-                <Label htmlFor="edit-name">Name</Label>
+                <Label htmlFor="edit-name" required>Name</Label>
                 <Input id="edit-name" {...editRegister('name')} />
                 {editErrors.name && <p className="text-xs text-destructive">{editErrors.name.message}</p>}
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="edit-type">Type</Label>
+                <Label htmlFor="edit-type" required>Type</Label>
                 <select
                   id="edit-type"
                   {...editRegister('type', { disabled: editCat.isDefault })}
@@ -355,12 +446,36 @@ export default function CategoriesPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="edit-icon">Icon (emoji)</Label>
-                <Input id="edit-icon" maxLength={10} {...editRegister('icon')} />
+                <Label htmlFor="edit-parent">Parent category (optional)</Label>
+                <select
+                  id="edit-parent"
+                  {...editRegister('parentId')}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                >
+                  <option value="">No parent</option>
+                  {editParentOptions.map((c) => (
+                    <option key={c.id} value={c.id}>{getCategoryLabel(c, categories)}</option>
+                  ))}
+                </select>
+                {editErrors.parentId && <p className="text-xs text-destructive">{editErrors.parentId.message}</p>}
               </div>
 
               <div className="space-y-1.5">
-                <Label>Color</Label>
+                <Label htmlFor="edit-icon">Icon (emoji, optional)</Label>
+                <div className="flex items-center gap-2">
+                  <Input id="edit-icon" maxLength={30} {...editRegister('icon')} />
+                  <IconPreview icon={editIcon} />
+                </div>
+                <EmojiPicker
+                  selected={editIcon}
+                  onSelect={(emoji) => editSetValue('icon', emoji, { shouldDirty: true, shouldValidate: true })}
+                  onClear={() => editSetValue('icon', '', { shouldDirty: true, shouldValidate: true })}
+                />
+                {editErrors.icon && <p className="text-xs text-destructive">{editErrors.icon.message}</p>}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Color (optional)</Label>
                 <div className="flex items-center gap-2 flex-wrap">
                   {COLOR_PRESETS.map((c) => (
                     <button
@@ -406,7 +521,7 @@ export default function CategoriesPage() {
             <p className="text-sm text-muted-foreground">
               Are you sure you want to delete{' '}
               <span className="font-medium text-foreground">
-                {deleteCat.icon} {deleteCat.name}
+                {deleteCat.icon} {getCategoryPath(deleteCat, categories)}
               </span>
               ? Transactions linked to this category will become uncategorized.
             </p>
@@ -437,6 +552,54 @@ export default function CategoriesPage() {
   );
 }
 
+function IconPreview({ icon }: { icon?: string | null }) {
+  const value = icon?.trim();
+
+  return (
+    <div
+      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border bg-muted/30 text-lg"
+      aria-hidden="true"
+    >
+      {value ? <span>{value}</span> : <Tag className="h-4 w-4 text-muted-foreground" />}
+    </div>
+  );
+}
+
+interface EmojiPickerProps {
+  selected?: string | null;
+  onSelect: (emoji: string) => void;
+  onClear: () => void;
+}
+
+function EmojiPicker({ selected, onSelect, onClear }: EmojiPickerProps) {
+  const selectedEmoji = selected?.trim();
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+      {EMOJI_PRESETS.map((emoji) => (
+        <button
+          key={emoji}
+          type="button"
+          title={`Use ${emoji}`}
+          aria-label={`Use ${emoji} emoji`}
+          onClick={() => onSelect(emoji)}
+          className={cn(
+            'flex h-8 w-8 items-center justify-center rounded-md border text-base transition-colors hover:bg-muted',
+            selectedEmoji === emoji ? 'border-primary bg-primary/10' : 'border-input bg-background',
+          )}
+        >
+          {emoji}
+        </button>
+      ))}
+      {selectedEmoji && (
+        <Button type="button" variant="ghost" size="sm" onClick={onClear}>
+          Clear
+        </Button>
+      )}
+    </div>
+  );
+}
+
 // ── CategoryGroup sub-component ────────────────────────────────────────────────
 
 interface CategoryGroupProps {
@@ -458,6 +621,7 @@ const TYPE_STYLES: Record<'INCOME' | 'EXPENSE' | 'ASSET' | 'LIABILITY', { color:
 
 function CategoryGroup({ title, type, categories, activeMenu, setActiveMenu, onEdit, onDelete }: CategoryGroupProps) {
   const { color: typeColor, badge: typeBadge } = TYPE_STYLES[type];
+  const displayCategories = sortCategoriesByNameAsc(categories);
 
   return (
     <section className="space-y-3">
@@ -474,7 +638,7 @@ function CategoryGroup({ title, type, categories, activeMenu, setActiveMenu, onE
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {categories.map((cat) => (
+          {displayCategories.map((cat) => (
             <div
               key={cat.id}
               className="relative flex items-center gap-3 rounded-xl border bg-card p-4 hover:bg-muted/30 transition-colors"
@@ -493,13 +657,23 @@ function CategoryGroup({ title, type, categories, activeMenu, setActiveMenu, onE
 
               {/* Name + badge */}
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{cat.name}</p>
-                {cat.isDefault && (
-                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
-                    <Lock className="h-3 w-3" />
-                    Default
-                  </span>
-                )}
+                <p className="text-sm font-medium truncate">{getCategoryPath(cat, categories)}</p>
+                <div className="flex items-center gap-2 mt-0.5">
+                  {cat.parentId && (
+                    <span className="text-xs text-muted-foreground">Sub-category</span>
+                  )}
+                  {cat._count?.children ? (
+                    <span className="text-xs text-muted-foreground">
+                      {cat._count.children} child{cat._count.children === 1 ? '' : 'ren'}
+                    </span>
+                  ) : null}
+                  {cat.isDefault && (
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <Lock className="h-3 w-3" />
+                      Default
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* Color dot */}

@@ -3,27 +3,34 @@ import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tansta
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { useFY } from '@/contexts/FYContext';
 import { useSearchParams } from 'react-router-dom';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
-import { Receipt, Upload, X, CheckCircle, AlertCircle, Download, Pencil, Trash2, SlidersHorizontal, ChevronDown, Repeat } from 'lucide-react';
+import { BankLogo } from '@/components/shared/BankLogo';
+import { Receipt, Upload, X, CheckCircle, AlertCircle, Download, Pencil, Trash2, SlidersHorizontal, ChevronDown, Repeat, Paperclip, TrendingUp, Shield, Undo2, CreditCard, MoreHorizontal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import api from '@/lib/api';
+import { investmentsApi } from '@/api/investments';
+import { insuranceApi, type InsurancePolicy } from '@/api/insurance';
 import { loansApi } from '@/api/loans';
 import { cn } from '@/lib/utils';
+import { getCategoryLabel, getCategoryPath, sortCategoriesByNameAsc, type CategoryLike } from '@/lib/categoryUtils';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useBudgetsVsActuals, type BudgetActualItem } from '@/hooks/useBudgetsVsActuals';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import RecurringRulesPage from '@/pages/transactions/RecurringRules';
+import { formatINR } from '@/lib/indianFormat';
 
 interface Transaction {
   id: string;
   description: string;
+  remark?: string | null;
   amount: number;
   type: 'INCOME' | 'EXPENSE' | 'TRANSFER';
   date: string;
@@ -31,14 +38,63 @@ interface Transaction {
   categoryName?: string;
   categoryIcon?: string | null;
   categoryId?: string;
+  bankAccountId?: string | null;
   bankAccountName?: string;
   userId: string;
   transferPairId?: string | null;
+  sipId?: string | null;
+  sipTransactionId?: string | null;
+  sipName?: string;
+  sipUnits?: number | null;
+  sipNav?: number | null;
+  sipAmount?: number | null;
+  sipTxnType?: string | null;
+  sipMonthlyAmount?: number | null;
+  sipDate?: number | null;
+  insurancePolicyId?: string | null;
+  insurancePolicyName?: string;
+  insuranceProviderName?: string;
+  refundForTransactionId?: string | null;
+  refundForDescription?: string;
+  refundForAmount?: number | null;
+  refundForDate?: string | null;
+  refundedAmount?: number;
+  refunds?: { id: string; amount: string | number; date: string; description: string }[];
+  isCreditCardBillPayment?: boolean;
+  creditCardAccountName?: string;
+  transferCounterpartyAccountName?: string;
+  memberName?: string;
+  memberColor?: string | null;
 }
 
 interface RawTransaction extends Omit<Transaction, 'categoryName' | 'bankAccountName'> {
-  category?: { name: string; color: string; icon: string } | null;
-  bankAccount?: { bankName: string; accountNumberLast4?: string | null } | null;
+  category?: (CategoryLike & { color?: string | null }) | null;
+  bankAccount?: { bankName: string; accountNumberLast4?: string | null; accountType?: string | null } | null;
+  creditCardAccount?: { bankName: string; accountNumberLast4?: string | null; accountType?: string | null } | null;
+  transferCounterpartyAccount?: { bankName: string; accountNumberLast4?: string | null; accountType?: string | null } | null;
+  sip?: { fundName: string; folioNumber?: string | null; monthlyAmount?: string | number; sipDate?: number | null } | null;
+  sipTransaction?: {
+    units: string | number;
+    nav: string | number;
+    amount: string | number;
+    type: string;
+    investment?: { name: string } | null;
+  } | null;
+  insurancePolicy?: { id: string; policyName: string; providerName: string; policyNumber?: string; policyType?: string; premiumAmount?: string | number } | null;
+  refundFor?: { id: string; description: string; amount: string | number; date: string; category?: CategoryLike | null } | null;
+  refunds?: { id: string; amount: string | number; date: string; description: string }[];
+  user?: { name: string; colorTag?: string | null } | null;
+}
+
+interface TransferCounterpartCandidate {
+  id: string;
+  date: string;
+  description: string;
+  remark?: string | null;
+  amount: string | number;
+  type: 'INCOME' | 'EXPENSE';
+  balanceImpactApplied: boolean;
+  bankAccount?: { bankName: string; accountNumberLast4?: string | null; accountType?: string | null } | null;
 }
 
 interface TransactionsResponse {
@@ -68,6 +124,82 @@ const PAYMENT_MODE_LABELS: Record<string, string> = {
   CASH: 'Cash', CHEQUE: 'Cheque', CARD: 'Card', EMI: 'EMI', AUTO_DEBIT: 'Auto Debit',
 };
 
+const ACCOUNT_TYPE_LABELS: Record<string, string> = {
+  SAVINGS: 'Savings',
+  CURRENT: 'Current',
+  SALARY: 'Salary',
+  CREDIT_CARD: 'Credit Card',
+  DEBIT_CARD: 'Debit Card',
+  PREPAID_CARD: 'Prepaid Card',
+  NRE: 'NRE',
+  NRO: 'NRO',
+  PPF: 'PPF',
+  EPF: 'EPF',
+  DEMAT: 'Demat',
+};
+
+function formatAccountOption(
+  account: any,
+  options: { showOwner?: boolean; fallbackOwnerName?: string } = {},
+): string {
+  const suffix = account.accountNumberLast4 ? ` ····${account.accountNumberLast4}` : '';
+  const type = ACCOUNT_TYPE_LABELS[account.accountType] ?? account.accountType;
+  const ownerName = options.showOwner ? (account.userName || options.fallbackOwnerName) : undefined;
+  const ownerPrefix = ownerName ? `${ownerName} - ` : '';
+  return `${ownerPrefix}${account.bankName}${suffix}${type ? ` (${type})` : ''}`;
+}
+
+function formatTransactionAccount(account?: { bankName: string; accountNumberLast4?: string | null } | null): string | undefined {
+  if (!account) return undefined;
+  return `${account.bankName}${account.accountNumberLast4 ? ` ****${account.accountNumberLast4}` : ''}`;
+}
+
+const BANK_CHIP_STYLES = [
+  { match: /\bhdfc\b/i, bg: '#EAF3FF', fg: '#004C8F', border: '#9CC4EA' },
+  { match: /\bicici\b/i, bg: '#FFF1E6', fg: '#9A3F10', border: '#FDBA74' },
+  { match: /\b(state bank of india|sbi)\b/i, bg: '#E6F7FC', fg: '#006B95', border: '#7DD3FC' },
+  { match: /\baxis\b/i, bg: '#FCE7F3', fg: '#97144D', border: '#F9A8D4' },
+  { match: /\bkotak\b/i, bg: '#EAF1FF', fg: '#003974', border: '#93C5FD' },
+  { match: /\byes\b/i, bg: '#EEF2FF', fg: '#1D4ED8', border: '#A5B4FC' },
+  { match: /\bidfc\b/i, bg: '#FEE2E2', fg: '#9D1D27', border: '#FCA5A5' },
+  { match: /\bindusind\b/i, bg: '#FFE4E6', fg: '#8A1538', border: '#FDA4AF' },
+];
+
+const FALLBACK_BANK_CHIP_STYLES = [
+  { bg: '#EFF6FF', fg: '#1D4ED8', border: '#BFDBFE' },
+  { bg: '#ECFDF5', fg: '#047857', border: '#A7F3D0' },
+  { bg: '#F5F3FF', fg: '#6D28D9', border: '#DDD6FE' },
+  { bg: '#FFFBEB', fg: '#B45309', border: '#FDE68A' },
+  { bg: '#F0FDFA', fg: '#0F766E', border: '#99F6E4' },
+  { bg: '#FFF1F2', fg: '#BE123C', border: '#FECDD3' },
+];
+
+function finiteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getBankChipStyle(accountName: string) {
+  const known = BANK_CHIP_STYLES.find((style) => style.match.test(accountName));
+  if (known) return known;
+  let hash = 0;
+  for (let i = 0; i < accountName.length; i += 1) hash = (hash * 31 + accountName.charCodeAt(i)) >>> 0;
+  return FALLBACK_BANK_CHIP_STYLES[hash % FALLBACK_BANK_CHIP_STYLES.length];
+}
+
+function parseAccountChipText(accountName: string) {
+  const last4Match = accountName.match(/(?:\*{2,}|•{2,}|\.{2,}|····)\s*(\d{4})\b/);
+  const last4 = last4Match?.[1] ?? null;
+  const bankName = accountName
+    .replace(/(?:\*{2,}|•{2,}|\.{2,}|····)\s*\d{4}\b/g, '')
+    .trim();
+  return {
+    bankName: bankName || accountName,
+    visibleText: last4 ? `•••• ${last4}` : 'Account',
+  };
+}
+
 const EMPTY_FILTERS: TxFilters = {
   search: '', types: [], categoryIds: [], paymentModes: [], startDate: '', endDate: '',
 };
@@ -89,11 +221,28 @@ async function fetchTransactions(fy: string, filters: TxFilters, cursor?: string
   });
   const data: Transaction[] = (res.data.data ?? []).map((tx) => ({
     ...tx,
-    categoryName: tx.category?.name,
+    categoryId: tx.categoryId ?? tx.category?.id,
+    categoryName: tx.category ? getCategoryPath(tx.category) : undefined,
     categoryIcon: tx.category?.icon,
-    bankAccountName: tx.bankAccount
-      ? `${tx.bankAccount.bankName}${tx.bankAccount.accountNumberLast4 ? ` ****${tx.bankAccount.accountNumberLast4}` : ''}`
-      : undefined,
+    bankAccountName: formatTransactionAccount(tx.bankAccount),
+    sipName: tx.sip?.fundName ?? tx.sipTransaction?.investment?.name ?? (tx.sipTransaction ? 'SIP allocation' : undefined),
+    sipUnits: finiteNumber(tx.sipTransaction?.units),
+    sipNav: finiteNumber(tx.sipTransaction?.nav),
+    sipAmount: finiteNumber(tx.sipTransaction?.amount),
+    sipTxnType: tx.sipTransaction?.type ?? null,
+    sipMonthlyAmount: finiteNumber(tx.sip?.monthlyAmount),
+    sipDate: tx.sip?.sipDate ?? null,
+    insurancePolicyName: tx.insurancePolicy?.policyName,
+    insuranceProviderName: tx.insurancePolicy?.providerName,
+    refundForTransactionId: tx.refundForTransactionId ?? tx.refundFor?.id,
+    refundForDescription: tx.refundFor?.description,
+    refundForAmount: tx.refundFor ? Number(tx.refundFor.amount) : null,
+    refundForDate: tx.refundFor?.date ?? null,
+    refundedAmount: tx.refunds?.reduce((sum, refund) => sum + Number(refund.amount), 0) ?? 0,
+    creditCardAccountName: formatTransactionAccount(tx.creditCardAccount),
+    transferCounterpartyAccountName: formatTransactionAccount(tx.transferCounterpartyAccount),
+    memberName: tx.user?.name,
+    memberColor: tx.user?.colorTag,
   }));
   return { data, pagination: res.data.pagination };
 }
@@ -122,8 +271,269 @@ const PAYMENT_MODE_ICONS: Record<string, string> = {
   AUTO_DEBIT: '🔄',
 };
 
+function MemberBadge({ name, color }: { name?: string; color?: string | null }) {
+  if (!name) return <span className="text-xs text-muted-foreground">—</span>;
+  const initial = name.trim().charAt(0).toUpperCase();
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-foreground">
+      <span
+        className="flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold text-white"
+        style={{ backgroundColor: color || '#64748b' }}
+      >
+        {initial}
+      </span>
+      <span className="max-w-[110px] truncate">{name}</span>
+    </span>
+  );
+}
+
+function BankAccountBadge({ accountName, compact = false }: { accountName?: string; compact?: boolean }) {
+  if (!accountName) return <span className="text-xs text-muted-foreground">—</span>;
+  const { bankName, visibleText } = parseAccountChipText(accountName);
+  const style = getBankChipStyle(bankName);
+  return (
+    <span
+      className={cn(
+        'inline-flex max-w-full items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] font-semibold shadow-sm tabular-nums',
+        compact ? 'basis-full' : '',
+      )}
+      style={{ backgroundColor: style.bg, borderColor: style.border, color: style.fg }}
+      title={accountName}
+    >
+      <BankLogo bankName={bankName} size="sm" className="h-4 w-4 rounded text-[7px] shadow-none ring-0" />
+      <span className="truncate">{visibleText}</span>
+    </span>
+  );
+}
+
+function BankAccountLine({ label, accountName }: { label: string; accountName?: string }) {
+  return (
+    <div className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
+      <span className="shrink-0">{label}:</span>
+      <BankAccountBadge accountName={accountName} />
+    </div>
+  );
+}
+
+function TransferCategoryInfo({ tx, compact = false }: { tx: Transaction; compact?: boolean }) {
+  const isDebitLeg = tx.type === 'EXPENSE';
+  const primaryLabel = isDebitLeg ? 'From' : 'To';
+  const primaryAccount = tx.bankAccountName;
+  const counterpartyLabel = isDebitLeg ? 'To' : 'From';
+  const counterpartyAccount = isDebitLeg
+    ? (tx.isCreditCardBillPayment ? tx.creditCardAccountName : tx.transferCounterpartyAccountName)
+    : tx.transferCounterpartyAccountName;
+  const Icon = tx.isCreditCardBillPayment ? CreditCard : Repeat;
+  const label = `${tx.isCreditCardBillPayment ? 'CC Bill Payment' : 'Transfer'} ${isDebitLeg ? 'Debit' : 'Credit'}`;
+
+  return (
+    <div className={cn('space-y-1 min-w-0', compact ? 'basis-full max-w-full' : 'max-w-[280px]')}>
+      <span
+        className={cn(
+          'inline-flex max-w-full items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium',
+          tx.isCreditCardBillPayment
+            ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300'
+            : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
+        )}
+      >
+        <Icon className="h-2.5 w-2.5 shrink-0" />
+        <span className="truncate">{label}</span>
+      </span>
+      {(primaryAccount || counterpartyAccount) && (
+        <BankAccountLine label={primaryLabel} accountName={primaryAccount} />
+      )}
+      {(primaryAccount || counterpartyAccount) && (
+        <BankAccountLine label={counterpartyLabel} accountName={counterpartyAccount} />
+      )}
+    </div>
+  );
+}
+
+function formatSipQuantity(value?: number | null): string | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  return value.toLocaleString('en-IN', { maximumFractionDigits: 4 });
+}
+
+function SIPCategoryInfo({ tx, compact = false }: { tx: Transaction; compact?: boolean }) {
+  const units = formatSipQuantity(tx.sipUnits);
+  const nav = tx.sipNav !== null && tx.sipNav !== undefined && Number.isFinite(tx.sipNav)
+    ? formatINR(tx.sipNav)
+    : null;
+  const allocation = units && nav
+    ? `${units} units @ ${nav}`
+    : units
+    ? `${units} units`
+    : nav
+    ? `NAV ${nav}`
+    : tx.sipAmount !== null && tx.sipAmount !== undefined && Number.isFinite(tx.sipAmount)
+    ? `Allocated ${formatINR(tx.sipAmount)}`
+    : null;
+  const mandateParts = [
+    tx.sipMonthlyAmount !== null && tx.sipMonthlyAmount !== undefined && Number.isFinite(tx.sipMonthlyAmount)
+      ? `Monthly ${formatINR(tx.sipMonthlyAmount)}`
+      : null,
+    tx.sipDate ? `Day ${tx.sipDate}` : null,
+  ].filter(Boolean);
+  const mandate = mandateParts.length > 0 ? mandateParts.join(' · ') : null;
+
+  return (
+    <div className={cn('space-y-1 min-w-0', compact ? 'basis-full max-w-full' : 'max-w-[280px]')}>
+      <span
+        className="inline-flex max-w-full items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+        title={tx.sipName ? `SIP: ${tx.sipName}` : 'SIP'}
+      >
+        <TrendingUp className="h-2.5 w-2.5 shrink-0" />
+        <span className="truncate">SIP{tx.sipName ? ` · ${tx.sipName}` : ''}</span>
+      </span>
+      {allocation && (
+        <div className="text-[11px] text-muted-foreground truncate">
+          Allocation: {allocation}
+        </div>
+      )}
+      {mandate && (
+        <div className="text-[11px] text-muted-foreground truncate">
+          Mandate: {mandate}
+        </div>
+      )}
+      {tx.categoryName && (
+        <div className="text-[11px] text-muted-foreground truncate">
+          {tx.categoryIcon && <span className="mr-1">{tx.categoryIcon}</span>}
+          {tx.categoryName}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface TransactionActionMenuProps {
+  tx: Transaction;
+  compact?: boolean;
+  canControl: boolean;
+  canConvertToTransfer: boolean;
+  canConvertToSIP: boolean;
+  canManageSIPLink: boolean;
+  canManagePolicyLink: boolean;
+  canManageRefundLink: boolean;
+  onDocuments: () => void;
+  onTransfer: () => void;
+  onSIP: () => void;
+  onPolicy: () => void;
+  onRefund: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}
+
+function TransactionActionMenu({
+  tx,
+  compact = false,
+  canControl,
+  canConvertToTransfer,
+  canConvertToSIP,
+  canManageSIPLink,
+  canManagePolicyLink,
+  canManageRefundLink,
+  onDocuments,
+  onTransfer,
+  onSIP,
+  onPolicy,
+  onRefund,
+  onEdit,
+  onDelete,
+}: TransactionActionMenuProps) {
+  if (!canControl) return null;
+
+  const canEditTransaction = !tx.transferPairId && !tx.sipId && !tx.sipTransactionId;
+  const canDeleteTransaction = !tx.transferPairId;
+  const itemClass = 'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none transition-colors hover:bg-muted focus:bg-muted';
+  const destructiveItemClass = cn(itemClass, 'text-destructive hover:bg-destructive/10 focus:bg-destructive/10');
+  const actions = [
+    {
+      key: 'documents',
+      label: 'Documents',
+      icon: <Paperclip className="h-4 w-4" />,
+      onSelect: onDocuments,
+    },
+    canConvertToTransfer && {
+      key: 'transfer',
+      label: tx.type === 'INCOME' ? 'Mark as card payment' : 'Mark as transfer',
+      icon: <Repeat className="h-4 w-4" />,
+      onSelect: onTransfer,
+    },
+    canConvertToSIP && {
+      key: 'sip',
+      label: 'Mark as SIP',
+      icon: <TrendingUp className="h-4 w-4" />,
+      onSelect: onSIP,
+    },
+    canManageSIPLink && {
+      key: 'sip-link',
+      label: 'Change SIP link',
+      icon: <TrendingUp className="h-4 w-4" />,
+      onSelect: onSIP,
+    },
+    canManagePolicyLink && {
+      key: 'policy',
+      label: tx.insurancePolicyId ? 'Change policy link' : 'Link policy',
+      icon: <Shield className="h-4 w-4" />,
+      onSelect: onPolicy,
+    },
+    canManageRefundLink && {
+      key: 'refund',
+      label: tx.type === 'EXPENSE' ? 'Link refund credit' : tx.refundForTransactionId ? 'Change refund link' : 'Mark as refund',
+      icon: <Undo2 className="h-4 w-4" />,
+      onSelect: onRefund,
+    },
+    canEditTransaction && {
+      key: 'edit',
+      label: 'Edit transaction',
+      icon: <Pencil className="h-4 w-4" />,
+      onSelect: onEdit,
+    },
+  ].filter(Boolean) as Array<{ key: string; label: string; icon: JSX.Element; onSelect: () => void }>;
+
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <Button
+          variant={compact ? 'outline' : 'ghost'}
+          size={compact ? 'sm' : 'icon'}
+          className={cn(compact ? 'h-8 gap-1.5 px-2 text-xs' : 'h-7 w-7')}
+          title="Transaction actions"
+        >
+          <MoreHorizontal className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
+          {compact && <span>Actions</span>}
+        </Button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={6}
+          className="z-50 min-w-52 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+        >
+          {actions.map((action) => (
+            <DropdownMenu.Item key={action.key} className={itemClass} onSelect={action.onSelect}>
+              {action.icon}
+              <span>{action.label}</span>
+            </DropdownMenu.Item>
+          ))}
+          {canDeleteTransaction && (
+            <>
+              <DropdownMenu.Separator className="my-1 h-px bg-border" />
+              <DropdownMenu.Item className={destructiveItemClass} onSelect={onDelete}>
+                <Trash2 className="h-4 w-4" />
+                <span>Delete transaction</span>
+              </DropdownMenu.Item>
+            </>
+          )}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
 const txSchema = z.object({
   description: z.string().min(1, 'Required'),
+  remark: z.string().optional(),
   amount: z.coerce.number().positive(),
   type: z.enum(['INCOME', 'EXPENSE', 'TRANSFER']),
   date: z.string(),
@@ -140,6 +550,7 @@ type TxForm = z.infer<typeof txSchema>;
 // Edit schema: TRANSFER type not allowed, bankAccountId excluded, paymentMode empty→undefined
 const editTxSchema = z.object({
   description: z.string().min(1, 'Required'),
+  remark: z.string().optional(),
   amount: z.coerce.number().positive('Must be positive'),
   type: z.enum(['INCOME', 'EXPENSE']),
   date: z.string(),
@@ -156,17 +567,102 @@ function useCategories() {
   });
 }
 
-function useAccounts() {
+function useAccounts(targetUserId?: string) {
   return useQuery({
-    queryKey: ['accounts'],
-    queryFn: () => api.get<{ data: any[] }>('/accounts').then((r) => r.data.data),
+    queryKey: ['accounts', targetUserId],
+    queryFn: () => api.get<{ data: any[] }>('/accounts', {
+      params: targetUserId ? { userId: targetUserId } : {},
+    }).then((r) => r.data.data),
   });
 }
 
-function useLoans() {
+function useLoans(targetUserId?: string) {
   return useQuery({
-    queryKey: ['loans'],
-    queryFn: () => loansApi.getAll(),
+    queryKey: ['loans', targetUserId],
+    queryFn: () => loansApi.getAll(targetUserId),
+  });
+}
+
+function useSIPs(targetUserId?: string) {
+  return useQuery({
+    queryKey: ['sips', targetUserId],
+    queryFn: () => investmentsApi.getSIPs(targetUserId ? { targetUserId } : undefined),
+  });
+}
+
+function useInsurancePolicies(targetUserId?: string) {
+  return useQuery({
+    queryKey: ['insurance-policies', targetUserId],
+    queryFn: () => insuranceApi.getAll(targetUserId ? { targetUserId } : undefined),
+  });
+}
+
+function mapRawTransaction(tx: RawTransaction): Transaction {
+  return {
+    ...tx,
+    categoryName: tx.category ? getCategoryPath(tx.category) : undefined,
+    categoryIcon: tx.category?.icon,
+    bankAccountName: formatTransactionAccount(tx.bankAccount),
+    sipName: tx.sip?.fundName ?? tx.sipTransaction?.investment?.name ?? (tx.sipTransaction ? 'SIP allocation' : undefined),
+    sipUnits: finiteNumber(tx.sipTransaction?.units),
+    sipNav: finiteNumber(tx.sipTransaction?.nav),
+    sipAmount: finiteNumber(tx.sipTransaction?.amount),
+    sipTxnType: tx.sipTransaction?.type ?? null,
+    sipMonthlyAmount: finiteNumber(tx.sip?.monthlyAmount),
+    sipDate: tx.sip?.sipDate ?? null,
+    refundForTransactionId: tx.refundForTransactionId ?? tx.refundFor?.id,
+    refundForDescription: tx.refundFor?.description,
+    refundForAmount: tx.refundFor ? Number(tx.refundFor.amount) : null,
+    refundForDate: tx.refundFor?.date ?? null,
+    refundedAmount: tx.refunds?.reduce((sum, refund) => sum + Number(refund.amount), 0) ?? 0,
+    creditCardAccountName: formatTransactionAccount(tx.creditCardAccount),
+    transferCounterpartyAccountName: formatTransactionAccount(tx.transferCounterpartyAccount),
+    memberName: tx.user?.name,
+    memberColor: tx.user?.colorTag,
+  };
+}
+
+function useRefundCandidates(targetUserId?: string, enabled = true) {
+  return useQuery({
+    queryKey: ['refund-candidates', targetUserId],
+    queryFn: async () => {
+      const res = await api.get<{ data: RawTransaction[] }>('/transactions', {
+        params: {
+          type: 'EXPENSE',
+          limit: 500,
+          sort: 'date:desc',
+          ...(targetUserId ? { targetUserId } : {}),
+        },
+      });
+      return (res.data.data ?? []).map(mapRawTransaction);
+    },
+    enabled,
+  });
+}
+
+function useIncomingRefundCandidates(targetUserId?: string, enabled = true) {
+  return useQuery({
+    queryKey: ['incoming-refund-candidates', targetUserId],
+    queryFn: async () => {
+      const res = await api.get<{ data: RawTransaction[] }>('/transactions', {
+        params: {
+          type: 'INCOME',
+          limit: 500,
+          sort: 'date:desc',
+          ...(targetUserId ? { targetUserId } : {}),
+        },
+      });
+      return (res.data.data ?? [])
+        .map(mapRawTransaction)
+        .filter((candidate) => (
+          !candidate.transferPairId
+          && !candidate.sipId
+          && !candidate.sipTransactionId
+          && !candidate.insurancePolicyId
+          && !candidate.refundForTransactionId
+        ));
+    },
+    enabled,
   });
 }
 
@@ -179,6 +675,7 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
     resolver: zodResolver(editTxSchema),
     defaultValues: {
       description: tx.description,
+      remark: tx.remark ?? '',
       amount: tx.amount,
       type: tx.type === 'TRANSFER' ? 'EXPENSE' : tx.type,
       date: tx.date.slice(0, 10),
@@ -188,11 +685,14 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
   });
 
   const selectedType = watch('type');
-  const isFirstRender = useRef(true);
+  const selectedCategoryId = watch('categoryId') ?? '';
+  const previousType = useRef(selectedType);
 
-  // Reset categoryId when transaction type changes — skip on mount to preserve the pre-populated value
+  // Reset categoryId only when the user actually changes type. React StrictMode
+  // runs effects twice in dev, so a first-render flag can still clear this value.
   useEffect(() => {
-    if (isFirstRender.current) { isFirstRender.current = false; return; }
+    if (previousType.current === selectedType) return;
+    previousType.current = selectedType;
     setValue('categoryId', '');
   }, [selectedType, setValue]);
 
@@ -201,11 +701,16 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
     if (selectedType === 'EXPENSE') return c.type === 'EXPENSE';
     return false; // TRANSFER — no categories
   });
+  const showCurrentCategoryFallback =
+    !!selectedCategoryId
+    && selectedCategoryId === tx.categoryId
+    && !transactionCategories.some((c: any) => c.id === selectedCategoryId);
 
   const editMutation = useMutation({
     mutationFn: (data: EditTxForm) =>
       api.put(`/transactions/${tx.id}`, {
         ...data,
+        remark: data.remark?.trim() || null,
         paymentMode: data.paymentMode || undefined,
         categoryId: data.categoryId || undefined,
       }),
@@ -234,28 +739,32 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
         <form onSubmit={handleSubmit((data) => editMutation.mutate(data))} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2 space-y-1">
-              <Label>Description</Label>
+              <Label required>Description</Label>
               <Input {...register('description')} />
               {errors.description && <p className="text-xs text-destructive">{errors.description.message}</p>}
             </div>
+            <div className="col-span-2 space-y-1">
+              <Label>Remark (optional)</Label>
+              <Input {...register('remark')} placeholder="Bank transaction remark or note" />
+            </div>
             <div className="space-y-1">
-              <Label>Amount (₹)</Label>
+              <Label required>Amount (₹)</Label>
               <Input {...register('amount')} type="number" step="0.01" />
               {errors.amount && <p className="text-xs text-destructive">{errors.amount.message}</p>}
             </div>
             <div className="space-y-1">
-              <Label>Type</Label>
+              <Label required>Type</Label>
               <select {...register('type')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                 <option value="EXPENSE">Expense</option>
                 <option value="INCOME">Income</option>
               </select>
             </div>
             <div className="space-y-1">
-              <Label>Date</Label>
+              <Label required>Date</Label>
               <Input {...register('date')} type="date" />
             </div>
             <div className="space-y-1">
-              <Label>Payment Mode</Label>
+              <Label>Payment Mode (optional)</Label>
               <select {...register('paymentMode')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                 <option value="">— Select —</option>
                 {['UPI', 'NEFT', 'RTGS', 'IMPS', 'CASH', 'CHEQUE', 'CARD', 'EMI', 'AUTO_DEBIT'].map((m) => (
@@ -264,11 +773,16 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
               </select>
             </div>
             <div className="col-span-2 space-y-1">
-              <Label>Category</Label>
+              <Label>Category (optional)</Label>
               <select {...register('categoryId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                 <option value="">— Uncategorized —</option>
-                {transactionCategories.map((c: any) => (
-                  <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ` : ''}{c.name}</option>
+                {showCurrentCategoryFallback && (
+                  <option value={selectedCategoryId}>
+                    {tx.categoryIcon ? `${tx.categoryIcon} ` : ''}{tx.categoryName ?? 'Selected category'}
+                  </option>
+                )}
+                {sortCategoriesByNameAsc(transactionCategories).map((c: any) => (
+                  <option key={c.id} value={c.id}>{getCategoryLabel(c, categories)}</option>
                 ))}
               </select>
             </div>
@@ -285,12 +799,21 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
   );
 }
 
-interface CategoryRule { keyword: string; categoryId: string; categoryName: string }
-const RULES_KEY = 'tx-category-rules';
-function loadRules(): CategoryRule[] {
-  try { return JSON.parse(localStorage.getItem(RULES_KEY) ?? '[]'); } catch { return []; }
+interface CategoryRule {
+  id: string;
+  keyword: string;
+  categoryId: string;
+  category: CategoryLike & { type: 'INCOME' | 'EXPENSE'; icon?: string | null };
 }
-function saveRules(rules: CategoryRule[]) { localStorage.setItem(RULES_KEY, JSON.stringify(rules)); }
+
+function useCategoryRules(targetUserId?: string) {
+  return useQuery({
+    queryKey: ['category-rules', targetUserId],
+    queryFn: () => api.get<{ data: CategoryRule[] }>('/category-rules', {
+      params: targetUserId ? { targetUserId } : {},
+    }).then((r) => r.data.data),
+  });
+}
 
 // ─── Import auto-detect helpers ───────────────────────────────────────────────
 
@@ -344,11 +867,12 @@ function deriveBankHintFromBankName(bankName: string | null | undefined): string
   return null;
 }
 
-function ImportModal({ onClose }: { onClose: () => void }) {
+function ImportModal({ onClose, targetUserId }: { onClose: () => void; targetUserId?: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const { data: accounts = [] } = useAccounts();
+  const { data: accounts = [] } = useAccounts(targetUserId);
   const { data: categories = [] } = useCategories();
+  const { data: rules = [] } = useCategoryRules(targetUserId);
   // Bank imports produce INCOME/EXPENSE transactions — filter out ASSET/LIABILITY categories
   const importCategories = categories.filter((c: any) => c.type === 'INCOME' || c.type === 'EXPENSE');
   const [file, setFile] = useState<File | null>(null);
@@ -358,10 +882,8 @@ function ImportModal({ onClose }: { onClose: () => void }) {
   const [pdfPassword, setPdfPassword] = useState('');
   const [result, setResult] = useState<any>(null);
   const [showRules, setShowRules] = useState(false);
-  const [rules, setRules] = useState<CategoryRule[]>(loadRules);
   const [newKeyword, setNewKeyword] = useState('');
   const [newCategoryId, setNewCategoryId] = useState('');
-  const [applying, setApplying] = useState(false);
   const [newBalance, setNewBalance] = useState('');
   const [savingBalance, setSavingBalance] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -426,6 +948,7 @@ function ImportModal({ onClose }: { onClose: () => void }) {
       if (isPDF && pdfPassword) formData.append('pdfPassword', pdfPassword);
       return api.post<{ data: any }>('/transactions/import', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        params: targetUserId ? { targetUserId } : {},
       });
     },
     onSuccess: (res) => {
@@ -434,45 +957,25 @@ function ImportModal({ onClose }: { onClose: () => void }) {
     },
   });
 
+  const addRuleMutation = useMutation({
+    mutationFn: (data: { keyword: string; categoryId: string }) => api.post('/category-rules', data, {
+      params: targetUserId ? { targetUserId } : {},
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['category-rules'] });
+      setNewKeyword('');
+      setNewCategoryId('');
+    },
+  });
+
+  const removeRuleMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/category-rules/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['category-rules'] }),
+  });
+
   function addRule() {
     if (!newKeyword.trim() || !newCategoryId) return;
-    const cat = categories.find((c: any) => c.id === newCategoryId);
-    const updated = [...rules, { keyword: newKeyword.trim().toLowerCase(), categoryId: newCategoryId, categoryName: cat?.name ?? '' }];
-    setRules(updated);
-    saveRules(updated);
-    setNewKeyword('');
-    setNewCategoryId('');
-  }
-
-  function removeRule(i: number) {
-    const updated = rules.filter((_, idx) => idx !== i);
-    setRules(updated);
-    saveRules(updated);
-  }
-
-  async function applyRules() {
-    if (rules.length === 0) return;
-    setApplying(true);
-    try {
-      // Fetch uncategorized transactions — paginate up to 1000 to avoid silent truncation
-      const res = await api.get<{ data: any[]; pagination?: { total?: number } }>('/transactions', { params: { limit: 1000 } });
-      const uncategorized = res.data.data.filter((tx: any) => !tx.categoryId && tx.type !== 'TRANSFER');
-      const matches = uncategorized
-        .map((tx: any) => {
-          const desc = tx.description?.toLowerCase() ?? '';
-          const match = rules.find((r) => desc.includes(r.keyword));
-          return match ? { id: tx.id, categoryId: match.categoryId } : null;
-        })
-        .filter(Boolean) as { id: string; categoryId: string }[];
-
-      await Promise.all(matches.map((m) => api.put(`/transactions/${m.id}`, { categoryId: m.categoryId })));
-      qc.invalidateQueries({ queryKey: ['transactions'] });
-      toast({ title: `Applied rules: ${matches.length} transaction${matches.length !== 1 ? 's' : ''} categorized`, variant: 'success' });
-    } catch {
-      toast({ title: 'Failed to apply rules', variant: 'error' });
-    } finally {
-      setApplying(false);
-    }
+    addRuleMutation.mutate({ keyword: newKeyword.trim().toLowerCase(), categoryId: newCategoryId });
   }
 
   return (
@@ -603,11 +1106,21 @@ function ImportModal({ onClose }: { onClose: () => void }) {
               </button>
               {showRules && (
                 <div className="p-3 space-y-2">
-                  <p className="text-xs text-muted-foreground">Keyword → category mappings applied after import</p>
-                  {rules.map((r, i) => (
-                    <div key={i} className="flex items-center justify-between text-sm bg-muted/30 rounded px-2 py-1">
-                      <span><span className="font-mono text-xs">{r.keyword}</span> → {r.categoryName}</span>
-                      <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => removeRule(i)}>
+                  <p className="text-xs text-muted-foreground">Keyword → category mappings are saved to your account and applied during import</p>
+                  {importCategories.length === 0 && (
+                    <p className="text-xs text-amber-600">
+                      Create at least one income or expense category before adding auto-categorization rules.
+                    </p>
+                  )}
+                  {importCategories.length > 0 && rules.length === 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      No rules saved yet. Add a keyword rule before importing if you want transactions categorized automatically.
+                    </p>
+                  )}
+                  {rules.map((r) => (
+                    <div key={r.id} className="flex items-center justify-between text-sm bg-muted/30 rounded px-2 py-1">
+                      <span><span className="font-mono text-xs">{r.keyword}</span> → {getCategoryLabel(r.category, categories)}</span>
+                      <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => removeRuleMutation.mutate(r.id)}>
                         <X className="h-3 w-3" />
                       </Button>
                     </div>
@@ -618,18 +1131,25 @@ function ImportModal({ onClose }: { onClose: () => void }) {
                       value={newKeyword}
                       onChange={(e) => setNewKeyword(e.target.value)}
                       className="text-sm h-8"
+                      disabled={importCategories.length === 0}
                       onKeyDown={(e) => e.key === 'Enter' && addRule()}
                     />
                     <select
                       value={newCategoryId}
                       onChange={(e) => setNewCategoryId(e.target.value)}
                       className="rounded-md border bg-background px-2 py-1 text-sm flex-1"
+                      disabled={importCategories.length === 0}
                     >
-                      <option value="">Category</option>
-                      {importCategories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      <option value="">{importCategories.length === 0 ? 'No categories available' : 'Category'}</option>
+                      {sortCategoriesByNameAsc(importCategories).map((c: any) => (
+                        <option key={c.id} value={c.id}>{getCategoryLabel(c, categories)}</option>
+                      ))}
                     </select>
-                    <Button size="sm" onClick={addRule} className="h-8">Add</Button>
+                    <Button size="sm" onClick={addRule} disabled={addRuleMutation.isPending || importCategories.length === 0} className="h-8">Add</Button>
                   </div>
+                  {addRuleMutation.isError && (
+                    <p className="text-xs text-destructive">{(addRuleMutation.error as any)?.response?.data?.message ?? 'Could not save rule'}</p>
+                  )}
                 </div>
               )}
             </div>
@@ -655,6 +1175,10 @@ function ImportModal({ onClose }: { onClose: () => void }) {
                 <p>Rows parsed: <span className="font-medium">{result.total}</span></p>
                 <p>Imported: <span className="font-medium text-green-600">{result.imported}</span></p>
                 <p>Duplicates skipped: <span className="font-medium text-muted-foreground">{result.duplicatesSkipped}</span></p>
+                <p>Categorized by rules: <span className="font-medium">{result.categorized ?? 0}</span></p>
+                {(result.categorized ?? 0) === 0 && (
+                  <p className="text-xs text-muted-foreground">No saved category rules matched this import.</p>
+                )}
                 {result.errors?.length > 0 && <p className="text-orange-600">Errors: {result.errors.length}</p>}
               </div>
               {result.warnings?.length > 0 && (
@@ -702,12 +1226,7 @@ function ImportModal({ onClose }: { onClose: () => void }) {
               </div>
             )}
             <div className="flex gap-3">
-              {rules.length > 0 && (
-                <Button variant="outline" className="flex-1" onClick={applyRules} disabled={applying}>
-                  {applying ? 'Applying…' : `Apply ${rules.length} rule${rules.length !== 1 ? 's' : ''}`}
-                </Button>
-              )}
-              <Button className={rules.length > 0 ? 'flex-1' : 'w-full'} onClick={onClose}>Done</Button>
+              <Button className="w-full" onClick={onClose}>Done</Button>
             </div>
           </div>
         )}
@@ -764,12 +1283,813 @@ function DeleteConfirmModal({ tx, onClose }: { tx: Transaction; onClose: () => v
   );
 }
 
-function AddTransactionModal({ onClose, budgetActuals }: { onClose: () => void; budgetActuals: BudgetActualItem[] }) {
+function ConvertToTransferModal({ tx, onClose }: { tx: Transaction; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const targetUserId = user?.role === 'ADMIN' ? tx.userId : undefined;
+  const { data: accounts = [] } = useAccounts(targetUserId);
+  const isIncomingPayment = tx.type === 'INCOME';
+  const [counterpartyAccountId, setCounterpartyAccountId] = useState('');
+  const [counterpartTransactionId, setCounterpartTransactionId] = useState('');
+  const [adjustCounterpartyBalance, setAdjustCounterpartyBalance] = useState(false);
+
+  const destinationAccounts = accounts.filter((a: any) => a.id !== tx.bankAccountId);
+  const { data: counterpartCandidates = [], isFetching: isLoadingCounterpartCandidates } = useQuery({
+    queryKey: ['transfer-counterpart-candidates', tx.id, counterpartyAccountId],
+    queryFn: () => api
+      .get<{ data: TransferCounterpartCandidate[] }>(`/transactions/${tx.id}/transfer-counterpart-candidates`, {
+        params: { bankAccountId: counterpartyAccountId },
+      })
+      .then((r) => r.data.data),
+    enabled: !!counterpartyAccountId,
+  });
+  const requiresCounterpartChoice = counterpartCandidates.length > 1;
+
+  useEffect(() => {
+    setCounterpartTransactionId('');
+  }, [counterpartyAccountId]);
+
+  const convertMutation = useMutation({
+    mutationFn: () => {
+      const payload = isIncomingPayment
+        ? { transferFromAccountId: counterpartyAccountId, counterpartTransactionId: counterpartTransactionId || undefined, adjustSourceBalance: adjustCounterpartyBalance }
+        : { transferToAccountId: counterpartyAccountId, counterpartTransactionId: counterpartTransactionId || undefined, adjustDestinationBalance: adjustCounterpartyBalance };
+      return api.post(`/transactions/${tx.id}/convert-to-transfer`, payload);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+      qc.invalidateQueries({ queryKey: ['accounts'] });
+      qc.invalidateQueries({ queryKey: ['budgets'] });
+      toast({ title: 'Transaction marked as transfer', variant: 'success' });
+      onClose();
+    },
+    onError: (err: any) => {
+      toast({
+        title: 'Could not mark as transfer',
+        description: err?.response?.data?.message ?? 'Something went wrong',
+        variant: 'error',
+      });
+    },
+  });
+
+  const formatCounterpartCandidate = (candidate: TransferCounterpartCandidate) => {
+    const account = formatTransactionAccount(candidate.bankAccount);
+    return [
+      new Date(candidate.date).toLocaleDateString('en-IN'),
+      candidate.description,
+      formatINR(Number(candidate.amount)),
+      account,
+      candidate.balanceImpactApplied ? 'balance already applied' : 'balance not applied',
+    ].filter(Boolean).join(' · ');
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-background rounded-lg border shadow-xl w-full max-w-md p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">{isIncomingPayment ? 'Mark as Card Payment' : 'Mark as Transfer'}</h2>
+          <Button variant="ghost" size="icon" onClick={onClose}><X className="h-4 w-4" /></Button>
+        </div>
+
+        <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-1">
+          <p className="font-medium truncate">{tx.description}</p>
+          <p className="text-muted-foreground">
+            {new Date(tx.date).toLocaleDateString('en-IN')} · <INRDisplay amount={tx.amount} />
+          </p>
+          <p className="text-muted-foreground">
+            {isIncomingPayment ? 'To' : 'From'}: {tx.bankAccountName ?? (isIncomingPayment ? 'Destination account' : 'Source account')}
+          </p>
+        </div>
+
+        <div className="space-y-1">
+          <Label required>{isIncomingPayment ? 'From Account' : 'To Account'}</Label>
+          <select
+            value={counterpartyAccountId}
+            onChange={(e) => setCounterpartyAccountId(e.target.value)}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+          >
+            <option value="">{isIncomingPayment ? 'Select source account' : 'Select destination account'}</option>
+            {destinationAccounts.map((a: any) => (
+              <option key={a.id} value={a.id}>
+                {formatAccountOption(a)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={adjustCounterpartyBalance}
+            onChange={(e) => setAdjustCounterpartyBalance(e.target.checked)}
+            className="mt-1 rounded"
+          />
+          <span>
+            {isIncomingPayment ? 'Adjust source account balance' : 'Adjust destination account balance'}
+            <span className="block text-xs text-muted-foreground">
+              Leave unchecked if that account already has the real balance.
+            </span>
+          </span>
+        </label>
+
+        {counterpartyAccountId && (
+          <div className="rounded-lg border bg-muted/20 p-3 text-sm space-y-2">
+            <p className="font-medium">Matching counterparty transaction</p>
+            {isLoadingCounterpartCandidates ? (
+              <p className="text-xs text-muted-foreground">Checking imported transactions…</p>
+            ) : counterpartCandidates.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No matching imported transaction found. The app will create the missing transfer leg.
+              </p>
+            ) : counterpartCandidates.length === 1 ? (
+              <p className="text-xs text-green-700 dark:text-green-400">
+                Found one matching imported transaction. The app will link it instead of creating a duplicate.
+              </p>
+            ) : (
+              <div className="space-y-1">
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  Multiple matching imported transactions found. Choose the correct one to link.
+                </p>
+                <select
+                  value={counterpartTransactionId}
+                  onChange={(e) => setCounterpartTransactionId(e.target.value)}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                >
+                  <option value="">Select matching transaction</option>
+                  {counterpartCandidates.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {formatCounterpartCandidate(candidate)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+        )}
+
+        {convertMutation.isError && (
+          <p className="text-sm text-destructive">
+            {(convertMutation.error as any)?.response?.data?.message ?? 'Conversion failed'}
+          </p>
+        )}
+
+        <div className="flex justify-end gap-3">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => convertMutation.mutate()}
+            disabled={!counterpartyAccountId || isLoadingCounterpartCandidates || (requiresCounterpartChoice && !counterpartTransactionId) || convertMutation.isPending}
+          >
+            {convertMutation.isPending ? 'Saving…' : isIncomingPayment ? 'Mark as Card Payment' : 'Mark as Transfer'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConvertToSIPModal({ tx, onClose }: { tx: Transaction; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const targetUserId = user?.role === 'ADMIN' ? tx.userId : undefined;
+  const { data: sips = [], isLoading } = useSIPs(targetUserId);
+  const [sipId, setSipId] = useState(tx.sipId ?? '');
+  const [units, setUnits] = useState(tx.sipUnits != null ? String(tx.sipUnits) : '');
+  const [nav, setNav] = useState(tx.sipNav != null ? String(tx.sipNav) : '');
+  const isEditing = !!(tx.sipId || tx.sipTransactionId);
+
+  const hasPartialUnits = (units.trim() !== '' && nav.trim() === '') || (units.trim() === '' && nav.trim() !== '');
+
+  const convertMutation = useMutation({
+    mutationFn: () => {
+      const payload = {
+        sipId,
+        units: units.trim() ? Number(units) : undefined,
+        nav: nav.trim() ? Number(nav) : undefined,
+      };
+      return isEditing
+        ? api.put(`/transactions/${tx.id}/sip-link`, payload)
+        : api.post(`/transactions/${tx.id}/convert-to-sip`, payload);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+      qc.invalidateQueries({ queryKey: ['budgets'] });
+      qc.invalidateQueries({ queryKey: ['budgets-actuals'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['profit-and-loss'] });
+      qc.invalidateQueries({ queryKey: ['portfolio'] });
+      qc.invalidateQueries({ queryKey: ['sips'] });
+      toast({ title: isEditing ? 'SIP link updated' : 'Transaction marked as SIP', variant: 'success' });
+      onClose();
+    },
+    onError: (err: any) => {
+      toast({
+        title: 'Could not mark as SIP',
+        description: err?.response?.data?.message ?? 'Something went wrong',
+        variant: 'error',
+      });
+    },
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: () => api.delete(`/transactions/${tx.id}/sip-link`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+      qc.invalidateQueries({ queryKey: ['budgets'] });
+      qc.invalidateQueries({ queryKey: ['budgets-actuals'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['profit-and-loss'] });
+      qc.invalidateQueries({ queryKey: ['portfolio'] });
+      qc.invalidateQueries({ queryKey: ['sips'] });
+      toast({ title: 'SIP link removed', variant: 'success' });
+      onClose();
+    },
+    onError: (err: any) => {
+      toast({
+        title: 'Could not remove SIP link',
+        description: err?.response?.data?.message ?? 'Something went wrong',
+        variant: 'error',
+      });
+    },
+  });
+
+  const canSubmit = !!sipId && !hasPartialUnits && !convertMutation.isPending && !removeMutation.isPending;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-background rounded-lg border shadow-xl w-full max-w-md p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">{isEditing ? 'Change SIP Link' : 'Mark as SIP'}</h2>
+          <Button variant="ghost" size="icon" onClick={onClose}><X className="h-4 w-4" /></Button>
+        </div>
+
+        <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-1">
+          <p className="font-medium truncate">{tx.description}</p>
+          <p className="text-muted-foreground">
+            {new Date(tx.date).toLocaleDateString('en-IN')} · <INRDisplay amount={tx.amount} />
+          </p>
+          <p className="text-muted-foreground">From: {tx.bankAccountName ?? 'Bank account'}</p>
+          {tx.sipName && <p className="text-muted-foreground">Current SIP: {tx.sipName}</p>}
+        </div>
+
+        <div className="space-y-1">
+          <Label required>SIP</Label>
+          <select
+            value={sipId}
+            onChange={(e) => setSipId(e.target.value)}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+            disabled={isLoading || sips.length === 0}
+          >
+            <option value="">{isLoading ? 'Loading SIPs…' : 'Select SIP'}</option>
+            {sips.map((sip) => (
+              <option key={sip.id} value={sip.id}>
+                {sip.fundName} · {formatINR(sip.monthlyAmount)}
+              </option>
+            ))}
+          </select>
+          {!isLoading && sips.length === 0 && (
+            <p className="text-xs text-muted-foreground">Add the SIP under Investments before linking this debit.</p>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <Label>Units (optional)</Label>
+            <Input
+              value={units}
+              onChange={(e) => setUnits(e.target.value)}
+              type="number"
+              min="0"
+              step="0.0001"
+              placeholder="Optional"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label>NAV (optional)</Label>
+            <Input
+              value={nav}
+              onChange={(e) => setNav(e.target.value)}
+              type="number"
+              min="0"
+              step="0.0001"
+              placeholder="Optional"
+            />
+          </div>
+        </div>
+        {hasPartialUnits && (
+          <p className="text-sm text-destructive">Enter both units and NAV, or leave both blank.</p>
+        )}
+
+        {convertMutation.isError && (
+          <p className="text-sm text-destructive">
+            {(convertMutation.error as any)?.response?.data?.message ?? 'Conversion failed'}
+          </p>
+        )}
+
+        <div className="flex justify-end gap-3">
+          {isEditing && (
+            <Button
+              variant="destructive"
+              onClick={() => removeMutation.mutate()}
+              disabled={convertMutation.isPending || removeMutation.isPending}
+              className="mr-auto"
+            >
+              {removeMutation.isPending ? 'Removing…' : 'Remove SIP Link'}
+            </Button>
+          )}
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => convertMutation.mutate()}
+            disabled={!canSubmit}
+          >
+            {convertMutation.isPending ? 'Saving…' : isEditing ? 'Save Link' : 'Mark as SIP'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LinkPolicyModal({ tx, onClose }: { tx: Transaction; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const targetUserId = user?.role === 'ADMIN' ? tx.userId : undefined;
+  const { data: policies = [], isLoading } = useInsurancePolicies(targetUserId);
+  const [insurancePolicyId, setInsurancePolicyId] = useState(tx.insurancePolicyId ?? '');
+  const isEditing = !!tx.insurancePolicyId;
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['transactions'] });
+    qc.invalidateQueries({ queryKey: ['insurance'] });
+    qc.invalidateQueries({ queryKey: ['dashboard'] });
+    qc.invalidateQueries({ queryKey: ['profit-and-loss'] });
+  };
+
+  const linkMutation = useMutation({
+    mutationFn: () => api.put(`/transactions/${tx.id}/policy-link`, { insurancePolicyId }),
+    onSuccess: () => {
+      invalidate();
+      toast({ title: isEditing ? 'Policy link updated' : 'Transaction linked to policy', variant: 'success' });
+      onClose();
+    },
+    onError: (err: any) => {
+      toast({
+        title: 'Could not link policy',
+        description: err?.response?.data?.message ?? 'Something went wrong',
+        variant: 'error',
+      });
+    },
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: () => api.delete(`/transactions/${tx.id}/policy-link`),
+    onSuccess: () => {
+      invalidate();
+      toast({ title: 'Policy link removed', variant: 'success' });
+      onClose();
+    },
+    onError: (err: any) => {
+      toast({
+        title: 'Could not remove policy link',
+        description: err?.response?.data?.message ?? 'Something went wrong',
+        variant: 'error',
+      });
+    },
+  });
+
+  const formatPolicy = (policy: InsurancePolicy) =>
+    `${policy.providerName} · ${policy.policyName} · ${formatINR(Number(policy.premiumAmount))}`;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-background rounded-lg border shadow-xl w-full max-w-md p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">{isEditing ? 'Change Policy Link' : 'Link Policy'}</h2>
+          <Button variant="ghost" size="icon" onClick={onClose}><X className="h-4 w-4" /></Button>
+        </div>
+
+        <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-1">
+          <p className="font-medium truncate">{tx.description}</p>
+          <p className="text-muted-foreground">
+            {new Date(tx.date).toLocaleDateString('en-IN')} · <INRDisplay amount={tx.amount} />
+          </p>
+          <p className="text-muted-foreground">From: {tx.bankAccountName ?? 'Bank account'}</p>
+          {tx.insurancePolicyName && (
+            <p className="text-muted-foreground">Current policy: {tx.insuranceProviderName} · {tx.insurancePolicyName}</p>
+          )}
+        </div>
+
+        <div className="space-y-1">
+          <Label required>Insurance Policy</Label>
+          <select
+            value={insurancePolicyId}
+            onChange={(e) => setInsurancePolicyId(e.target.value)}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+            disabled={isLoading || policies.length === 0}
+          >
+            <option value="">{isLoading ? 'Loading policies…' : 'Select policy'}</option>
+            {policies.map((policy) => (
+              <option key={policy.id} value={policy.id}>
+                {formatPolicy(policy)}
+              </option>
+            ))}
+          </select>
+          {!isLoading && policies.length === 0 && (
+            <p className="text-xs text-muted-foreground">Add the policy under Insurance before linking this debit.</p>
+          )}
+        </div>
+
+        {linkMutation.isError && (
+          <p className="text-sm text-destructive">
+            {(linkMutation.error as any)?.response?.data?.message ?? 'Link failed'}
+          </p>
+        )}
+
+        <div className="flex justify-end gap-3">
+          {isEditing && (
+            <Button
+              variant="destructive"
+              onClick={() => removeMutation.mutate()}
+              disabled={linkMutation.isPending || removeMutation.isPending}
+              className="mr-auto"
+            >
+              {removeMutation.isPending ? 'Removing…' : 'Remove Link'}
+            </Button>
+          )}
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => linkMutation.mutate()}
+            disabled={!insurancePolicyId || linkMutation.isPending || removeMutation.isPending}
+          >
+            {linkMutation.isPending ? 'Saving…' : 'Save Link'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LinkRefundModal({ tx, onClose }: { tx: Transaction; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const targetUserId = user?.role === 'ADMIN' ? tx.userId : undefined;
+  const isRefundTransaction = tx.type === 'INCOME';
+  const isOriginalExpense = tx.type === 'EXPENSE';
+  const { data: expenses = [], isLoading: isExpensesLoading } = useRefundCandidates(targetUserId, isRefundTransaction);
+  const { data: incomingRefunds = [], isLoading: isIncomingRefundsLoading } = useIncomingRefundCandidates(targetUserId, isOriginalExpense);
+  const [refundForTransactionId, setRefundForTransactionId] = useState(tx.refundForTransactionId ?? '');
+  const [refundTransactionId, setRefundTransactionId] = useState('');
+  const isEditing = !!tx.refundForTransactionId;
+
+  const selectedExpense = expenses.find((expense) => expense.id === refundForTransactionId);
+  const selectedRefundedAmount = selectedExpense
+    ? Math.max((selectedExpense.refundedAmount ?? 0) - (isEditing ? tx.amount : 0), 0)
+    : 0;
+  const selectedNetAfterRefund = selectedExpense
+    ? selectedExpense.amount - selectedRefundedAmount - tx.amount
+    : null;
+  const selectedRefund = incomingRefunds.find((refund) => refund.id === refundTransactionId);
+  const currentExpenseRefundedAmount = tx.refundedAmount ?? 0;
+  const expenseNetAfterRefund = selectedRefund
+    ? tx.amount - currentExpenseRefundedAmount - selectedRefund.amount
+    : null;
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['transactions'] });
+    qc.invalidateQueries({ queryKey: ['refund-candidates'] });
+    qc.invalidateQueries({ queryKey: ['incoming-refund-candidates'] });
+    qc.invalidateQueries({ queryKey: ['budgets'] });
+    qc.invalidateQueries({ queryKey: ['budgets-actuals'] });
+    qc.invalidateQueries({ queryKey: ['dashboard'] });
+    qc.invalidateQueries({ queryKey: ['profit-and-loss'] });
+  };
+
+  const linkMutation = useMutation({
+    mutationFn: () => {
+      if (isOriginalExpense) {
+        return api.put(`/transactions/${refundTransactionId}/refund-link`, { refundForTransactionId: tx.id });
+      }
+      return api.put(`/transactions/${tx.id}/refund-link`, { refundForTransactionId });
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({
+        title: isOriginalExpense
+          ? 'Refund linked to expense'
+          : isEditing ? 'Refund link updated' : 'Transaction marked as refund',
+        variant: 'success',
+      });
+      onClose();
+    },
+    onError: (err: any) => {
+      toast({
+        title: 'Could not link refund',
+        description: err?.response?.data?.message ?? 'Something went wrong',
+        variant: 'error',
+      });
+    },
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: () => api.delete(`/transactions/${tx.id}/refund-link`),
+    onSuccess: () => {
+      invalidate();
+      toast({ title: 'Refund link removed', variant: 'success' });
+      onClose();
+    },
+    onError: (err: any) => {
+      toast({
+        title: 'Could not remove refund link',
+        description: err?.response?.data?.message ?? 'Something went wrong',
+        variant: 'error',
+      });
+    },
+  });
+
+  const formatExpense = (expense: Transaction) =>
+    `${new Date(expense.date).toLocaleDateString('en-IN')} · ${expense.description} · ${formatINR(expense.amount)}${expense.categoryName ? ` · ${expense.categoryName}` : ''}`;
+  const formatIncomingRefund = (refund: Transaction) =>
+    `${new Date(refund.date).toLocaleDateString('en-IN')} · ${refund.description} · ${formatINR(refund.amount)}`;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-background rounded-lg border shadow-xl w-full max-w-md p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">
+            {isOriginalExpense ? 'Link Refund Credit' : isEditing ? 'Change Refund Link' : 'Mark as Refund'}
+          </h2>
+          <Button variant="ghost" size="icon" onClick={onClose}><X className="h-4 w-4" /></Button>
+        </div>
+
+        <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-1">
+          <p className="font-medium truncate">{tx.description}</p>
+          <p className="text-muted-foreground">
+            {new Date(tx.date).toLocaleDateString('en-IN')} · <INRDisplay amount={tx.amount} />
+          </p>
+          {tx.bankAccountName && <p className="text-muted-foreground">To: {tx.bankAccountName}</p>}
+          {tx.refundForDescription && (
+            <p className="text-muted-foreground">Current original expense: {tx.refundForDescription}</p>
+          )}
+          {isOriginalExpense && currentExpenseRefundedAmount > 0 && (
+            <p className="text-muted-foreground">Already refunded: <INRDisplay amount={currentExpenseRefundedAmount} /></p>
+          )}
+        </div>
+
+        {isOriginalExpense ? (
+          <div className="space-y-1">
+            <Label required>Refund Credit</Label>
+            <select
+              value={refundTransactionId}
+              onChange={(e) => setRefundTransactionId(e.target.value)}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              disabled={isIncomingRefundsLoading || incomingRefunds.length === 0}
+            >
+              <option value="">{isIncomingRefundsLoading ? 'Loading credits…' : 'Select incoming refund'}</option>
+              {incomingRefunds.map((refund) => (
+                <option key={refund.id} value={refund.id}>
+                  {formatIncomingRefund(refund)}
+                </option>
+              ))}
+            </select>
+            {!isIncomingRefundsLoading && incomingRefunds.length === 0 && (
+              <p className="text-xs text-muted-foreground">Add or import the incoming refund before linking it.</p>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-1">
+            <Label required>Original Expense</Label>
+            <select
+              value={refundForTransactionId}
+              onChange={(e) => setRefundForTransactionId(e.target.value)}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              disabled={isExpensesLoading || expenses.length === 0}
+            >
+              <option value="">{isExpensesLoading ? 'Loading expenses…' : 'Select original expense'}</option>
+              {expenses.map((expense) => (
+                <option key={expense.id} value={expense.id}>
+                  {formatExpense(expense)}
+                </option>
+              ))}
+            </select>
+            {!isExpensesLoading && expenses.length === 0 && (
+              <p className="text-xs text-muted-foreground">Add the original expense before linking this refund.</p>
+            )}
+          </div>
+        )}
+
+        {selectedRefund && (
+          <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
+            <p>Original expense: <INRDisplay amount={tx.amount} /></p>
+            {currentExpenseRefundedAmount > 0 && <p>Already refunded: <INRDisplay amount={currentExpenseRefundedAmount} /></p>}
+            <p>This refund: <INRDisplay amount={selectedRefund.amount} /></p>
+            <p>Net after this refund: <INRDisplay amount={Math.max(expenseNetAfterRefund ?? 0, 0)} /></p>
+          </div>
+        )}
+
+        {selectedExpense && (
+          <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
+            <p>Original expense: <INRDisplay amount={selectedExpense.amount} /></p>
+            {selectedRefundedAmount > 0 && <p>Already refunded: <INRDisplay amount={selectedRefundedAmount} /></p>}
+            <p>Net after this refund: <INRDisplay amount={Math.max(selectedNetAfterRefund ?? 0, 0)} /></p>
+          </div>
+        )}
+
+        {isOriginalExpense && tx.refunds && tx.refunds.length > 0 && (
+          <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
+            <p className="font-medium text-foreground">Linked refunds</p>
+            {tx.refunds.map((refund) => (
+              <p key={refund.id}>
+                {new Date(refund.date).toLocaleDateString('en-IN')} · {refund.description} · <INRDisplay amount={Number(refund.amount)} />
+              </p>
+            ))}
+          </div>
+        )}
+
+        {isOriginalExpense && (
+          <p className="text-xs text-muted-foreground">
+            To remove or change an existing refund, open the linked income transaction and use Change Refund Link.
+          </p>
+        )}
+
+        {linkMutation.isError && (
+          <p className="text-sm text-destructive">
+            {(linkMutation.error as any)?.response?.data?.message ?? 'Link failed'}
+          </p>
+        )}
+
+        <div className="flex justify-end gap-3">
+          {isEditing && isRefundTransaction && (
+            <Button
+              variant="destructive"
+              onClick={() => removeMutation.mutate()}
+              disabled={linkMutation.isPending || removeMutation.isPending}
+              className="mr-auto"
+            >
+              {removeMutation.isPending ? 'Removing…' : 'Remove Link'}
+            </Button>
+          )}
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => linkMutation.mutate()}
+            disabled={!(isOriginalExpense ? refundTransactionId : refundForTransactionId) || linkMutation.isPending || removeMutation.isPending}
+          >
+            {linkMutation.isPending ? 'Saving…' : 'Save Link'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface DocumentAttachment {
+  id: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  createdAt: string;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function TransactionDocumentsModal({ tx, onClose }: { tx: Transaction; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+
+  const { data: documents = [], isLoading } = useQuery({
+    queryKey: ['documents', 'Transaction', tx.id],
+    queryFn: () => api.get<{ data: DocumentAttachment[] }>('/documents', {
+      params: { entityType: 'Transaction', entityId: tx.id },
+    }).then((r) => r.data.data),
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async () => {
+      if (!file) throw new Error('No file selected');
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('entityType', 'Transaction');
+      formData.append('entityId', tx.id);
+      return api.post('/documents', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+    },
+    onSuccess: () => {
+      setFile(null);
+      if (fileRef.current) fileRef.current.value = '';
+      qc.invalidateQueries({ queryKey: ['documents', 'Transaction', tx.id] });
+      toast({ title: 'Document uploaded', variant: 'success' });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/documents/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['documents', 'Transaction', tx.id] });
+      toast({ title: 'Document deleted', variant: 'success' });
+    },
+  });
+
+  async function downloadDocument(doc: DocumentAttachment) {
+    const res = await api.get(`/documents/${doc.id}/download`, { responseType: 'blob' });
+    const url = URL.createObjectURL(res.data as Blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = doc.fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-background rounded-lg border shadow-xl w-full max-w-lg p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-semibold">Documents</h2>
+            <p className="text-sm text-muted-foreground truncate max-w-sm">{tx.description}</p>
+          </div>
+          <Button variant="ghost" size="icon" onClick={onClose}><X className="h-4 w-4" /></Button>
+        </div>
+
+        <div className="space-y-2">
+          <Label required>Upload receipt or proof</Label>
+          <div className="flex gap-2">
+            <Input
+              ref={fileRef}
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg,.webp,.csv,.txt,.doc,.docx"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
+            <Button onClick={() => uploadMutation.mutate()} disabled={!file || uploadMutation.isPending}>
+              {uploadMutation.isPending ? 'Uploading…' : 'Upload'}
+            </Button>
+          </div>
+          {uploadMutation.isError && (
+            <p className="text-sm text-destructive">{(uploadMutation.error as any)?.response?.data?.message ?? 'Upload failed'}</p>
+          )}
+        </div>
+
+        <div className="border rounded-lg divide-y">
+          {isLoading ? (
+            <p className="p-3 text-sm text-muted-foreground">Loading documents…</p>
+          ) : documents.length === 0 ? (
+            <p className="p-3 text-sm text-muted-foreground">No documents attached</p>
+          ) : documents.map((doc) => (
+            <div key={doc.id} className="flex items-center justify-between gap-3 p-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">{doc.fileName}</p>
+                <p className="text-xs text-muted-foreground">
+                  {formatFileSize(doc.fileSize)} · {new Date(doc.createdAt).toLocaleDateString('en-IN')}
+                </p>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <Button variant="ghost" size="icon" title="Download document" onClick={() => downloadDocument(doc)}>
+                  <Download className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Delete document"
+                  className="text-destructive hover:text-destructive"
+                  onClick={() => deleteMutation.mutate(doc.id)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddTransactionModal({
+  onClose,
+  budgetActuals,
+  targetUserId,
+  showAccountOwner = false,
+  fallbackAccountOwnerName,
+}: {
+  onClose: () => void;
+  budgetActuals: BudgetActualItem[];
+  targetUserId?: string;
+  showAccountOwner?: boolean;
+  fallbackAccountOwnerName?: string;
+}) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { data: categories = [] } = useCategories();
-  const { data: accounts = [] } = useAccounts();
-  const { data: loans = [] } = useLoans();
+  const { data: accounts = [] } = useAccounts(targetUserId);
+  const { data: loans = [] } = useLoans(targetUserId);
 
   const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<TxForm>({
     resolver: zodResolver(txSchema),
@@ -789,12 +2109,19 @@ function AddTransactionModal({ onClose, budgetActuals }: { onClose: () => void; 
     if (selectedType === 'EXPENSE') return c.type === 'EXPENSE';
     return false; // TRANSFER — no categories
   });
+  const formatModalAccountOption = (account: any) => formatAccountOption(account, {
+    showOwner: showAccountOwner,
+    fallbackOwnerName: fallbackAccountOwnerName,
+  });
 
   const createMutation = useMutation({
     mutationFn: (data: TxForm) => api.post('/transactions', {
       ...data,
+      remark: data.remark?.trim() || undefined,
       tags: data.tags ? data.tags.split(',').map((t) => t.trim()) : [],
       loanId: data.loanId || undefined,
+    }, {
+      params: targetUserId ? { targetUserId } : {},
     }),
     onSuccess: (_, submittedData) => {
       qc.invalidateQueries({ queryKey: ['transactions'] });
@@ -810,13 +2137,13 @@ function AddTransactionModal({ onClose, budgetActuals }: { onClose: () => void; 
           if (projectedPct >= 100) {
             toast({
               title: `Budget exceeded: ${budget.category.name}`,
-              description: `₹${projectedActual.toLocaleString('en-IN')} spent of ₹${Number(budget.amount).toLocaleString('en-IN')} budget`,
+              description: `${formatINR(projectedActual)} spent of ${formatINR(Number(budget.amount))} budget`,
               variant: 'error',
             });
           } else if (projectedPct >= 80) {
             toast({
               title: `Budget warning: ${budget.category.name}`,
-              description: `${projectedPct.toFixed(0)}% used — ₹${(Number(budget.amount) - projectedActual).toLocaleString('en-IN')} remaining`,
+              description: `${projectedPct.toFixed(0)}% used — ${formatINR(Number(budget.amount) - projectedActual)} remaining`,
               variant: 'warning',
             });
           }
@@ -837,17 +2164,21 @@ function AddTransactionModal({ onClose, budgetActuals }: { onClose: () => void; 
         <form onSubmit={handleSubmit((data) => createMutation.mutate(data))} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2 space-y-1">
-              <Label>Description</Label>
+              <Label required>Description</Label>
               <Input {...register('description')} placeholder="e.g. Swiggy order" />
               {errors.description && <p className="text-xs text-destructive">{errors.description.message}</p>}
             </div>
-            <div className="space-y-1">
-              <Label>Amount (₹)</Label>
-              <Input {...register('amount')} type="number" step="0.01" />
-              {amount && <p className="text-xs text-muted-foreground">{Number(amount).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}</p>}
+            <div className="col-span-2 space-y-1">
+              <Label>Remark (optional)</Label>
+              <Input {...register('remark')} placeholder="Bank transaction remark or note" />
             </div>
             <div className="space-y-1">
-              <Label>Type</Label>
+              <Label required>Amount (₹)</Label>
+              <Input {...register('amount')} type="number" step="0.01" />
+              {amount && <p className="text-xs text-muted-foreground">{formatINR(Number(amount))}</p>}
+            </div>
+            <div className="space-y-1">
+              <Label required>Type</Label>
               <select {...register('type')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                 <option value="EXPENSE">Expense</option>
                 <option value="INCOME">Income</option>
@@ -855,11 +2186,11 @@ function AddTransactionModal({ onClose, budgetActuals }: { onClose: () => void; 
               </select>
             </div>
             <div className="space-y-1">
-              <Label>Date</Label>
+              <Label required>Date</Label>
               <Input {...register('date')} type="date" />
             </div>
             <div className="space-y-1">
-              <Label>Payment Mode</Label>
+              <Label>Payment Mode (optional)</Label>
               <select {...register('paymentMode')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                 <option value="">— Select —</option>
                 {['UPI', 'NEFT', 'RTGS', 'IMPS', 'CASH', 'CHEQUE', 'CARD', 'EMI', 'AUTO_DEBIT'].map((m) => (
@@ -868,25 +2199,27 @@ function AddTransactionModal({ onClose, budgetActuals }: { onClose: () => void; 
               </select>
             </div>
             <div className="space-y-1">
-              <Label>Category</Label>
+              <Label>Category (optional)</Label>
               <select {...register('categoryId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                 <option value="">— Uncategorized —</option>
-                {transactionCategories.map((c: any) => <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ` : ''}{c.name}</option>)}
+                {sortCategoriesByNameAsc(transactionCategories).map((c: any) => (
+                  <option key={c.id} value={c.id}>{getCategoryLabel(c, categories)}</option>
+                ))}
               </select>
             </div>
             <div className="col-span-2 space-y-1">
-              <Label>{selectedType === 'TRANSFER' ? 'From Account' : 'Bank Account'}</Label>
+              <Label>{selectedType === 'TRANSFER' ? 'From Account (optional)' : 'Bank Account (optional)'}</Label>
               <select {...register('bankAccountId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                 <option value="">— None —</option>
-                {accounts.map((a: any) => <option key={a.id} value={a.id}>{a.bankName} ····{a.accountNumberLast4 ?? ''}</option>)}
+                {accounts.map((a: any) => <option key={a.id} value={a.id}>{formatModalAccountOption(a)}</option>)}
               </select>
             </div>
             {selectedType === 'TRANSFER' && (
               <div className="col-span-2 space-y-1">
-                <Label>To Account</Label>
+                <Label required>To Account</Label>
                 <select {...register('transferToAccountId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                   <option value="">— Select destination —</option>
-                  {accounts.map((a: any) => <option key={a.id} value={a.id}>{a.bankName} ····{a.accountNumberLast4 ?? ''}</option>)}
+                  {accounts.map((a: any) => <option key={a.id} value={a.id}>{formatModalAccountOption(a)}</option>)}
                 </select>
               </div>
             )}
@@ -897,14 +2230,14 @@ function AddTransactionModal({ onClose, budgetActuals }: { onClose: () => void; 
                   <option value="">— None —</option>
                   {loans.map((l: any) => (
                     <option key={l.id} value={l.id}>
-                      {l.lenderName} ({l.loanType}) — ₹{Number(l.outstandingBalance).toLocaleString('en-IN')} outstanding
+                      {l.lenderName} ({l.loanType}) — {formatINR(Number(l.outstandingBalance))} outstanding
                     </option>
                   ))}
                 </select>
               </div>
             )}
             <div className="col-span-2 space-y-1">
-              <Label>Tags (comma-separated)</Label>
+              <Label>Tags (comma-separated, optional)</Label>
               <Input {...register('tags')} placeholder="food, work, travel" />
             </div>
           </div>
@@ -918,10 +2251,12 @@ function AddTransactionModal({ onClose, budgetActuals }: { onClose: () => void; 
   );
 }
 
-async function downloadTransactionsCsv(fy: string) {
-  const res = await fetch(`/api/transactions/export?fy=${encodeURIComponent(fy)}`, { credentials: 'include' });
-  if (!res.ok) throw new Error('Export failed');
-  const blob = await res.blob();
+async function downloadTransactionsCsv(fy: string, targetUserId?: string) {
+  const res = await api.get('/transactions/export', {
+    params: { fy, ...(targetUserId ? { targetUserId } : {}) },
+    responseType: 'blob',
+  });
+  const blob = res.data as Blob;
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -938,12 +2273,18 @@ export default function TransactionsPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
-  const isViewingOtherMember = isAdmin && viewUserId !== undefined;
+  const isViewingFamilyWide = isAdmin && !viewUserId;
+  const canCreateForView = !isViewingFamilyWide;
   const [showImport, setShowImport] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [deletingTx, setDeletingTx] = useState<Transaction | null>(null);
+  const [convertingTx, setConvertingTx] = useState<Transaction | null>(null);
+  const [convertingSIPTx, setConvertingSIPTx] = useState<Transaction | null>(null);
+  const [linkingPolicyTx, setLinkingPolicyTx] = useState<Transaction | null>(null);
+  const [linkingRefundTx, setLinkingRefundTx] = useState<Transaction | null>(null);
+  const [documentsTx, setDocumentsTx] = useState<Transaction | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkConfirmDelete, setBulkConfirmDelete] = useState(false);
   const [bulkCategoryId, setBulkCategoryId] = useState('');
@@ -979,12 +2320,18 @@ export default function TransactionsPage() {
   useEffect(() => {
     setSelectedIds(new Set());
     setBulkConfirmDelete(false);
-  }, [filters, selectedFY]);
+  }, [filters, selectedFY, viewUserId]);
 
   // Auto-open add modal or filters from URL params
   useEffect(() => {
-    if (searchParams.get('add') === '1') {
-      setShowAdd(true);
+    const shouldOpenAdd = searchParams.get('add') === '1';
+    if (shouldOpenAdd) {
+      if (canCreateForView) {
+        setShowAdd(true);
+      } else if (isAdmin && !viewUserId && user?.id) {
+        setViewUserId(user.id);
+        setShowAdd(true);
+      }
     }
     if (searchParams.get('startDate') || searchParams.get('endDate')) {
       setShowFilters(true);
@@ -997,7 +2344,7 @@ export default function TransactionsPage() {
         return next;
       }, { replace: true });
     }
-  }, [searchParams, setSearchParams]);
+  }, [canCreateForView, isAdmin, searchParams, setSearchParams, setViewUserId, user?.id, viewUserId]);
 
   // Close category dropdown on outside click
   useEffect(() => {
@@ -1020,6 +2367,29 @@ export default function TransactionsPage() {
 
   const canEdit = (tx: Transaction) =>
     user?.role === 'ADMIN' || user?.id === tx.userId;
+  const canConvertToTransfer = (tx: Transaction) =>
+    canEdit(tx)
+    && !tx.transferPairId
+    && !tx.sipId
+    && !tx.sipTransactionId
+    && !tx.insurancePolicyId
+    && !tx.refundForTransactionId
+    && (tx.refundedAmount ?? 0) === 0
+    && (tx.type === 'EXPENSE' || tx.type === 'INCOME')
+    && !!tx.bankAccountId;
+  const canConvertToSIP = (tx: Transaction) =>
+    canEdit(tx) && !tx.transferPairId && !tx.sipId && !tx.sipTransactionId && !tx.insurancePolicyId && (tx.refundedAmount ?? 0) === 0 && tx.type === 'EXPENSE';
+  const canManageSIPLink = (tx: Transaction) =>
+    canEdit(tx) && !tx.transferPairId && !!(tx.sipId || tx.sipTransactionId) && tx.type === 'EXPENSE';
+  const canManagePolicyLink = (tx: Transaction) =>
+    canEdit(tx) && !tx.transferPairId && !tx.sipId && !tx.sipTransactionId && (tx.refundedAmount ?? 0) === 0 && tx.type === 'EXPENSE';
+  const canManageRefundLink = (tx: Transaction) =>
+    canEdit(tx)
+    && !tx.transferPairId
+    && !tx.sipId
+    && !tx.sipTransactionId
+    && !tx.insurancePolicyId
+    && (tx.type === 'INCOME' || tx.type === 'EXPENSE');
 
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -1073,14 +2443,14 @@ export default function TransactionsPage() {
   async function handleExport() {
     setExporting(true);
     try {
-      await downloadTransactionsCsv(selectedFY);
+      await downloadTransactionsCsv(selectedFY, viewUserId);
     } finally {
       setExporting(false);
     }
   }
 
   const { data: categories = [] } = useCategories();
-  const { data: budgetActuals = [] } = useBudgetsVsActuals(selectedFY);
+  const { data: budgetActuals = [] } = useBudgetsVsActuals(selectedFY, viewUserId);
 
   const {
     data,
@@ -1099,9 +2469,13 @@ export default function TransactionsPage() {
 
   const transactions = data?.pages.flatMap((p) => p.data) ?? [];
   const total = data?.pages[0]?.pagination.total ?? 0;
+  const showMemberIndicator = isAdmin && !viewUserId;
+  const selectedMemberName = viewUserId
+    ? members.find((m) => m.id === viewUserId)?.name ?? (viewUserId === user?.id ? user.name : undefined)
+    : undefined;
 
   const allSelectableIds = transactions
-    .filter((tx) => !tx.transferPairId && canEdit(tx))
+    .filter((tx) => !tx.transferPairId && !tx.sipId && !tx.sipTransactionId && canEdit(tx))
     .map((tx) => tx.id);
   const allSelected = allSelectableIds.length > 0 && allSelectableIds.every((id) => selectedIds.has(id));
 
@@ -1110,9 +2484,9 @@ export default function TransactionsPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
+    <div className="min-w-0 space-y-4">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold">Transactions</h1>
           {activeTab === 'transactions' && (
             <>
@@ -1145,7 +2519,7 @@ export default function TransactionsPage() {
             </>
           )}
         </div>
-        {activeTab === 'transactions' && <div className="flex flex-wrap gap-2">
+        {activeTab === 'transactions' && <div className="flex flex-wrap justify-end gap-2">
           <Button variant="outline" onClick={() => setShowFilters((v) => !v)} className="relative">
             <SlidersHorizontal className="h-4 w-4 sm:mr-2" />
             <span className="hidden sm:inline">Filters</span>
@@ -1159,7 +2533,7 @@ export default function TransactionsPage() {
             <Download className="h-4 w-4 sm:mr-2" />
             <span className="hidden sm:inline">{exporting ? 'Exporting…' : 'Export CSV'}</span>
           </Button>
-          {!isViewingOtherMember && (
+          {canCreateForView && (
             <Button variant="outline" onClick={() => setShowImport(true)}>
               <Upload className="h-4 w-4 sm:mr-2" />
               <span className="hidden sm:inline">Import CSV</span>
@@ -1194,7 +2568,7 @@ export default function TransactionsPage() {
         <div className="rounded-xl border border-border bg-card p-4 space-y-4">
           {/* Row 1: Search */}
           <Input
-            placeholder="Search description…"
+            placeholder="Search description or remark…"
             value={filters.search}
             onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
           />
@@ -1267,7 +2641,7 @@ export default function TransactionsPage() {
                     {categories.length === 0 ? (
                       <p className="px-3 py-2 text-sm text-muted-foreground">No categories</p>
                     ) : (
-                      categories.map((c: any) => (
+                      sortCategoriesByNameAsc(categories).map((c: any) => (
                         <label
                           key={c.id}
                           className="flex items-center gap-2.5 px-3 py-2 hover:bg-muted cursor-pointer text-sm"
@@ -1279,7 +2653,7 @@ export default function TransactionsPage() {
                             className="rounded"
                           />
                           {c.icon && <span>{c.icon}</span>}
-                          <span>{c.name}</span>
+                          <span>{getCategoryPath(c, categories)}</span>
                         </label>
                       ))
                     )}
@@ -1336,7 +2710,9 @@ export default function TransactionsPage() {
               className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
             >
               <option value="">Assign category…</option>
-              {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {sortCategoriesByNameAsc(categories).map((c: any) => (
+                <option key={c.id} value={c.id}>{getCategoryLabel(c, categories)}</option>
+              ))}
             </select>
             <Button size="sm" variant="outline" onClick={handleBulkCategorize} disabled={!bulkCategoryId || isBulkCategorizing}>
               {isBulkCategorizing ? 'Applying…' : 'Apply'}
@@ -1366,15 +2742,27 @@ export default function TransactionsPage() {
           icon={Receipt}
           title="No transactions yet"
           description="Add your first transaction or import a bank statement to start tracking."
-          actionLabel="Import Bank Statement"
-          onAction={() => setShowImport(true)}
+          actionLabel={canCreateForView ? 'Import Bank Statement' : undefined}
+          onAction={canCreateForView ? () => setShowImport(true) : undefined}
         />
       ) : (<>
-        <div className="hidden sm:block rounded-xl border border-border bg-card overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="hidden xl:block rounded-xl border border-border bg-card overflow-hidden">
+          <table className="w-full table-fixed text-xs">
+            <colgroup>
+              <col className="w-8" />
+              <col className="w-[8%]" />
+              {showMemberIndicator && <col className="w-[10%]" />}
+              <col className="w-[16%]" />
+              <col className="w-[15%]" />
+              <col className="w-[9%]" />
+              <col className={showMemberIndicator ? 'w-[18%]' : 'w-[20%]'} />
+              <col className="w-[8%]" />
+              <col className="w-[10%]" />
+              <col className="w-[10%]" />
+            </colgroup>
             <thead>
               <tr className="border-b border-border bg-muted/50">
-                <th className="px-3 py-3 w-8">
+                <th className="px-2 py-3">
                   <input
                     type="checkbox"
                     checked={allSelected}
@@ -1383,19 +2771,24 @@ export default function TransactionsPage() {
                     title="Select all"
                   />
                 </th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Date</th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Description</th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Category</th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Mode</th>
-                <th className="px-4 py-3 text-right font-medium text-muted-foreground">Amount</th>
-                <th className="px-4 py-3 w-20"></th>
+                <th className="px-2 py-3 text-left font-medium text-muted-foreground">Date</th>
+                {showMemberIndicator && (
+                  <th className="px-2 py-3 text-left font-medium text-muted-foreground">Member</th>
+                )}
+                <th className="px-2 py-3 text-left font-medium text-muted-foreground">Description</th>
+                <th className="px-2 py-3 text-left font-medium text-muted-foreground">Remark</th>
+                <th className="px-2 py-3 text-left font-medium text-muted-foreground">Account</th>
+                <th className="px-2 py-3 text-left font-medium text-muted-foreground">Category</th>
+                <th className="px-2 py-3 text-left font-medium text-muted-foreground">Mode</th>
+                <th className="px-2 py-3 text-right font-medium text-muted-foreground">Amount</th>
+                <th className="px-2 py-3"></th>
               </tr>
             </thead>
             <tbody>
               {transactions.map((tx) => (
                 <tr key={tx.id} className={cn('border-b border-border last:border-0 hover:bg-muted/30 transition-colors', selectedIds.has(tx.id) && 'bg-primary/5')}>
-                  <td className="px-3 py-3">
-                    {!tx.transferPairId && canEdit(tx) && (
+                  <td className="px-2 py-3 align-top">
+                    {!tx.transferPairId && !tx.sipId && !tx.sipTransactionId && canEdit(tx) && (
                       <input
                         type="checkbox"
                         checked={selectedIds.has(tx.id)}
@@ -1404,53 +2797,95 @@ export default function TransactionsPage() {
                       />
                     )}
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                  <td className="px-2 py-3 align-top text-muted-foreground whitespace-nowrap">
                     {new Date(tx.date).toLocaleDateString('en-IN')}
                   </td>
-                  <td className="px-4 py-3 font-medium max-w-[200px] truncate">{tx.description}</td>
-                  <td className="px-4 py-3 text-muted-foreground">
-                    {tx.categoryIcon && <span className="mr-1">{tx.categoryIcon}</span>}
-                    {tx.categoryName ?? '—'}
+                  {showMemberIndicator && (
+                    <td className="px-2 py-3 align-top">
+                      <MemberBadge name={tx.memberName} color={tx.memberColor} />
+                    </td>
+                  )}
+                  <td className="px-2 py-3 align-top font-medium truncate" title={tx.description}>{tx.description}</td>
+                  <td className="px-2 py-3 align-top text-muted-foreground truncate" title={tx.remark || undefined}>{tx.remark || '—'}</td>
+                  <td className="px-2 py-3 align-top">
+                    <BankAccountBadge accountName={tx.bankAccountName} />
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-2 py-3 align-top text-muted-foreground">
+                    {tx.transferPairId ? (
+                      <TransferCategoryInfo tx={tx} />
+                    ) : tx.refundForTransactionId ? (
+                      <div className="space-y-1">
+                        <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                          <Undo2 className="h-3 w-3" />
+                          Refund
+                        </span>
+                        <div className="text-xs text-muted-foreground truncate">
+                          For: {tx.refundForDescription ?? 'Original expense'}
+                        </div>
+                      </div>
+                    ) : (tx.sipId || tx.sipTransactionId) ? (
+                      <SIPCategoryInfo tx={tx} />
+                    ) : tx.insurancePolicyId ? (
+                      <div className="space-y-1">
+                        <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300">
+                          <Shield className="h-3 w-3" />
+                          Policy{tx.insurancePolicyName ? ` · ${tx.insurancePolicyName}` : ''}
+                        </span>
+                        {tx.categoryName && (
+                          <div className="text-xs text-muted-foreground">
+                            {tx.categoryIcon && <span className="mr-1">{tx.categoryIcon}</span>}
+                            {tx.categoryName}
+                          </div>
+                        )}
+                      </div>
+                    ) : tx.transferPairId ? (
+                      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                        Transfer
+                      </span>
+                    ) : (
+                      <div className="space-y-1">
+                        {tx.categoryIcon && <span className="mr-1">{tx.categoryIcon}</span>}
+                        {tx.categoryName ?? '—'}
+                        {(tx.refundedAmount ?? 0) > 0 && (
+                          <div className="text-xs text-amber-600">
+                            Refunded <INRDisplay amount={tx.refundedAmount} />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-2 py-3 align-top">
                     {tx.paymentMode && (
-                      <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium', PAYMENT_MODE_COLORS[tx.paymentMode] ?? 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300')}>
+                      <span className={cn('inline-flex max-w-full items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium', PAYMENT_MODE_COLORS[tx.paymentMode] ?? 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300')}>
                         {PAYMENT_MODE_ICONS[tx.paymentMode]}
-                        {tx.paymentMode}
+                        <span className="truncate">{tx.paymentMode}</span>
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-2 py-3 align-top text-right text-[11px]">
                     <INRDisplay
                       amount={tx.type === 'EXPENSE' ? -tx.amount : tx.amount}
                       colorCode
+                      className="whitespace-nowrap"
                     />
                   </td>
-                  <td className="px-4 py-3">
-                    {canEdit(tx) && (
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setEditingTx(tx)}
-                          disabled={!!tx.transferPairId}
-                          title={tx.transferPairId ? 'Cannot edit transfers' : 'Edit transaction'}
-                          className="h-7 w-7"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setDeletingTx(tx)}
-                          disabled={!!tx.transferPairId}
-                          title={tx.transferPairId ? 'Cannot delete transfers' : 'Delete transaction'}
-                          className="h-7 w-7 text-destructive hover:text-destructive"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    )}
+                  <td className="px-2 py-3 align-top text-right">
+                    <TransactionActionMenu
+                      tx={tx}
+                      canControl={canEdit(tx)}
+                      canConvertToTransfer={canConvertToTransfer(tx)}
+                      canConvertToSIP={canConvertToSIP(tx)}
+                      canManageSIPLink={canManageSIPLink(tx)}
+                      canManagePolicyLink={canManagePolicyLink(tx)}
+                      canManageRefundLink={canManageRefundLink(tx)}
+                      onDocuments={() => setDocumentsTx(tx)}
+                      onTransfer={() => setConvertingTx(tx)}
+                      onSIP={() => setConvertingSIPTx(tx)}
+                      onPolicy={() => setLinkingPolicyTx(tx)}
+                      onRefund={() => setLinkingRefundTx(tx)}
+                      onEdit={() => setEditingTx(tx)}
+                      onDelete={() => setDeletingTx(tx)}
+                    />
                   </td>
                 </tr>
               ))}
@@ -1458,15 +2893,18 @@ export default function TransactionsPage() {
           </table>
         </div>
 
-        {/* Mobile card list — sm:hidden so it only shows below 640px */}
-        <div className="sm:hidden rounded-xl border border-border bg-card divide-y divide-border">
+        {/* Compact card list — shown until the table has enough room. */}
+        <div className="xl:hidden rounded-xl border border-border bg-card divide-y divide-border">
           {transactions.map((tx) => {
             const isTransfer = !!tx.transferPairId;
+            const isSIP = !!(tx.sipId || tx.sipTransactionId);
+            const isPolicy = !!tx.insurancePolicyId;
+            const isRefund = !!tx.refundForTransactionId;
             return (
               <div key={tx.id} className={cn('p-3 space-y-1.5', selectedIds.has(tx.id) && 'bg-primary/5')}>
                 {/* Row 1: description + date */}
                 <div className="flex items-start justify-between gap-2">
-                  {!isTransfer && canEdit(tx) && (
+                  {!isTransfer && !isSIP && canEdit(tx) && (
                     <input
                       type="checkbox"
                       checked={selectedIds.has(tx.id)}
@@ -1479,19 +2917,42 @@ export default function TransactionsPage() {
                     {new Date(tx.date).toLocaleDateString('en-IN')}
                   </span>
                 </div>
+                {tx.remark && (
+                  <p className="text-xs text-muted-foreground truncate pl-6">{tx.remark}</p>
+                )}
                 {/* Row 2: badges */}
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  {isTransfer && (
-                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
-                      Transfer
+                  {showMemberIndicator && (
+                    <MemberBadge name={tx.memberName} color={tx.memberColor} />
+                  )}
+                  {!isTransfer && (
+                    <BankAccountBadge accountName={tx.bankAccountName} compact />
+                  )}
+                  {isTransfer && <TransferCategoryInfo tx={tx} compact />}
+                  {isSIP && <SIPCategoryInfo tx={tx} compact />}
+                  {isPolicy && (
+                    <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300">
+                      <Shield className="h-3 w-3" />
+                      Policy{tx.insurancePolicyName ? ` · ${tx.insurancePolicyName}` : ''}
                     </span>
                   )}
-                  {tx.categoryName ? (
+                  {isRefund && (
+                    <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                      <Undo2 className="h-3 w-3" />
+                      Refund{tx.refundForDescription ? ` · ${tx.refundForDescription}` : ''}
+                    </span>
+                  )}
+                  {!isRefund && (tx.refundedAmount ?? 0) > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                      Refunded <INRDisplay amount={tx.refundedAmount} />
+                    </span>
+                  )}
+                  {tx.categoryName && !isSIP ? (
                     <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground">
                       {tx.categoryIcon}
                       {tx.categoryName}
                     </span>
-                  ) : !isTransfer && (
+                  ) : !isTransfer && !isSIP && (
                     <span className="text-xs text-muted-foreground">—</span>
                   )}
                   {tx.paymentMode && (
@@ -1502,31 +2963,26 @@ export default function TransactionsPage() {
                   )}
                 </div>
                 {/* Row 3: amount + actions */}
-                <div className="flex items-center justify-between">
-                  {canEdit(tx) && !isTransfer ? (
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setEditingTx(tx)}
-                        title="Edit transaction"
-                        className="h-7 w-7"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setDeletingTx(tx)}
-                        title="Delete transaction"
-                        className="h-7 w-7 text-destructive hover:text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  ) : (
-                    <div />
-                  )}
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <TransactionActionMenu
+                      tx={tx}
+                      compact
+                      canControl={canEdit(tx)}
+                      canConvertToTransfer={canConvertToTransfer(tx)}
+                      canConvertToSIP={canConvertToSIP(tx)}
+                      canManageSIPLink={canManageSIPLink(tx)}
+                      canManagePolicyLink={canManagePolicyLink(tx)}
+                      canManageRefundLink={canManageRefundLink(tx)}
+                      onDocuments={() => setDocumentsTx(tx)}
+                      onTransfer={() => setConvertingTx(tx)}
+                      onSIP={() => setConvertingSIPTx(tx)}
+                      onPolicy={() => setLinkingPolicyTx(tx)}
+                      onRefund={() => setLinkingRefundTx(tx)}
+                      onEdit={() => setEditingTx(tx)}
+                      onDelete={() => setDeletingTx(tx)}
+                    />
+                  </div>
                   <INRDisplay amount={tx.type === 'EXPENSE' ? -tx.amount : tx.amount} colorCode />
                 </div>
               </div>
@@ -1543,8 +2999,21 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      {showImport && <ImportModal onClose={() => setShowImport(false)} />}
-      {showAdd && <AddTransactionModal onClose={() => setShowAdd(false)} budgetActuals={budgetActuals} />}
+      {showImport && canCreateForView && <ImportModal onClose={() => setShowImport(false)} targetUserId={viewUserId} />}
+      {showAdd && canCreateForView && (
+        <AddTransactionModal
+          onClose={() => setShowAdd(false)}
+          budgetActuals={budgetActuals}
+          targetUserId={viewUserId}
+          showAccountOwner={isAdmin}
+          fallbackAccountOwnerName={selectedMemberName}
+        />
+      )}
+      {documentsTx && <TransactionDocumentsModal tx={documentsTx} onClose={() => setDocumentsTx(null)} />}
+      {convertingTx && <ConvertToTransferModal tx={convertingTx} onClose={() => setConvertingTx(null)} />}
+      {convertingSIPTx && <ConvertToSIPModal tx={convertingSIPTx} onClose={() => setConvertingSIPTx(null)} />}
+      {linkingPolicyTx && <LinkPolicyModal tx={linkingPolicyTx} onClose={() => setLinkingPolicyTx(null)} />}
+      {linkingRefundTx && <LinkRefundModal tx={linkingRefundTx} onClose={() => setLinkingRefundTx(null)} />}
       {editingTx && <EditTransactionModal tx={editingTx} onClose={() => setEditingTx(null)} />}
       {deletingTx && <DeleteConfirmModal tx={deletingTx} onClose={() => setDeletingTx(null)} />}
     </div>

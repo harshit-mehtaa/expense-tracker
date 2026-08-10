@@ -47,16 +47,16 @@ make start
 # Or: docker compose up -d
 ```
 
-The app will be available at **http://localhost** in about 30 seconds.
+The app will be available at **http://localhost:8080** in about 30 seconds.
 
 ### 3. First login
 
 | Field | Value |
 |-------|-------|
-| Email | `admin@family.local` |
+| Email | `harshit@mehta.local` |
 | Password | `Admin@1234` |
 
-> ⚠️ You will be prompted to change your password on first login.
+> ⚠️ Change the admin password immediately after first login.
 
 ---
 
@@ -202,6 +202,6 @@ make shell-db
 
 | Role | Email | Password |
 |------|-------|----------|
-| Admin | `admin@family.local` | `Admin@1234` |
+| Admin | `harshit@mehta.local` | `Admin@1234` |
 
 > Change the admin password immediately after first login.

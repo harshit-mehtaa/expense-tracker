@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   # ── PostgreSQL ────────────────────────────────────────────────────────────
   db:
@@ -57,7 +55,7 @@ services:
     image: nginx:alpine
     restart: unless-stopped
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     depends_on:
       - backend
       - frontend

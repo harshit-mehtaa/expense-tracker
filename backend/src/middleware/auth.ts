@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { randomUUID } from 'crypto';
 import { env } from '../config/env';
 import { AppError } from '../utils/AppError';
 import { Role } from '@prisma/client';
@@ -65,7 +66,7 @@ export function signAccessToken(payload: AuthPayload): string {
  * Generates a new refresh token (7 days).
  */
 export function signRefreshToken(payload: AuthPayload): string {
-  return jwt.sign(payload, env.JWT_REFRESH_SECRET, { expiresIn: '7d' });
+  return jwt.sign(payload, env.JWT_REFRESH_SECRET, { expiresIn: '7d', jwtid: randomUUID() });
 }
 
 /**

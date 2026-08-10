@@ -101,11 +101,11 @@ export default function SettingsPage() {
         <form onSubmit={profileForm.handleSubmit((data) => updateProfileMutation.mutate(data))} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
-              <Label>Name</Label>
+              <Label required>Name</Label>
               <Input {...profileForm.register('name')} />
             </div>
             <div className="space-y-1">
-              <Label>Email</Label>
+              <Label required>Email</Label>
               <Input {...profileForm.register('email')} type="email" />
             </div>
           </div>
@@ -124,11 +124,11 @@ export default function SettingsPage() {
         {pwdSuccess && <p className="text-sm text-green-600">Password changed successfully.</p>}
         <form onSubmit={pwdForm.handleSubmit((data) => changePwdMutation.mutate(data))} className="space-y-4">
           <div className="space-y-1">
-            <Label>Current Password</Label>
+            <Label required>Current Password</Label>
             <Input {...pwdForm.register('oldPassword')} type="password" />
           </div>
           <div className="space-y-1">
-            <Label>New Password</Label>
+            <Label required>New Password</Label>
             <Input {...pwdForm.register('newPassword')} type="password" />
             {pwdForm.formState.errors.newPassword && (
               <p className="text-xs text-destructive">{pwdForm.formState.errors.newPassword.message}</p>

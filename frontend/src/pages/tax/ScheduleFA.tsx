@@ -17,6 +17,10 @@ const CATEGORY_LABELS: Record<ForeignAssetCategory, string> = {
   OTHER: 'Other',
 };
 
+const SORTED_CATEGORY_OPTIONS = Object.entries(CATEGORY_LABELS).sort(([, a], [, b]) =>
+  a.localeCompare(b, undefined, { sensitivity: 'base' }),
+) as Array<[ForeignAssetCategory, string]>;
+
 const entrySchema = z.object({
   fyYear: z.string(),
   category: z.enum(['BANK_ACCOUNT', 'EQUITY_AND_MF', 'DEBT', 'IMMOVABLE_PROPERTY', 'OTHER']),
@@ -64,7 +68,7 @@ export default function ScheduleFA({ fy, viewUserId }: Props) {
   };
 
   const createMutation = useMutation({
-    mutationFn: (data: object) => taxApi.createForeignAsset(data),
+    mutationFn: (data: object) => taxApi.createForeignAsset(data, viewUserId),
     onSuccess: () => { invalidate(); setShowForm(false); reset(); },
   });
 
@@ -106,6 +110,14 @@ export default function ScheduleFA({ fy, viewUserId }: Props) {
     });
   };
 
+  const sortedEntries = [...entries].sort((a, b) => {
+    const categoryCompare = CATEGORY_LABELS[a.category].localeCompare(CATEGORY_LABELS[b.category], undefined, {
+      sensitivity: 'base',
+    });
+    if (categoryCompare !== 0) return categoryCompare;
+    return a.assetDescription.localeCompare(b.assetDescription, undefined, { sensitivity: 'base' });
+  });
+
   return (
     <div className="space-y-6">
       {/* Info banner */}
@@ -138,17 +150,15 @@ export default function ScheduleFA({ fy, viewUserId }: Props) {
         </div>
       )}
 
-      {/* Add button — hidden when viewing another member's data */}
+      {/* Add button */}
       <div className="flex justify-between items-center">
         <h3 className="font-medium text-gray-700">Foreign Asset Disclosures</h3>
-        {!viewUserId && (
-          <button
-            onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
-            className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
-          >
-            + Add Asset
-          </button>
-        )}
+        <button
+          onClick={() => { setShowForm(!showForm); setEditId(null); reset({ fyYear: fy }); }}
+          className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+        >
+          + Add Asset
+        </button>
       </div>
 
       {/* Form */}
@@ -157,37 +167,37 @@ export default function ScheduleFA({ fy, viewUserId }: Props) {
           <input type="hidden" {...register('fyYear')} />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Category</label>
+              <label className="field-required block text-sm font-medium mb-1">Category</label>
               <select {...register('category')} className="input">
                 <option value="">Select category</option>
-                {Object.entries(CATEGORY_LABELS).map(([v, l]) => (
+                {SORTED_CATEGORY_OPTIONS.map(([v, l]) => (
                   <option key={v} value={v}>{l}</option>
                 ))}
               </select>
               {errors.category && <p className="text-red-500 text-xs mt-1">{errors.category.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Country</label>
+              <label className="field-required block text-sm font-medium mb-1">Country</label>
               <input {...register('country')} className="input" placeholder="e.g. United States" />
               {errors.country && <p className="text-red-500 text-xs mt-1">{errors.country.message}</p>}
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm font-medium mb-1">Asset Description</label>
+              <label className="field-required block text-sm font-medium mb-1">Asset Description</label>
               <input {...register('assetDescription')} className="input" placeholder="e.g. Apple Inc. shares held in Schwab" />
               {errors.assetDescription && <p className="text-red-500 text-xs mt-1">{errors.assetDescription.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Acquisition Cost (₹)</label>
+              <label className="field-required block text-sm font-medium mb-1">Acquisition Cost (₹)</label>
               <input type="number" step="0.01" {...register('acquisitionCostINR')} className="input" />
               {errors.acquisitionCostINR && <p className="text-red-500 text-xs mt-1">{errors.acquisitionCostINR.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Peak Value during FY (₹)</label>
+              <label className="field-required block text-sm font-medium mb-1">Peak Value during FY (₹)</label>
               <input type="number" step="0.01" {...register('peakValueINR')} className="input" />
               {errors.peakValueINR && <p className="text-red-500 text-xs mt-1">{errors.peakValueINR.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Closing Value at 31 Mar (₹)</label>
+              <label className="field-required block text-sm font-medium mb-1">Closing Value at 31 Mar (₹)</label>
               <input type="number" step="0.01" {...register('closingValueINR')} className="input" />
               {errors.closingValueINR && <p className="text-red-500 text-xs mt-1">{errors.closingValueINR.message}</p>}
             </div>
@@ -196,7 +206,7 @@ export default function ScheduleFA({ fy, viewUserId }: Props) {
               <input type="number" step="0.01" {...register('incomeAccruedINR')} className="input" placeholder="Dividends, interest, etc." />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm font-medium mb-1">Notes</label>
+              <label className="block text-sm font-medium mb-1">Notes (optional)</label>
               <input {...register('notes')} className="input" placeholder="Optional" />
             </div>
           </div>
@@ -228,7 +238,7 @@ export default function ScheduleFA({ fy, viewUserId }: Props) {
               </tr>
             </thead>
             <tbody>
-              {entries.map((e) => (
+              {sortedEntries.map((e) => (
                 <tr key={e.id} className="border-b last:border-0 hover:bg-gray-50">
                   <td className="py-2 pr-3 font-medium">{e.assetDescription}</td>
                   <td className="py-2 pr-3 text-gray-600">{CATEGORY_LABELS[e.category]}</td>
@@ -238,7 +248,7 @@ export default function ScheduleFA({ fy, viewUserId }: Props) {
                     {e.incomeAccruedINR ? formatCurrency(Number(e.incomeAccruedINR)) : '—'}
                   </td>
                   <td className="py-2 flex gap-2">
-                    {!viewUserId && (
+                    {(
                       <>
                         <button onClick={() => startEdit(e)} className="text-blue-600 hover:underline text-xs">Edit</button>
                         <button onClick={() => deleteMutation.mutate(e.id)} className="text-red-500 hover:underline text-xs">Delete</button>

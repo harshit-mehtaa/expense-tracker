@@ -132,6 +132,33 @@ describe('parseCSV — HDFC format', () => {
       expect(isNaN(t.date.getTime())).toBe(false);
     });
   });
+
+  it('infers payment mode from high-confidence CSV remarks and references', () => {
+    const csv = [
+      'HDFC Bank Statement',
+      'Date,Narration,Chq/Ref No.,Value Dt,Withdrawal Amt.,Deposit Amt.,Closing Balance',
+      '01/04/25,UPI/SWIGGY/harshit@okhdfcbank,REF001,01/04/25,500.00,,100000.00',
+      '02/04/25,NETBANKING TRANSFER,NEFT123,02/04/25,,1000.00,101000.00',
+      '03/04/25,POS AMAZON PURCHASE,REF003,03/04/25,250.00,,100750.00',
+      '04/04/25,NACH-MANDATE-MUTUAL FUND,REF004,04/04/25,100.00,,100650.00',
+    ].join('\n');
+
+    const result = parseCSV(Buffer.from(csv), 'HDFC');
+
+    expect(result.transactions.map((t) => t.paymentMode)).toEqual(['UPI', 'NEFT', 'CARD', 'AUTO_DEBIT']);
+  });
+
+  it('leaves payment mode empty when CSV remarks are ambiguous', () => {
+    const csv = [
+      'HDFC Bank Statement',
+      'Date,Narration,Chq/Ref No.,Value Dt,Withdrawal Amt.,Deposit Amt.,Closing Balance',
+      '01/04/25,GROCERY STORE,REF001,01/04/25,500.00,,100000.00',
+    ].join('\n');
+
+    const result = parseCSV(Buffer.from(csv), 'HDFC');
+
+    expect(result.transactions[0].paymentMode).toBeUndefined();
+  });
 });
 
 // ─── parseCSV — bank hint ─────────────────────────────────────────────────────
@@ -281,6 +308,60 @@ describe('parseCSV — ICICI format', () => {
     const result = parseCSV(Buffer.from(csv), 'ICICI');
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.transactions.some((t) => t.amount === 2000)).toBe(true);
+  });
+
+  it('parses ICICI exports that include a leading serial-number column and Indian date format', () => {
+    const csv = [
+      'ICICI Bank Statement',
+      'S No,Transaction Date,Value Date,Transaction Remarks,Withdrawal Amount (INR),Deposit Amount (INR),Balance (INR)',
+      '1,02/04/2026,02/04/2026,UPI/PAYMENT/SHOP,189.00,,10000.00',
+      '2,03/04/2026,03/04/2026,SALARY CREDIT,,595.00,10595.00',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv), 'ICICI');
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.transactions).toHaveLength(2);
+    expect(result.transactions[0]).toMatchObject({
+      amount: 189,
+      type: 'EXPENSE',
+      description: 'UPI/PAYMENT/SHOP',
+      remark: 'UPI/PAYMENT/SHOP',
+    });
+    expect(result.transactions[0].date.toISOString()).toBe('2026-04-02T00:00:00.000Z');
+    expect(result.transactions[1]).toMatchObject({
+      amount: 595,
+      type: 'INCOME',
+      description: 'SALARY CREDIT',
+      remark: 'SALARY CREDIT',
+    });
+    expect(result.transactions[1].date.toISOString()).toBe('2026-04-03T00:00:00.000Z');
+  });
+
+  it('maps ICICI withdrawal/deposit columns by header and never treats balance as income', () => {
+    const csv = [
+      'S No.,Value Date,Transaction Date,Cheque Number,Transaction Remarks,Withdrawal Amount(INR),Deposit Amount(INR),Balance(INR),',
+      '1,02/04/2026,02/04/2026,,UPI/MERCHANT/PAYMENT,189.00,0.00,445317.85,',
+      '2,03/04/2026,03/04/2026,,NEFT/SALARY CREDIT,0.00,1000.00,446317.85,',
+    ].join('\n');
+    const result = parseCSV(Buffer.from(csv), 'ICICI');
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.transactions).toHaveLength(2);
+    expect(result.transactions[0]).toMatchObject({
+      date: new Date('2026-04-02'),
+      description: 'UPI/MERCHANT/PAYMENT',
+      remark: 'UPI/MERCHANT/PAYMENT',
+      amount: 189,
+      type: 'EXPENSE',
+    });
+    expect(result.transactions[1]).toMatchObject({
+      date: new Date('2026-04-03'),
+      description: 'NEFT/SALARY CREDIT',
+      remark: 'NEFT/SALARY CREDIT',
+      amount: 1000,
+      type: 'INCOME',
+    });
+    expect(result.transactions.some((t) => t.amount === 445317.85 || t.amount === 446317.85)).toBe(false);
   });
 });
 

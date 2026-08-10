@@ -1,4 +1,10 @@
 declare module 'pdf-parse' {
+  class PDFParse {
+    constructor(options: { data: Uint8Array; password?: string });
+    getText(): Promise<{ text: string }>;
+    destroy(): Promise<void>;
+  }
+
   interface PDFInfo {
     PDFFormatVersion?: string;
     IsAcroFormPresent?: boolean;
@@ -30,5 +36,6 @@ declare module 'pdf-parse' {
 
   function pdfParse(dataBuffer: Buffer, options?: PDFOptions): Promise<PDFData>;
 
-  export = pdfParse;
+  export { PDFParse };
+  export default pdfParse;
 }

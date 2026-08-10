@@ -7,7 +7,7 @@
 const LAKH = 100_000;
 const CRORE = 10_000_000;
 
-export function formatINR(amount: number, forcePaise: boolean = false): string { // forcePaise retained for backwards compatibility; always 2dp now
+export function formatINR(amount: number, _forcePaise: boolean = false): string {
   const negative = amount < 0;
   const abs = Math.abs(amount);
 

@@ -27,6 +27,14 @@ vi.mock('../../services/transactionService', () => ({
   getTransactionById: vi.fn(),
   createTransaction: vi.fn(),
   updateTransaction: vi.fn(),
+  convertTransactionToTransfer: vi.fn(),
+  convertTransactionToSIP: vi.fn(),
+  updateTransactionSIPLink: vi.fn(),
+  removeTransactionSIPLink: vi.fn(),
+  updateTransactionInsurancePolicyLink: vi.fn(),
+  removeTransactionInsurancePolicyLink: vi.fn(),
+  updateTransactionRefundLink: vi.fn(),
+  removeTransactionRefundLink: vi.fn(),
   softDeleteTransaction: vi.fn(),
 }));
 
@@ -47,6 +55,14 @@ const buildCsvMock = txSvc.buildCsv as ReturnType<typeof vi.fn>;
 const getByIdMock = txSvc.getTransactionById as ReturnType<typeof vi.fn>;
 const createMock = txSvc.createTransaction as ReturnType<typeof vi.fn>;
 const updateMock = txSvc.updateTransaction as ReturnType<typeof vi.fn>;
+const convertMock = txSvc.convertTransactionToTransfer as ReturnType<typeof vi.fn>;
+const convertToSIPMock = txSvc.convertTransactionToSIP as ReturnType<typeof vi.fn>;
+const updateSIPLinkMock = txSvc.updateTransactionSIPLink as ReturnType<typeof vi.fn>;
+const removeSIPLinkMock = txSvc.removeTransactionSIPLink as ReturnType<typeof vi.fn>;
+const updatePolicyLinkMock = txSvc.updateTransactionInsurancePolicyLink as ReturnType<typeof vi.fn>;
+const removePolicyLinkMock = txSvc.removeTransactionInsurancePolicyLink as ReturnType<typeof vi.fn>;
+const updateRefundLinkMock = txSvc.updateTransactionRefundLink as ReturnType<typeof vi.fn>;
+const removeRefundLinkMock = txSvc.removeTransactionRefundLink as ReturnType<typeof vi.fn>;
 const softDeleteMock = txSvc.softDeleteTransaction as ReturnType<typeof vi.fn>;
 const userFindFirstMock = (prisma as any).user.findFirst as ReturnType<typeof vi.fn>;
 
@@ -79,6 +95,14 @@ beforeEach(() => {
   getByIdMock.mockResolvedValue(MOCK_TX);
   createMock.mockResolvedValue({ ...MOCK_TX, id: 'tx-new' });
   updateMock.mockResolvedValue(MOCK_TX);
+  convertMock.mockResolvedValue({ ...MOCK_TX, transferPairId: 'pair-1' });
+  convertToSIPMock.mockResolvedValue({ ...MOCK_TX, sipId: 'clm1234567890abcdefghij' });
+  updateSIPLinkMock.mockResolvedValue({ ...MOCK_TX, sipId: 'clm1234567890abcdefghij' });
+  removeSIPLinkMock.mockResolvedValue({ ...MOCK_TX, sipId: null, sipTransactionId: null });
+  updatePolicyLinkMock.mockResolvedValue({ ...MOCK_TX, insurancePolicyId: 'clm1234567890abcdefghij' });
+  removePolicyLinkMock.mockResolvedValue({ ...MOCK_TX, insurancePolicyId: null });
+  updateRefundLinkMock.mockResolvedValue({ ...MOCK_TX, refundForTransactionId: 'clm1234567890abcdefghij' });
+  removeRefundLinkMock.mockResolvedValue({ ...MOCK_TX, refundForTransactionId: null });
   softDeleteMock.mockResolvedValue(undefined);
   userFindFirstMock.mockResolvedValue({ id: 'user-2' });
 });
@@ -242,6 +266,12 @@ describe('POST /api/transactions', () => {
     expect(createMock).toHaveBeenCalled();
   });
 
+  it('accepts optional transaction remark', async () => {
+    const res = await request(makeApp()).post('/api/transactions').send({ ...VALID_INCOME, remark: 'NEFT salary credit' });
+    expect(res.status).toBe(201);
+    expect(createMock).toHaveBeenCalledWith('admin-id', { ...VALID_INCOME, remark: 'NEFT salary credit', tags: [], isRecurring: false });
+  });
+
   it('returns 422 when amount is negative', async () => {
     const res = await request(makeApp()).post('/api/transactions').send({ ...VALID_INCOME, amount: -100 });
     expect(res.status).toBe(422);
@@ -271,14 +301,159 @@ describe('POST /api/transactions', () => {
 
 describe('PUT /api/transactions/:id', () => {
   it('returns 200 with updated transaction', async () => {
-    const res = await request(makeApp()).put('/api/transactions/tx-1').send({ description: 'Updated' });
+    const res = await request(makeApp()).put('/api/transactions/tx-1').send({ description: 'Updated', remark: 'Updated remark' });
     expect(res.status).toBe(200);
-    expect(updateMock).toHaveBeenCalledWith('tx-1', 'admin-id', 'ADMIN', { description: 'Updated' });
+    expect(updateMock).toHaveBeenCalledWith('tx-1', 'admin-id', 'ADMIN', { description: 'Updated', remark: 'Updated remark' });
   });
 
   it('returns 422 when type TRANSFER is passed (TRANSFER edits not supported)', async () => {
     const res = await request(makeApp()).put('/api/transactions/tx-1').send({ type: 'TRANSFER' });
     expect(res.status).toBe(422);
+  });
+});
+
+// ─── POST /api/transactions/:id/convert-to-transfer ──────────────────────────
+
+describe('POST /api/transactions/:id/convert-to-transfer', () => {
+  it('returns 200 and converts transaction to transfer', async () => {
+    const body = {
+      transferToAccountId: 'clm1234567890abcdefghij',
+      adjustDestinationBalance: false,
+    };
+    const res = await request(makeApp()).post('/api/transactions/tx-1/convert-to-transfer').send(body);
+    expect(res.status).toBe(200);
+    expect(convertMock).toHaveBeenCalledWith('tx-1', 'admin-id', 'ADMIN', {
+      ...body,
+      adjustSourceBalance: false,
+    });
+  });
+
+  it('defaults adjustDestinationBalance to false', async () => {
+    const res = await request(makeApp())
+      .post('/api/transactions/tx-1/convert-to-transfer')
+      .send({ transferToAccountId: 'clm1234567890abcdefghij' });
+    expect(res.status).toBe(200);
+    expect(convertMock).toHaveBeenCalledWith('tx-1', 'admin-id', 'ADMIN', {
+      transferToAccountId: 'clm1234567890abcdefghij',
+      adjustDestinationBalance: false,
+      adjustSourceBalance: false,
+    });
+  });
+
+  it('accepts source account for incoming credit card payment conversion', async () => {
+    const body = {
+      transferFromAccountId: 'clm1234567890abcdefghij',
+      adjustSourceBalance: true,
+    };
+    const res = await request(makeApp()).post('/api/transactions/tx-1/convert-to-transfer').send(body);
+    expect(res.status).toBe(200);
+    expect(convertMock).toHaveBeenCalledWith('tx-1', 'admin-id', 'ADMIN', {
+      ...body,
+      adjustDestinationBalance: false,
+    });
+  });
+});
+
+// ─── POST /api/transactions/:id/convert-to-sip ───────────────────────────────
+
+describe('POST /api/transactions/:id/convert-to-sip', () => {
+  it('returns 200 and marks transaction as SIP without units/nav', async () => {
+    const body = { sipId: 'clm1234567890abcdefghij' };
+    const res = await request(makeApp()).post('/api/transactions/tx-1/convert-to-sip').send(body);
+    expect(res.status).toBe(200);
+    expect(convertToSIPMock).toHaveBeenCalledWith('tx-1', 'admin-id', 'ADMIN', body);
+  });
+
+  it('returns 200 and forwards units/nav when provided together', async () => {
+    const body = { sipId: 'clm1234567890abcdefghij', units: 12.3456, nav: 81 };
+    const res = await request(makeApp()).post('/api/transactions/tx-1/convert-to-sip').send(body);
+    expect(res.status).toBe(200);
+    expect(convertToSIPMock).toHaveBeenCalledWith('tx-1', 'admin-id', 'ADMIN', body);
+  });
+
+  it('returns 422 when only units is provided', async () => {
+    const res = await request(makeApp())
+      .post('/api/transactions/tx-1/convert-to-sip')
+      .send({ sipId: 'clm1234567890abcdefghij', units: 12.3456 });
+    expect(res.status).toBe(422);
+    expect(convertToSIPMock).not.toHaveBeenCalled();
+  });
+});
+
+// ─── PUT/DELETE /api/transactions/:id/sip-link ───────────────────────────────
+
+describe('PUT /api/transactions/:id/sip-link', () => {
+  it('returns 200 and updates a mistaken SIP link', async () => {
+    const body = { sipId: 'clm1234567890abcdefghij', units: 10, nav: 100 };
+    const res = await request(makeApp()).put('/api/transactions/tx-1/sip-link').send(body);
+    expect(res.status).toBe(200);
+    expect(updateSIPLinkMock).toHaveBeenCalledWith('tx-1', 'admin-id', 'ADMIN', body);
+  });
+
+  it('returns 422 when only nav is provided', async () => {
+    const res = await request(makeApp())
+      .put('/api/transactions/tx-1/sip-link')
+      .send({ sipId: 'clm1234567890abcdefghij', nav: 100 });
+    expect(res.status).toBe(422);
+    expect(updateSIPLinkMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/transactions/:id/sip-link', () => {
+  it('returns 200 and removes SIP link', async () => {
+    const res = await request(makeApp()).delete('/api/transactions/tx-1/sip-link');
+    expect(res.status).toBe(200);
+    expect(removeSIPLinkMock).toHaveBeenCalledWith('tx-1', 'admin-id', 'ADMIN');
+  });
+});
+
+// ─── PUT/DELETE /api/transactions/:id/policy-link ────────────────────────────
+
+describe('PUT /api/transactions/:id/policy-link', () => {
+  it('returns 200 and links transaction to an insurance policy', async () => {
+    const body = { insurancePolicyId: 'clm1234567890abcdefghij' };
+    const res = await request(makeApp()).put('/api/transactions/tx-1/policy-link').send(body);
+    expect(res.status).toBe(200);
+    expect(updatePolicyLinkMock).toHaveBeenCalledWith('tx-1', 'admin-id', 'ADMIN', body);
+  });
+
+  it('returns 422 when insurancePolicyId is invalid', async () => {
+    const res = await request(makeApp()).put('/api/transactions/tx-1/policy-link').send({ insurancePolicyId: 'bad' });
+    expect(res.status).toBe(422);
+    expect(updatePolicyLinkMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/transactions/:id/policy-link', () => {
+  it('returns 200 and removes policy link', async () => {
+    const res = await request(makeApp()).delete('/api/transactions/tx-1/policy-link');
+    expect(res.status).toBe(200);
+    expect(removePolicyLinkMock).toHaveBeenCalledWith('tx-1', 'admin-id', 'ADMIN');
+  });
+});
+
+// ─── PUT/DELETE /api/transactions/:id/refund-link ────────────────────────────
+
+describe('PUT /api/transactions/:id/refund-link', () => {
+  it('returns 200 and links income transaction to original expense', async () => {
+    const body = { refundForTransactionId: 'clm1234567890abcdefghij' };
+    const res = await request(makeApp()).put('/api/transactions/tx-1/refund-link').send(body);
+    expect(res.status).toBe(200);
+    expect(updateRefundLinkMock).toHaveBeenCalledWith('tx-1', 'admin-id', 'ADMIN', body);
+  });
+
+  it('returns 422 when refundForTransactionId is invalid', async () => {
+    const res = await request(makeApp()).put('/api/transactions/tx-1/refund-link').send({ refundForTransactionId: 'bad' });
+    expect(res.status).toBe(422);
+    expect(updateRefundLinkMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/transactions/:id/refund-link', () => {
+  it('returns 200 and removes refund link', async () => {
+    const res = await request(makeApp()).delete('/api/transactions/tx-1/refund-link');
+    expect(res.status).toBe(200);
+    expect(removeRefundLinkMock).toHaveBeenCalledWith('tx-1', 'admin-id', 'ADMIN');
   });
 });
 

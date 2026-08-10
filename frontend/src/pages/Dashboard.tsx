@@ -309,7 +309,9 @@ export default function DashboardPage() {
 
         {/* Only show FY-period budgets — MONTHLY/QUARTERLY budgets vs FY actuals would give misleading percentages */}
         {(() => {
-          const fyBudgets = (budgetActuals ?? []).filter((b) => b.period === 'FY');
+          const fyBudgets = (budgetActuals ?? [])
+            .filter((b) => b.period === 'FY')
+            .sort((a, b) => a.category.name.localeCompare(b.category.name, undefined, { sensitivity: 'base' }));
           return fyBudgets.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No FY budgets configured.{' '}

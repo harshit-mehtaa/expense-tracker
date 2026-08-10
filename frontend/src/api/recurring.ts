@@ -19,7 +19,14 @@ export interface RecurringRule {
     categoryId: string | null;
     bankAccountId: string | null;
     tags: string[];
-    category: { id: string; name: string; color: string | null; icon: string | null } | null;
+    category: {
+      id: string;
+      name: string;
+      color: string | null;
+      icon: string | null;
+      parentId?: string | null;
+      parent?: { id: string; name: string; icon?: string | null; parentId?: string | null } | null;
+    } | null;
     bankAccount: { bankName: string; accountNumberLast4: string | null } | null;
   };
 }
@@ -43,8 +50,10 @@ export async function fetchRecurringRules(viewUserId?: string): Promise<Recurrin
   return res.data.data;
 }
 
-export async function createRecurringRule(data: CreateRecurringRuleInput): Promise<RecurringRule> {
-  const res = await api.post<{ data: RecurringRule }>('/recurring', data);
+export async function createRecurringRule(data: CreateRecurringRuleInput, viewUserId?: string): Promise<RecurringRule> {
+  const res = await api.post<{ data: RecurringRule }>('/recurring', data, {
+    params: viewUserId ? { targetUserId: viewUserId } : {},
+  });
   return res.data.data;
 }
 
@@ -60,7 +69,9 @@ export async function deleteRecurringRule(id: string): Promise<void> {
   await api.delete(`/recurring/${id}`);
 }
 
-export async function triggerGenerate(): Promise<{ generated: number }> {
-  const res = await api.post<{ data: { generated: number } }>('/recurring/generate');
+export async function triggerGenerate(viewUserId?: string): Promise<{ generated: number }> {
+  const res = await api.post<{ data: { generated: number } }>('/recurring/generate', undefined, {
+    params: viewUserId ? { targetUserId: viewUserId } : {},
+  });
   return res.data.data;
 }

@@ -8,6 +8,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { fetchUpcomingAlerts } from '@/api/dashboard';
+import { formatINR } from '@/lib/indianFormat';
 
 export function Header() {
   const { user, logout } = useAuth();
@@ -50,9 +51,9 @@ export function Header() {
   };
 
   return (
-    <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-border/60 bg-background px-5">
+    <header className="sticky top-0 z-10 flex h-14 min-w-0 items-center justify-between gap-3 border-b border-border/60 bg-background px-5">
       {/* FY Selector */}
-      <div className="relative flex items-center">
+      <div className="relative flex min-w-0 items-center">
         <select
           value={selectedFY}
           onChange={(e) => setSelectedFY(e.target.value)}
@@ -73,11 +74,11 @@ export function Header() {
       </div>
 
       {/* Right section */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex min-w-0 shrink-0 items-center gap-1.5">
         {/* Quick add */}
-        <Button size="sm" className="gap-1.5 h-8 px-3 text-xs" onClick={() => navigate('/transactions?add=1')}>
+        <Button size="sm" className="h-8 gap-1.5 px-2 text-xs lg:px-3" onClick={() => navigate('/transactions?add=1')} title="Add Transaction">
           <Plus className="h-3.5 w-3.5" />
-          Add Transaction
+          <span className="hidden lg:inline">Add Transaction</span>
         </Button>
 
         {/* Notifications */}
@@ -117,7 +118,7 @@ export function Header() {
                         {alert.daysUntilDue === 0 ? 'Due today' :
                          alert.daysUntilDue === 1 ? 'Due tomorrow' :
                          `Due in ${alert.daysUntilDue} days`}
-                        {alert.amount != null ? ` · ₹${Number(alert.amount).toLocaleString('en-IN')}` : ''}
+                        {alert.amount != null ? ` · ${formatINR(Number(alert.amount))}` : ''}
                       </p>
                     </div>
                   ))}
@@ -143,7 +144,7 @@ export function Header() {
           >
             {user?.name?.[0]?.toUpperCase() ?? 'U'}
           </div>
-          <span className="hidden sm:block text-sm font-medium text-foreground">{user?.name}</span>
+          <span className="hidden max-w-32 truncate text-sm font-medium text-foreground xl:block">{user?.name}</span>
           <Button variant="ghost" size="icon" onClick={logout} aria-label="Logout" className="h-8 w-8 text-muted-foreground hover:text-foreground">
             <LogOut className="h-4 w-4" />
           </Button>

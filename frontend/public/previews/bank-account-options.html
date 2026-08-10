@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bank Account View Options</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --soft: #f1f5f9;
+      --hdfc: #004c8f;
+      --hdfc-accent: #dc2626;
+      --sbi: #0284c7;
+      --sbi-accent: #0ea5e9;
+      --icici: #9a3412;
+      --icici-accent: #f97316;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px 20px 44px;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    h1,
+    h2,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 24px;
+      line-height: 1.2;
+    }
+
+    h2 {
+      font-size: 17px;
+      line-height: 1.25;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .option {
+      margin-top: 22px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+    }
+
+    .option-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 12px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 9px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .logo {
+      display: inline-flex;
+      width: 38px;
+      height: 38px;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      color: #fff;
+      font-weight: 800;
+      font-size: 12px;
+      box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.12);
+      flex: 0 0 auto;
+    }
+
+    .logo.hdfc { background: var(--hdfc); border-bottom: 4px solid var(--hdfc-accent); }
+    .logo.sbi { background: var(--sbi); border-bottom: 4px solid var(--sbi-accent); }
+    .logo.icici { background: var(--icici); border-bottom: 4px solid var(--icici-accent); }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--soft);
+      color: #334155;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      letter-spacing: 0;
+    }
+
+    .amount {
+      font-size: 23px;
+      line-height: 1.1;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 6px;
+      color: #64748b;
+      font-size: 13px;
+    }
+
+    .icon {
+      display: inline-flex;
+      width: 26px;
+      height: 26px;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+    }
+
+    .passbook {
+      position: relative;
+      overflow: hidden;
+      min-height: 214px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--card);
+      padding: 14px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+
+    .passbook::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 7px;
+      background: var(--accent);
+    }
+
+    .passbook .top {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      padding-left: 4px;
+    }
+
+    .passbook .body {
+      margin-top: 18px;
+      padding-left: 4px;
+    }
+
+    .passbook .fields {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 9px;
+      margin-top: 16px;
+    }
+
+    .field {
+      min-width: 0;
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+    }
+
+    .field .label {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+
+    .field .value {
+      margin-top: 3px;
+      font-weight: 650;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .statement {
+      min-height: 148px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--card);
+      padding: 14px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: start;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+
+    .statement .identity {
+      display: flex;
+      min-width: 0;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .statement .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 12px;
+    }
+
+    .statement .balance {
+      min-width: 138px;
+      text-align: right;
+    }
+
+    .brand-tile {
+      min-height: 194px;
+      border: 1px solid color-mix(in srgb, var(--accent), #000 14%);
+      border-radius: 8px;
+      background: linear-gradient(135deg, color-mix(in srgb, var(--accent), #fff 91%) 0%, #fff 58%);
+      padding: 14px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+
+    .brand-tile .stripe {
+      height: 5px;
+      margin: -14px -14px 14px;
+      background: var(--accent);
+      border-radius: 8px 8px 0 0;
+    }
+
+    .brand-tile .top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .brand-tile .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 15px;
+    }
+
+    .brand-tile .bottom {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 22px;
+      padding-top: 12px;
+      border-top: 1px solid color-mix(in srgb, var(--accent), #fff 74%);
+    }
+
+    @media (max-width: 940px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      header,
+      .option-head {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Bank Account View Options</h1>
+        <p class="subtle">Same sample accounts shown in three possible styles. Credit cards remain on the physical card view.</p>
+      </div>
+      <span class="tag">Preview only</span>
+    </header>
+
+    <section class="option">
+      <div class="option-head">
+        <div>
+          <h2>Option 1: Passbook-style tiles</h2>
+          <p class="subtle">Best for a distinct bank-account feel without looking like credit cards.</p>
+        </div>
+        <span class="tag">Recommended</span>
+      </div>
+      <div class="grid">
+        <article class="passbook" style="--accent: var(--hdfc);">
+          <div class="top">
+            <span class="logo hdfc">HDFC</span>
+            <div>
+              <div class="row">
+                <strong>HDFC Bank</strong>
+              </div>
+              <p class="subtle">Salary Account</p>
+            </div>
+          </div>
+          <div class="body">
+            <p class="subtle">Available Balance</p>
+            <p class="amount">INR 4,26,870</p>
+            <div class="fields">
+              <div class="field">
+                <p class="label">Account</p>
+                <p class="value mono">**** 1872</p>
+              </div>
+              <div class="field">
+                <p class="label">IFSC</p>
+                <p class="value mono">HDFC **** 214</p>
+              </div>
+              <div class="field">
+                <p class="label">UPI</p>
+                <p class="value">harshit@hdfc</p>
+              </div>
+              <div class="field">
+                <p class="label">Owner</p>
+                <p class="value">Harshit Mehta</p>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="passbook" style="--accent: var(--sbi);">
+          <div class="top">
+            <span class="logo sbi">SBI</span>
+            <div>
+              <strong>SBI</strong>
+              <p class="subtle">Savings Account</p>
+            </div>
+          </div>
+          <div class="body">
+            <p class="subtle">Available Balance</p>
+            <p class="amount">INR 82,410</p>
+            <div class="fields">
+              <div class="field">
+                <p class="label">Account</p>
+                <p class="value mono">**** 9033</p>
+              </div>
+              <div class="field">
+                <p class="label">IFSC</p>
+                <p class="value mono">SBIN **** 129</p>
+              </div>
+              <div class="field">
+                <p class="label">Interest</p>
+                <p class="value">3.0% p.a.</p>
+              </div>
+              <div class="field">
+                <p class="label">Owner</p>
+                <p class="value">Harshit Mehta</p>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="passbook" style="--accent: var(--icici);">
+          <div class="top">
+            <span class="logo icici">ICICI</span>
+            <div>
+              <strong>ICICI Bank</strong>
+              <p class="subtle">NRE Account</p>
+            </div>
+          </div>
+          <div class="body">
+            <p class="subtle">Available Balance</p>
+            <p class="amount">INR 13,64,200</p>
+            <div class="fields">
+              <div class="field">
+                <p class="label">Account</p>
+                <p class="value mono">**** 4421</p>
+              </div>
+              <div class="field">
+                <p class="label">IFSC</p>
+                <p class="value mono">ICIC **** 008</p>
+              </div>
+              <div class="field">
+                <p class="label">Type</p>
+                <p class="value">NRE</p>
+              </div>
+              <div class="field">
+                <p class="label">Owner</p>
+                <p class="value">Harshit Mehta</p>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="option">
+      <div class="option-head">
+        <div>
+          <h2>Option 2: Statement-style rows</h2>
+          <p class="subtle">Most compact and practical if you expect many accounts.</p>
+        </div>
+        <span class="tag">Dense</span>
+      </div>
+      <div class="grid">
+        <article class="statement" style="--accent: var(--hdfc);">
+          <div>
+            <div class="identity">
+              <span class="logo hdfc">HDFC</span>
+              <div>
+                <strong>HDFC Bank</strong>
+                <p class="subtle">Salary Account</p>
+              </div>
+            </div>
+            <div class="meta">
+              <span class="pill mono">**** 1872</span>
+              <span class="pill mono">HDFC **** 214</span>
+              <span class="pill">UPI linked</span>
+            </div>
+          </div>
+          <div class="balance">
+            <div class="actions"><span class="icon">R</span><span class="icon">E</span><span class="icon">D</span></div>
+            <p class="subtle" style="margin-top: 16px;">Balance</p>
+            <p class="amount">INR 4,26,870</p>
+          </div>
+        </article>
+
+        <article class="statement" style="--accent: var(--sbi);">
+          <div>
+            <div class="identity">
+              <span class="logo sbi">SBI</span>
+              <div>
+                <strong>SBI</strong>
+                <p class="subtle">Savings Account</p>
+              </div>
+            </div>
+            <div class="meta">
+              <span class="pill mono">**** 9033</span>
+              <span class="pill mono">SBIN **** 129</span>
+              <span class="pill">3.0% p.a.</span>
+            </div>
+          </div>
+          <div class="balance">
+            <div class="actions"><span class="icon">R</span><span class="icon">E</span><span class="icon">D</span></div>
+            <p class="subtle" style="margin-top: 16px;">Balance</p>
+            <p class="amount">INR 82,410</p>
+          </div>
+        </article>
+
+        <article class="statement" style="--accent: var(--icici);">
+          <div>
+            <div class="identity">
+              <span class="logo icici">ICICI</span>
+              <div>
+                <strong>ICICI Bank</strong>
+                <p class="subtle">NRE Account</p>
+              </div>
+            </div>
+            <div class="meta">
+              <span class="pill mono">**** 4421</span>
+              <span class="pill mono">ICIC **** 008</span>
+              <span class="pill">NRE</span>
+            </div>
+          </div>
+          <div class="balance">
+            <div class="actions"><span class="icon">R</span><span class="icon">E</span><span class="icon">D</span></div>
+            <p class="subtle" style="margin-top: 16px;">Balance</p>
+            <p class="amount">INR 13,64,200</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="option">
+      <div class="option-head">
+        <div>
+          <h2>Option 3: Bank-branded tiles</h2>
+          <p class="subtle">More visual than rows, but still less card-like than credit cards.</p>
+        </div>
+        <span class="tag">Polished</span>
+      </div>
+      <div class="grid">
+        <article class="brand-tile" style="--accent: var(--hdfc);">
+          <div class="stripe"></div>
+          <div class="top">
+            <div class="identity">
+              <span class="logo hdfc">HDFC</span>
+              <div>
+                <strong>HDFC Bank</strong>
+                <p class="subtle">Salary Account</p>
+              </div>
+            </div>
+            <div class="actions"><span class="icon">R</span><span class="icon">E</span><span class="icon">D</span></div>
+          </div>
+          <div class="chips">
+            <span class="pill mono">A/C **** 1872</span>
+            <span class="pill mono">IFSC **** 214</span>
+            <span class="pill">Harshit Mehta</span>
+          </div>
+          <div class="bottom">
+            <div>
+              <p class="subtle">Available Balance</p>
+              <p class="amount">INR 4,26,870</p>
+            </div>
+            <span class="pill">UPI linked</span>
+          </div>
+        </article>
+
+        <article class="brand-tile" style="--accent: var(--sbi);">
+          <div class="stripe"></div>
+          <div class="top">
+            <div class="identity">
+              <span class="logo sbi">SBI</span>
+              <div>
+                <strong>SBI</strong>
+                <p class="subtle">Savings Account</p>
+              </div>
+            </div>
+            <div class="actions"><span class="icon">R</span><span class="icon">E</span><span class="icon">D</span></div>
+          </div>
+          <div class="chips">
+            <span class="pill mono">A/C **** 9033</span>
+            <span class="pill mono">IFSC **** 129</span>
+            <span class="pill">Harshit Mehta</span>
+          </div>
+          <div class="bottom">
+            <div>
+              <p class="subtle">Available Balance</p>
+              <p class="amount">INR 82,410</p>
+            </div>
+            <span class="pill">3.0% p.a.</span>
+          </div>
+        </article>
+
+        <article class="brand-tile" style="--accent: var(--icici);">
+          <div class="stripe"></div>
+          <div class="top">
+            <div class="identity">
+              <span class="logo icici">ICICI</span>
+              <div>
+                <strong>ICICI Bank</strong>
+                <p class="subtle">NRE Account</p>
+              </div>
+            </div>
+            <div class="actions"><span class="icon">R</span><span class="icon">E</span><span class="icon">D</span></div>
+          </div>
+          <div class="chips">
+            <span class="pill mono">A/C **** 4421</span>
+            <span class="pill mono">IFSC **** 008</span>
+            <span class="pill">Harshit Mehta</span>
+          </div>
+          <div class="bottom">
+            <div>
+              <p class="subtle">Available Balance</p>
+              <p class="amount">INR 13,64,200</p>
+            </div>
+            <span class="pill">NRE</span>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

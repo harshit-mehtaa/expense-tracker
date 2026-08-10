@@ -1,19 +1,40 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useForm } from 'react-hook-form';
+import { useFieldArray, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Plus, Pencil, Check, X } from 'lucide-react';
+import { Plus, Pencil, Check, X, Trash2, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
-import { investmentsApi } from '@/api/investments';
+import { useAuth } from '@/contexts/AuthContext';
+import { investmentsApi, type RealEstateProperty } from '@/api/investments';
 
 const PROPERTY_TYPES: Record<string, string> = {
   RESIDENTIAL: 'Residential', COMMERCIAL: 'Commercial', LAND: 'Land', PLOT: 'Plot',
 };
+
+const ownerSchema = z.object({
+  userId: z.string().min(1, 'Owner required'),
+  sharePercent: z.coerce.number().positive('Share must be greater than 0').max(100, 'Share cannot exceed 100'),
+});
+
+const ownersSchema = z.array(ownerSchema).min(1, 'Add at least one owner').superRefine((owners, ctx) => {
+  const seen = new Set<string>();
+  owners.forEach((owner, index) => {
+    if (seen.has(owner.userId)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Owner already added', path: [index, 'userId'] });
+    }
+    seen.add(owner.userId);
+  });
+
+  const total = owners.reduce((sum, owner) => sum + Number(owner.sharePercent || 0), 0);
+  if (Math.abs(total - 100) > 0.01) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Owner shares must add up to 100%' });
+  }
+});
 
 const propertySchema = z.object({
   propertyType: z.string(),
@@ -24,25 +45,58 @@ const propertySchema = z.object({
   purchaseDate: z.string(),
   rentalIncomeMonthly: z.coerce.number().optional(),
   notes: z.string().optional(),
+  owners: ownersSchema,
 });
 
+const ownersEditorSchema = z.object({ owners: ownersSchema });
+
 type PropertyForm = z.infer<typeof propertySchema>;
+type OwnersForm = z.infer<typeof ownersEditorSchema>;
 
 export default function RealEstatePage() {
   const qc = useQueryClient();
+  const { user } = useAuth();
   const [showPropertyForm, setShowPropertyForm] = useState(false);
+  const [editingProperty, setEditingProperty] = useState<RealEstateProperty | null>(null);
   const [editingREId, setEditingREId] = useState<string | null>(null);
   const [editREValue, setEditREValue] = useState('');
+  const [editingOwnersProperty, setEditingOwnersProperty] = useState<RealEstateProperty | null>(null);
 
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
   const isViewingFamilyWide = isAdmin && !viewUserId;
+  const ownerOptions = useMemo(() => {
+    const byId = new Map<string, { id: string; name: string }>();
+    if (user) byId.set(user.id, { id: user.id, name: user.name });
+    members.forEach((member) => byId.set(member.id, { id: member.id, name: member.name }));
+    return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [members, user]);
+
+  const getDefaultOwnerRows = () => [{ userId: viewUserId ?? user?.id ?? ownerOptions[0]?.id ?? '', sharePercent: 100 }];
+  const getDefaultPropertyValues = () => ({
+    propertyType: 'RESIDENTIAL',
+    propertyName: '',
+    location: '',
+    purchasePrice: '',
+    currentValue: '',
+    purchaseDate: '',
+    rentalIncomeMonthly: '',
+    notes: '',
+    owners: getDefaultOwnerRows(),
+  }) as any;
 
   const { data: reData } = useQuery({
     queryKey: ['realestate', viewUserId],
     queryFn: () => investmentsApi.getRealEstate(viewUserId ? { targetUserId: viewUserId } : undefined),
   });
 
-  const propertyForm = useForm<PropertyForm>({ resolver: zodResolver(propertySchema), defaultValues: { propertyType: 'RESIDENTIAL' } });
+  const propertyForm = useForm<PropertyForm>({ resolver: zodResolver(propertySchema), defaultValues: getDefaultPropertyValues() });
+  const propertyOwnerFields = useFieldArray({ control: propertyForm.control, name: 'owners' });
+  const ownersForm = useForm<OwnersForm>({ resolver: zodResolver(ownersEditorSchema), defaultValues: { owners: getDefaultOwnerRows() } });
+  const editOwnerFields = useFieldArray({ control: ownersForm.control, name: 'owners' });
+  const propertyOwners = propertyForm.watch('owners') ?? [];
+  const editOwners = ownersForm.watch('owners') ?? [];
+  const propertyOwnerTotal = propertyOwners.reduce((sum, owner) => sum + Number(owner.sharePercent || 0), 0);
+  const editOwnerTotal = editOwners.reduce((sum, owner) => sum + Number(owner.sharePercent || 0), 0);
 
   const invalidateRE = () => qc.invalidateQueries({ queryKey: ['realestate'] });
 
@@ -53,12 +107,66 @@ export default function RealEstatePage() {
   });
 
   const createPropertyMutation = useMutation({
-    mutationFn: (data: PropertyForm) => investmentsApi.createRealEstate(data),
-    onSuccess: () => { invalidateRE(); setShowPropertyForm(false); propertyForm.reset(); },
+    mutationFn: (data: PropertyForm) => investmentsApi.createRealEstate(data, viewUserId ? { targetUserId: viewUserId } : undefined),
+    onSuccess: () => { invalidateRE(); setShowPropertyForm(false); setEditingProperty(null); propertyForm.reset(getDefaultPropertyValues()); },
+  });
+
+  const updatePropertyMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: PropertyForm }) => investmentsApi.updateRealEstate(id, data),
+    onSuccess: () => { invalidateRE(); setShowPropertyForm(false); setEditingProperty(null); propertyForm.reset(getDefaultPropertyValues()); },
+  });
+
+  const updateOwnersMutation = useMutation({
+    mutationFn: ({ id, owners }: { id: string; owners: OwnersForm['owners'] }) =>
+      investmentsApi.updateRealEstate(id, { owners }),
+    onSuccess: () => { invalidateRE(); setEditingOwnersProperty(null); },
   });
 
   const properties = reData?.properties ?? [];
   const reSummary = reData?.summary;
+
+  const getNextOwnerId = (owners: { userId: string }[]) =>
+    ownerOptions.find((option) => !owners.some((owner) => owner.userId === option.id))?.id ?? '';
+
+  const openAddPropertyForm = () => {
+    setEditingProperty(null);
+    propertyForm.reset(getDefaultPropertyValues());
+    setShowPropertyForm(true);
+  };
+
+  const openEditPropertyForm = (property: RealEstateProperty) => {
+    setEditingProperty(property);
+    setEditingREId(null);
+    propertyForm.reset({
+      propertyType: property.propertyType,
+      propertyName: property.propertyName,
+      location: property.location,
+      purchasePrice: property.purchasePrice,
+      currentValue: property.currentValue,
+      purchaseDate: property.purchaseDate?.slice(0, 10),
+      rentalIncomeMonthly: property.rentalIncomeMonthly ?? '',
+      notes: property.notes ?? '',
+      owners: property.owners?.length
+        ? property.owners.map((owner) => ({ userId: owner.userId, sharePercent: Number(owner.sharePercent) }))
+        : [{ userId: property.userId || ownerOptions[0]?.id || user?.id || '', sharePercent: 100 }],
+    } as any);
+    setShowPropertyForm(true);
+  };
+
+  const closePropertyForm = () => {
+    setShowPropertyForm(false);
+    setEditingProperty(null);
+    propertyForm.reset(getDefaultPropertyValues());
+  };
+
+  const openOwnersEditor = (property: RealEstateProperty) => {
+    setEditingOwnersProperty(property);
+    ownersForm.reset({
+      owners: property.owners?.length
+        ? property.owners.map((owner) => ({ userId: owner.userId, sharePercent: Number(owner.sharePercent) }))
+        : [{ userId: property.userId || ownerOptions[0]?.id || user?.id || '', sharePercent: 100 }],
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -85,7 +193,7 @@ export default function RealEstatePage() {
           )}
         </div>
         {!isViewingFamilyWide && (
-          <Button size="sm" onClick={() => setShowPropertyForm(true)}><Plus className="h-4 w-4 mr-1" /> Add Property</Button>
+          <Button size="sm" onClick={openAddPropertyForm}><Plus className="h-4 w-4 mr-1" /> Add Property</Button>
         )}
       </div>
 
@@ -111,7 +219,7 @@ export default function RealEstatePage() {
       )}
 
       <div className="grid md:grid-cols-2 gap-4">
-        {properties.map((p: any) => (
+        {properties.map((p: RealEstateProperty) => (
           <div key={p.id} className="rounded-lg border bg-card p-5 space-y-3">
             <div className="flex justify-between items-start">
               <div>
@@ -124,12 +232,39 @@ export default function RealEstatePage() {
                   <p className="text-xs text-muted-foreground mt-0.5">{p.userName}</p>
                 )}
               </div>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => openEditPropertyForm(p)} title="Edit property">
+                  <Pencil className="h-4 w-4 mr-1" /> Edit
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => openOwnersEditor(p)} title="Edit owners">
+                  <Users className="h-4 w-4 mr-1" /> Owners
+                </Button>
+              </div>
             </div>
+            {p.owners?.length > 0 && (
+              <div className="rounded-md bg-muted/40 px-3 py-2">
+                <p className="text-xs font-medium text-muted-foreground mb-1">Owners</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {p.owners.map((owner) => (
+                    <span key={owner.userId} className="text-xs rounded-full border bg-background px-2 py-0.5">
+                      {owner.name || owner.email || 'Owner'} {owner.sharePercent}%
+                    </span>
+                  ))}
+                </div>
+                {p.sharePercent != null && p.sharePercent < 100 && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    This view counts {p.sharePercent}% of this property:
+                    {' '}
+                    <INRDisplay amount={p.currentValueShare ?? 0} className="text-xs font-medium" />
+                  </p>
+                )}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div><p className="text-muted-foreground">Purchase Price</p><INRDisplay amount={p.purchasePrice} /></div>
               <div>
                 <p className="text-muted-foreground">Current Value</p>
-                {!isViewingFamilyWide && editingREId === p.id ? (
+                {editingREId === p.id ? (
                   <div className="flex items-center gap-1 mt-0.5">
                     <Input
                       type="number"
@@ -153,11 +288,9 @@ export default function RealEstatePage() {
                 ) : (
                   <div className="flex items-center gap-1 group">
                     <INRDisplay amount={p.currentValue} className="text-green-600 font-semibold" />
-                    {!isViewingFamilyWide && (
-                      <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setEditingREId(p.id); setEditREValue(String(p.currentValue)); }} title="Update value">
-                        <Pencil className="h-3 w-3" />
-                      </Button>
-                    )}
+                    <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setEditingREId(p.id); setEditREValue(String(p.currentValue)); }} title="Update value">
+                      <Pencil className="h-3 w-3" />
+                    </Button>
                   </div>
                 )}
               </div>
@@ -178,26 +311,151 @@ export default function RealEstatePage() {
 
       {showPropertyForm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-background rounded-lg border shadow-xl w-full max-w-lg p-6">
-            <h2 className="text-xl font-semibold mb-4">Add Property</h2>
-            <form onSubmit={propertyForm.handleSubmit((data) => createPropertyMutation.mutate(data))} className="space-y-4">
+          <div className="bg-background rounded-lg border shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
+            <h2 className="text-xl font-semibold mb-4">{editingProperty ? 'Edit Property' : 'Add Property'}</h2>
+            <form
+              onSubmit={propertyForm.handleSubmit((data) => {
+                if (editingProperty) updatePropertyMutation.mutate({ id: editingProperty.id, data });
+                else createPropertyMutation.mutate(data);
+              })}
+              className="space-y-4"
+            >
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <Label>Type</Label>
+                  <Label required>Type</Label>
                   <select {...propertyForm.register('propertyType')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                     {Object.entries(PROPERTY_TYPES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                   </select>
                 </div>
-                <div className="space-y-1"><Label>Property Name</Label><Input {...propertyForm.register('propertyName')} placeholder="e.g. Flat 4B, Andheri West" /></div>
-                <div className="space-y-1 col-span-2"><Label>Location</Label><Input {...propertyForm.register('location')} placeholder="City, State" /></div>
-                <div className="space-y-1"><Label>Purchase Price (₹)</Label><Input {...propertyForm.register('purchasePrice')} type="number" /></div>
-                <div className="space-y-1"><Label>Current Value (₹)</Label><Input {...propertyForm.register('currentValue')} type="number" /></div>
-                <div className="space-y-1"><Label>Purchase Date</Label><Input {...propertyForm.register('purchaseDate')} type="date" /></div>
+                <div className="space-y-1"><Label required>Property Name</Label><Input {...propertyForm.register('propertyName')} placeholder="e.g. Flat 4B, Andheri West" /></div>
+                <div className="space-y-1 col-span-2"><Label required>Location</Label><Input {...propertyForm.register('location')} placeholder="City, State" /></div>
+                <div className="space-y-1"><Label required>Purchase Price (₹)</Label><Input {...propertyForm.register('purchasePrice')} type="number" /></div>
+                <div className="space-y-1"><Label required>Current Value (₹)</Label><Input {...propertyForm.register('currentValue')} type="number" /></div>
+                <div className="space-y-1"><Label required>Purchase Date</Label><Input {...propertyForm.register('purchaseDate')} type="date" /></div>
                 <div className="space-y-1"><Label>Monthly Rental (₹)</Label><Input {...propertyForm.register('rentalIncomeMonthly')} type="number" placeholder="0 if not rented" /></div>
+                <div className="space-y-1 col-span-2"><Label>Notes (optional)</Label><Input {...propertyForm.register('notes')} placeholder="Optional" /></div>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label required>Owners</Label>
+                  <span className={`text-xs ${Math.abs(propertyOwnerTotal - 100) <= 0.01 ? 'text-muted-foreground' : 'text-destructive'}`}>
+                    Total {propertyOwnerTotal || 0}%
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {propertyOwnerFields.fields.map((field, index) => (
+                    <div key={field.id} className="grid grid-cols-[1fr_120px_32px] gap-2 items-start">
+                      <div>
+                        <select {...propertyForm.register(`owners.${index}.userId`)} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                          <option value="">Select owner</option>
+                          {ownerOptions.map((owner) => <option key={owner.id} value={owner.id}>{owner.name}</option>)}
+                        </select>
+                        {propertyForm.formState.errors.owners?.[index]?.userId && (
+                          <p className="text-xs text-destructive mt-1">{propertyForm.formState.errors.owners[index]?.userId?.message}</p>
+                        )}
+                      </div>
+                      <div>
+                        <Input {...propertyForm.register(`owners.${index}.sharePercent`)} type="number" min="0" max="100" step="0.01" placeholder="%" />
+                        {propertyForm.formState.errors.owners?.[index]?.sharePercent && (
+                          <p className="text-xs text-destructive mt-1">{propertyForm.formState.errors.owners[index]?.sharePercent?.message}</p>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        disabled={propertyOwnerFields.fields.length === 1}
+                        onClick={() => propertyOwnerFields.remove(index)}
+                        title="Remove owner"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+                {propertyForm.formState.errors.owners?.message && (
+                  <p className="text-xs text-destructive">{propertyForm.formState.errors.owners.message}</p>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => propertyOwnerFields.append({ userId: getNextOwnerId(propertyOwners), sharePercent: 0 })}
+                >
+                  <Plus className="h-4 w-4 mr-1" /> Add Owner
+                </Button>
               </div>
               <div className="flex justify-end gap-3">
-                <Button type="button" variant="outline" onClick={() => { setShowPropertyForm(false); propertyForm.reset(); }}>Cancel</Button>
-                <Button type="submit" disabled={createPropertyMutation.isPending}>Add Property</Button>
+                <Button type="button" variant="outline" onClick={closePropertyForm}>Cancel</Button>
+                <Button type="submit" disabled={createPropertyMutation.isPending || updatePropertyMutation.isPending}>
+                  {createPropertyMutation.isPending || updatePropertyMutation.isPending ? 'Saving…' : editingProperty ? 'Save Property' : 'Add Property'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {editingOwnersProperty && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-background rounded-lg border shadow-xl w-full max-w-xl p-6">
+            <h2 className="text-xl font-semibold mb-1">Edit Owners</h2>
+            <p className="text-sm text-muted-foreground mb-4">{editingOwnersProperty.propertyName}</p>
+            <form
+              onSubmit={ownersForm.handleSubmit((data) => updateOwnersMutation.mutate({ id: editingOwnersProperty.id, owners: data.owners }))}
+              className="space-y-4"
+            >
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label required>Ownership Share</Label>
+                  <span className={`text-xs ${Math.abs(editOwnerTotal - 100) <= 0.01 ? 'text-muted-foreground' : 'text-destructive'}`}>
+                    Total {editOwnerTotal || 0}%
+                  </span>
+                </div>
+                {editOwnerFields.fields.map((field, index) => (
+                  <div key={field.id} className="grid grid-cols-[1fr_120px_32px] gap-2 items-start">
+                    <div>
+                      <select {...ownersForm.register(`owners.${index}.userId`)} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                        <option value="">Select owner</option>
+                        {ownerOptions.map((owner) => <option key={owner.id} value={owner.id}>{owner.name}</option>)}
+                      </select>
+                      {ownersForm.formState.errors.owners?.[index]?.userId && (
+                        <p className="text-xs text-destructive mt-1">{ownersForm.formState.errors.owners[index]?.userId?.message}</p>
+                      )}
+                    </div>
+                    <div>
+                      <Input {...ownersForm.register(`owners.${index}.sharePercent`)} type="number" min="0" max="100" step="0.01" placeholder="%" />
+                      {ownersForm.formState.errors.owners?.[index]?.sharePercent && (
+                        <p className="text-xs text-destructive mt-1">{ownersForm.formState.errors.owners[index]?.sharePercent?.message}</p>
+                      )}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      disabled={editOwnerFields.fields.length === 1}
+                      onClick={() => editOwnerFields.remove(index)}
+                      title="Remove owner"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+                {ownersForm.formState.errors.owners?.message && (
+                  <p className="text-xs text-destructive">{ownersForm.formState.errors.owners.message}</p>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => editOwnerFields.append({ userId: getNextOwnerId(editOwners), sharePercent: 0 })}
+                >
+                  <Plus className="h-4 w-4 mr-1" /> Add Owner
+                </Button>
+              </div>
+              <div className="flex justify-end gap-3">
+                <Button type="button" variant="outline" onClick={() => setEditingOwnersProperty(null)}>Cancel</Button>
+                <Button type="submit" disabled={updateOwnersMutation.isPending}>Save Owners</Button>
               </div>
             </form>
           </div>

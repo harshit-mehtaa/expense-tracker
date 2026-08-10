@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Shield, Plus, Trash2, Edit2, Phone, User, Calendar } from 'lucide-react';
+import { Shield, Plus, Trash2, Edit2, Phone, User, Calendar, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -51,6 +51,11 @@ function getAnnualPremium(policy: InsurancePolicy): number {
   return policy.premiumAmount * (m[policy.premiumFrequency] ?? 1);
 }
 
+function formatDate(value?: string | null): string {
+  if (!value) return '';
+  return new Date(value).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 function policyColor(type: string): string {
   const map: Record<string, string> = {
     TERM_LIFE: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
@@ -66,7 +71,6 @@ export default function InsurancePage() {
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<InsurancePolicy | null>(null);
-  const [showAmortization, setShowAmortization] = useState<string | null>(null);
 
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
   const isViewingFamilyWide = isAdmin && !viewUserId;
@@ -81,7 +85,7 @@ export default function InsurancePage() {
     queryFn: () => insuranceApi.get80D(viewUserId ? { targetUserId: viewUserId } : undefined),
   });
 
-  const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<PolicyForm>({
+  const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm<PolicyForm>({
     resolver: zodResolver(policySchema),
     defaultValues: { policyType: 'TERM_LIFE', premiumFrequency: 'ANNUALLY', is80cEligible: false, is80dEligible: false, isForParents: false },
   });
@@ -89,7 +93,7 @@ export default function InsurancePage() {
   const invalidateInsurance = () => qc.invalidateQueries({ queryKey: ['insurance'] });
 
   const createMutation = useMutation({
-    mutationFn: (data: PolicyForm) => insuranceApi.create(data),
+    mutationFn: (data: PolicyForm) => insuranceApi.create(data, viewUserId ? { targetUserId: viewUserId } : undefined),
     onSuccess: () => { invalidateInsurance(); setShowForm(false); reset(); },
   });
 
@@ -118,6 +122,7 @@ export default function InsurancePage() {
 
   const totalAnnualPremium = policies.reduce((s, p) => s + getAnnualPremium(p), 0);
   const totalSumAssured = policies.reduce((s, p) => s + p.sumAssured, 0);
+  const paidPolicies = policies.filter((p) => p.isPaid).length;
 
   return (
     <div className="space-y-6">
@@ -154,7 +159,7 @@ export default function InsurancePage() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div className="rounded-lg border bg-card p-4">
           <p className="text-sm text-muted-foreground">Total Sum Assured</p>
           <INRDisplay amount={totalSumAssured} short className="text-2xl font-bold" />
@@ -169,6 +174,10 @@ export default function InsurancePage() {
             amount={policies.filter((p) => p.is80cEligible).reduce((s, p) => s + getAnnualPremium(p), 0)}
             className="text-2xl font-bold text-green-600"
           />
+        </div>
+        <div className="rounded-lg border bg-card p-4">
+          <p className="text-sm text-muted-foreground">Paid Policies</p>
+          <p className="text-2xl font-bold text-green-600">{paidPolicies}/{policies.length}</p>
         </div>
         <div className="rounded-lg border bg-card p-4">
           <p className="text-sm text-muted-foreground">80D Deduction</p>
@@ -200,16 +209,14 @@ export default function InsurancePage() {
                     <p className="text-xs text-muted-foreground mt-0.5">{policy.userName}</p>
                   )}
                 </div>
-                {!isViewingFamilyWide && (
-                  <div className="flex gap-1">
-                    <Button variant="ghost" size="icon" onClick={() => startEdit(policy)}>
-                      <Edit2 className="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(policy.id)}>
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
-                  </div>
-                )}
+                <div className="flex gap-1">
+                  <Button variant="ghost" size="icon" onClick={() => startEdit(policy)}>
+                    <Edit2 className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(policy.id)}>
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2 text-sm">
@@ -247,6 +254,11 @@ export default function InsurancePage() {
               )}
 
               <div className="flex gap-2 pt-1">
+                {policy.isPaid && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-800 dark:bg-green-900 dark:text-green-200">
+                    <CheckCircle2 className="h-3 w-3" /> Paid
+                  </span>
+                )}
                 {policy.is80cEligible && (
                   <span className="text-xs bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 px-2 py-0.5 rounded-full">80C</span>
                 )}
@@ -254,6 +266,13 @@ export default function InsurancePage() {
                   <span className="text-xs bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 px-2 py-0.5 rounded-full">80D</span>
                 )}
               </div>
+              {policy.isPaid && (
+                <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800 dark:border-green-900 dark:bg-green-950 dark:text-green-200">
+                  Paid via linked transaction
+                  {policy.lastPaidDate && <> on {formatDate(policy.lastPaidDate)}</>}
+                  {policy.lastPaidAmount != null && <> for <INRDisplay amount={policy.lastPaidAmount} /></>}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -267,57 +286,57 @@ export default function InsurancePage() {
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <Label>Policy Type</Label>
+                  <Label required>Policy Type</Label>
                   <select {...register('policyType')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                     {Object.entries(POLICY_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <Label>Provider Name</Label>
+                  <Label required>Provider Name</Label>
                   <Input {...register('providerName')} placeholder="LIC, HDFC Life…" />
                   {errors.providerName && <p className="text-xs text-destructive">{errors.providerName.message}</p>}
                 </div>
                 <div className="space-y-1">
-                  <Label>Policy Number</Label>
+                  <Label required>Policy Number</Label>
                   <Input {...register('policyNumber')} />
                   {errors.policyNumber && <p className="text-xs text-destructive">{errors.policyNumber.message}</p>}
                 </div>
                 <div className="space-y-1">
-                  <Label>Policy Name</Label>
+                  <Label required>Policy Name</Label>
                   <Input {...register('policyName')} placeholder="e.g., Jeevan Anand" />
                 </div>
                 <div className="space-y-1">
-                  <Label>Sum Assured (₹)</Label>
+                  <Label required>Sum Assured (₹)</Label>
                   <Input {...register('sumAssured')} type="number" />
                 </div>
                 <div className="space-y-1">
-                  <Label>Premium Amount (₹)</Label>
+                  <Label required>Premium Amount (₹)</Label>
                   <Input {...register('premiumAmount')} type="number" />
                 </div>
                 <div className="space-y-1">
-                  <Label>Frequency</Label>
+                  <Label required>Frequency</Label>
                   <select {...register('premiumFrequency')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                     {Object.entries(FREQ_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <Label>Premium Due Day (1-31)</Label>
+                  <Label>Premium Due Day (1-31, optional)</Label>
                   <Input {...register('premiumDueDate')} type="number" min="1" max="31" />
                 </div>
                 <div className="space-y-1">
-                  <Label>Start Date</Label>
+                  <Label required>Start Date</Label>
                   <Input {...register('startDate')} type="date" />
                 </div>
                 <div className="space-y-1">
-                  <Label>End/Maturity Date</Label>
+                  <Label>End/Maturity Date (optional)</Label>
                   <Input {...register('endDate')} type="date" />
                 </div>
                 <div className="space-y-1">
-                  <Label>Nominee Name</Label>
+                  <Label>Nominee Name (optional)</Label>
                   <Input {...register('nomineeName')} />
                 </div>
                 <div className="space-y-1">
-                  <Label>Agent Contact</Label>
+                  <Label>Agent Contact (optional)</Label>
                   <Input {...register('agentContact')} placeholder="+91 98765 43210" />
                 </div>
               </div>
@@ -336,7 +355,7 @@ export default function InsurancePage() {
                 </label>
               </div>
               <div className="space-y-1">
-                <Label>Notes</Label>
+                <Label>Notes (optional)</Label>
                 <Input {...register('notes')} placeholder="Optional notes" />
               </div>
               <div className="flex justify-end gap-3 pt-2">

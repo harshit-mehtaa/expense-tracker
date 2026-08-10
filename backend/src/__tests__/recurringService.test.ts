@@ -26,6 +26,9 @@ vi.mock('../config/prisma', () => {
       create: vi.fn(),
       update: vi.fn(),
     },
+    bankAccount: {
+      update: vi.fn(),
+    },
     $transaction: vi.fn(),
   };
   return { default: mockPrisma, prisma: mockPrisma };
@@ -247,6 +250,7 @@ describe('generateDueRecurringTransactions', () => {
   });
 
   it('happy path: updateMany returns count=1 → creates transaction, returns generated: 1', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
     ruleMock.findMany.mockResolvedValue([MOCK_RULE]);
     ruleMock.updateMany.mockResolvedValue({ count: 1 });
     txMock.create.mockResolvedValue({});
@@ -266,6 +270,7 @@ describe('generateDueRecurringTransactions', () => {
   });
 
   it('processes multiple due rules independently', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
     const rule2 = { ...MOCK_RULE, id: 'rule-2' };
     ruleMock.findMany.mockResolvedValue([MOCK_RULE, rule2]);
     ruleMock.updateMany.mockResolvedValue({ count: 1 });
@@ -281,6 +286,7 @@ describe('generateDueRecurringTransactions', () => {
 
   it('MONTHLY: advances nextRunDate by 1 month', async () => {
     const base = new Date('2024-03-01');
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
     ruleMock.findMany.mockResolvedValue([{ ...MOCK_RULE, frequency: 'MONTHLY', nextRunDate: base }]);
     ruleMock.updateMany.mockResolvedValue({ count: 1 });
     txMock.create.mockResolvedValue({});
@@ -293,6 +299,7 @@ describe('generateDueRecurringTransactions', () => {
 
   it('DAILY: advances nextRunDate by 1 day', async () => {
     const base = new Date('2024-03-15');
+    vi.setSystemTime(new Date('2024-03-15T12:00:00Z'));
     ruleMock.findMany.mockResolvedValue([{ ...MOCK_RULE, frequency: 'DAILY', nextRunDate: base }]);
     ruleMock.updateMany.mockResolvedValue({ count: 1 });
     txMock.create.mockResolvedValue({});
@@ -305,6 +312,7 @@ describe('generateDueRecurringTransactions', () => {
 
   it('WEEKLY: advances nextRunDate by 7 days', async () => {
     const base = new Date('2024-03-01');
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
     ruleMock.findMany.mockResolvedValue([{ ...MOCK_RULE, frequency: 'WEEKLY', nextRunDate: base }]);
     ruleMock.updateMany.mockResolvedValue({ count: 1 });
     txMock.create.mockResolvedValue({});
@@ -317,6 +325,7 @@ describe('generateDueRecurringTransactions', () => {
 
   it('QUARTERLY: advances nextRunDate by 3 months', async () => {
     const base = new Date('2024-01-01');
+    vi.setSystemTime(new Date('2024-01-01T12:00:00Z'));
     ruleMock.findMany.mockResolvedValue([{ ...MOCK_RULE, frequency: 'QUARTERLY', nextRunDate: base }]);
     ruleMock.updateMany.mockResolvedValue({ count: 1 });
     txMock.create.mockResolvedValue({});
@@ -329,6 +338,7 @@ describe('generateDueRecurringTransactions', () => {
 
   it('YEARLY: advances nextRunDate by 1 year', async () => {
     const base = new Date('2024-03-01');
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
     ruleMock.findMany.mockResolvedValue([{ ...MOCK_RULE, frequency: 'YEARLY', nextRunDate: base }]);
     ruleMock.updateMany.mockResolvedValue({ count: 1 });
     txMock.create.mockResolvedValue({});

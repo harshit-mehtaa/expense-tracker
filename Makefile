@@ -4,8 +4,8 @@
 
 start:
 	docker compose up -d
-	@echo "✓ App running at http://localhost"
-	@echo "  Default login: admin@family.local / Admin@1234"
+	@echo "✓ App running at http://localhost:8080"
+	@echo "  Default login: harshit@mehta.local / Admin@1234"
 
 stop:
 	docker compose down

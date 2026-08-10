@@ -5,7 +5,8 @@ import { sendSuccess, sendCreated, sendNoContent } from '../utils/response';
 import { requireAuth } from '../middleware/auth';
 import * as recurringService from '../services/recurringService';
 import { RecurringFrequency } from '@prisma/client';
-import { resolveTargetUserId } from '../utils/resolveTargetUserId';
+import { resolveTargetUserId, resolveWriteUserId } from '../utils/resolveTargetUserId';
+import { recordAuditLog } from '../services/auditService';
 
 const router = Router();
 router.use(requireAuth);
@@ -44,7 +45,15 @@ router.post(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
     const body = createRuleSchema.parse(req.body);
-    const rule = await recurringService.createRecurringRule(req.user!.userId, body);
+    const ownerUserId = await resolveWriteUserId(req);
+    const rule = await recurringService.createRecurringRule(ownerUserId, body);
+    await recordAuditLog({
+      performedByUserId: req.user!.userId,
+      action: 'CREATE',
+      entityType: 'RecurringRule',
+      entityId: rule.id,
+      newValue: rule,
+    });
     sendCreated(res, rule, 'Recurring rule created');
   }),
 );
@@ -53,7 +62,14 @@ router.put(
   '/:id',
   asyncHandler(async (req: Request, res: Response) => {
     const body = updateRuleSchema.parse(req.body);
-    const rule = await recurringService.updateRecurringRule(req.params.id, req.user!.userId, body);
+    const rule = await recurringService.updateRecurringRule(req.params.id, req.user!.userId, body, req.user!.role);
+    await recordAuditLog({
+      performedByUserId: req.user!.userId,
+      action: 'UPDATE',
+      entityType: 'RecurringRule',
+      entityId: rule.id,
+      newValue: rule,
+    });
     sendSuccess(res, rule, 'Recurring rule updated');
   }),
 );
@@ -61,7 +77,13 @@ router.put(
 router.delete(
   '/:id',
   asyncHandler(async (req: Request, res: Response) => {
-    await recurringService.deleteRecurringRule(req.params.id, req.user!.userId);
+    await recurringService.deleteRecurringRule(req.params.id, req.user!.userId, req.user!.role);
+    await recordAuditLog({
+      performedByUserId: req.user!.userId,
+      action: 'DELETE',
+      entityType: 'RecurringRule',
+      entityId: req.params.id,
+    });
     sendNoContent(res);
   }),
 );
@@ -70,7 +92,17 @@ router.delete(
 router.post(
   '/generate',
   asyncHandler(async (req: Request, res: Response) => {
-    const result = await recurringService.generateDueRecurringTransactions(req.user!.userId);
+    const ownerUserId = await resolveWriteUserId(req);
+    const result = await recurringService.generateDueRecurringTransactions(ownerUserId);
+    if (result.generated > 0) {
+      await recordAuditLog({
+        performedByUserId: req.user!.userId,
+        action: 'GENERATE',
+        entityType: 'RecurringRule',
+        entityId: req.user!.userId,
+        newValue: result,
+      });
+    }
     sendSuccess(res, result, `Generated ${result.generated} transaction(s)`);
   }),
 );

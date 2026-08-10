@@ -251,27 +251,27 @@ export default function FamilyMembersPage() {
           <div className="bg-background rounded-lg border shadow-xl w-full max-w-md p-6">
             <h2 className="text-xl font-semibold mb-4">Add Family Member</h2>
             <form onSubmit={handleSubmit((data) => createMutation.mutate(data))} className="space-y-4">
-              <div className="space-y-1"><Label>Name</Label><Input {...register('name')} /></div>
+              <div className="space-y-1"><Label required>Name</Label><Input {...register('name')} /></div>
               <div className="space-y-1">
-                <Label>Email</Label>
+                <Label required>Email</Label>
                 <Input {...register('email')} type="email" />
                 {errors.email && <p className="text-xs text-destructive">{errors.email.message}</p>}
               </div>
               <div className="space-y-1">
-                <Label>Temporary Password</Label>
+                <Label required>Temporary Password</Label>
                 <Input {...register('password')} type="password" />
                 {errors.password && <p className="text-xs text-destructive">{errors.password.message}</p>}
                 <p className="text-xs text-muted-foreground">User will be prompted to change on first login</p>
               </div>
               <div className="space-y-1">
-                <Label>Role</Label>
+                <Label required>Role</Label>
                 <select {...register('role')} className="w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                   <option value="MEMBER">Member</option>
                   <option value="ADMIN">Admin</option>
                 </select>
               </div>
               <div className="space-y-2">
-                <Label>Color Tag</Label>
+                <Label>Color Tag (optional)</Label>
                 <div className="flex gap-2 flex-wrap">
                   {MEMBER_COLORS.map((color) => (
                     <button
@@ -307,17 +307,17 @@ export default function FamilyMembersPage() {
             <h2 className="text-xl font-semibold mb-4">Edit Member Details</h2>
             <form onSubmit={editHandleSubmit((data) => editMutation.mutate({ ...data, id: editUser.id }))} className="space-y-4">
               <div className="space-y-1">
-                <Label>Name</Label>
+                <Label required>Name</Label>
                 <Input {...editRegister('name')} />
                 {editErrors.name && <p className="text-xs text-destructive">{editErrors.name.message}</p>}
               </div>
               <div className="space-y-1">
-                <Label>Email</Label>
+                <Label required>Email</Label>
                 <Input {...editRegister('email')} type="email" />
                 {editErrors.email && <p className="text-xs text-destructive">{editErrors.email.message}</p>}
               </div>
               <div className="space-y-1">
-                <Label>Role</Label>
+                <Label required>Role</Label>
                 <select
                   {...editRegister('role')}
                   disabled={editUser.id === currentUser?.id}
@@ -331,7 +331,7 @@ export default function FamilyMembersPage() {
                 )}
               </div>
               <div className="space-y-2">
-                <Label>Color Tag</Label>
+                <Label>Color Tag (optional)</Label>
                 <div className="flex gap-2 flex-wrap">
                   {MEMBER_COLORS.map((color) => (
                     <button

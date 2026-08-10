@@ -70,7 +70,7 @@ export default function ChangePasswordPage() {
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div className="space-y-1">
-            <Label>Current Password</Label>
+            <Label required>Current Password</Label>
             <Input {...register('currentPassword')} type="password" autoComplete="current-password" />
             {errors.currentPassword && (
               <p className="text-xs text-destructive">{errors.currentPassword.message}</p>
@@ -78,7 +78,7 @@ export default function ChangePasswordPage() {
           </div>
 
           <div className="space-y-1">
-            <Label>New Password</Label>
+            <Label required>New Password</Label>
             <Input {...register('newPassword')} type="password" autoComplete="new-password" />
             {errors.newPassword && (
               <p className="text-xs text-destructive">{errors.newPassword.message}</p>
@@ -86,7 +86,7 @@ export default function ChangePasswordPage() {
           </div>
 
           <div className="space-y-1">
-            <Label>Confirm New Password</Label>
+            <Label required>Confirm New Password</Label>
             <Input {...register('confirmPassword')} type="password" autoComplete="new-password" />
             {errors.confirmPassword && (
               <p className="text-xs text-destructive">{errors.confirmPassword.message}</p>

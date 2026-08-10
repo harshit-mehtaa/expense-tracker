@@ -990,95 +990,94 @@ describe('GET /api/tax/itr2-summary — per-member scoping', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 3: Write endpoint regression — POST/PUT/DELETE always use req.user!.userId
-// (targetUserId query param must be ignored by write routes)
+// SECTION 3: Write endpoint regression — admin creates can target a member, edits use role-based access by ID
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe('Write endpoints ignore targetUserId — always scope to req.user!.userId', () => {
-  it('POST /capital-gains with targetUserId — creates under admin-id', async () => {
+describe('Write endpoints honor admin target creates and role-based edits', () => {
+  it('POST /capital-gains with targetUserId — creates under target member', async () => {
     await request(makeAdminApp())
       .post(`/api/tax/capital-gains?targetUserId=${VALID_TARGET_ID}`)
       .send(VALID_CG);
-    expect(m(cgSvc.createCapitalGain)).toHaveBeenCalledWith('admin-id', expect.any(Object));
+    expect(m(cgSvc.createCapitalGain)).toHaveBeenCalledWith(VALID_TARGET_ID, expect.any(Object));
   });
 
-  it('PUT /capital-gains/:id with targetUserId — updates under admin-id', async () => {
+  it('PUT /capital-gains/:id with targetUserId — updates by ID as admin', async () => {
     await request(makeAdminApp())
       .put(`/api/tax/capital-gains/cg-1?targetUserId=${VALID_TARGET_ID}`)
       .send({ salePrice: 60_000 });
-    expect(m(cgSvc.updateCapitalGain)).toHaveBeenCalledWith('admin-id', 'cg-1', expect.any(Object));
+    expect(m(cgSvc.updateCapitalGain)).toHaveBeenCalledWith('admin-id', 'cg-1', expect.any(Object), 'ADMIN');
   });
 
-  it('DELETE /capital-gains/:id with targetUserId — deletes under admin-id', async () => {
+  it('DELETE /capital-gains/:id with targetUserId — deletes by ID as admin', async () => {
     await request(makeAdminApp())
       .delete(`/api/tax/capital-gains/cg-1?targetUserId=${VALID_TARGET_ID}`);
-    expect(m(cgSvc.deleteCapitalGain)).toHaveBeenCalledWith('admin-id', 'cg-1');
+    expect(m(cgSvc.deleteCapitalGain)).toHaveBeenCalledWith('admin-id', 'cg-1', 'ADMIN');
   });
 
-  it('POST /other-income with targetUserId — creates under admin-id', async () => {
+  it('POST /other-income with targetUserId — creates under target member', async () => {
     await request(makeAdminApp())
       .post(`/api/tax/other-income?targetUserId=${VALID_TARGET_ID}`)
       .send(VALID_OS);
-    expect(m(osSvc.createOtherIncome)).toHaveBeenCalledWith('admin-id', expect.any(Object));
+    expect(m(osSvc.createOtherIncome)).toHaveBeenCalledWith(VALID_TARGET_ID, expect.any(Object));
   });
 
-  it('PUT /other-income/:id with targetUserId — updates under admin-id', async () => {
+  it('PUT /other-income/:id with targetUserId — updates by ID as admin', async () => {
     await request(makeAdminApp())
       .put(`/api/tax/other-income/os-1?targetUserId=${VALID_TARGET_ID}`)
       .send({ amount: 6_000 });
-    expect(m(osSvc.updateOtherIncome)).toHaveBeenCalledWith('admin-id', 'os-1', expect.any(Object));
+    expect(m(osSvc.updateOtherIncome)).toHaveBeenCalledWith('admin-id', 'os-1', expect.any(Object), 'ADMIN');
   });
 
-  it('DELETE /other-income/:id with targetUserId — deletes under admin-id', async () => {
+  it('DELETE /other-income/:id with targetUserId — deletes by ID as admin', async () => {
     await request(makeAdminApp())
       .delete(`/api/tax/other-income/os-1?targetUserId=${VALID_TARGET_ID}`);
-    expect(m(osSvc.deleteOtherIncome)).toHaveBeenCalledWith('admin-id', 'os-1');
+    expect(m(osSvc.deleteOtherIncome)).toHaveBeenCalledWith('admin-id', 'os-1', 'ADMIN');
   });
 
-  it('POST /house-property with targetUserId — creates under admin-id', async () => {
+  it('POST /house-property with targetUserId — creates under target member', async () => {
     await request(makeAdminApp())
       .post(`/api/tax/house-property?targetUserId=${VALID_TARGET_ID}`)
       .send(VALID_HP);
-    expect(m(hpSvc.createHouseProperty)).toHaveBeenCalledWith('admin-id', expect.any(Object));
+    expect(m(hpSvc.createHouseProperty)).toHaveBeenCalledWith(VALID_TARGET_ID, expect.any(Object));
   });
 
-  it('PUT /house-property/:id with targetUserId — updates under admin-id', async () => {
+  it('PUT /house-property/:id with targetUserId — updates by ID as admin', async () => {
     await request(makeAdminApp())
       .put(`/api/tax/house-property/hp-1?targetUserId=${VALID_TARGET_ID}`)
       .send({ usage: 'LET_OUT' });
-    expect(m(hpSvc.updateHouseProperty)).toHaveBeenCalledWith('admin-id', 'hp-1', expect.any(Object));
+    expect(m(hpSvc.updateHouseProperty)).toHaveBeenCalledWith('admin-id', 'hp-1', expect.any(Object), 'ADMIN');
   });
 
-  it('DELETE /house-property/:id with targetUserId — deletes under admin-id', async () => {
+  it('DELETE /house-property/:id with targetUserId — deletes by ID as admin', async () => {
     await request(makeAdminApp())
       .delete(`/api/tax/house-property/hp-1?targetUserId=${VALID_TARGET_ID}`);
-    expect(m(hpSvc.deleteHouseProperty)).toHaveBeenCalledWith('admin-id', 'hp-1');
+    expect(m(hpSvc.deleteHouseProperty)).toHaveBeenCalledWith('admin-id', 'hp-1', 'ADMIN');
   });
 
-  it('POST /foreign-assets with targetUserId — creates under admin-id', async () => {
+  it('POST /foreign-assets with targetUserId — creates under target member', async () => {
     await request(makeAdminApp())
       .post(`/api/tax/foreign-assets?targetUserId=${VALID_TARGET_ID}`)
       .send(VALID_FA);
-    expect(m(faSvc.createForeignAsset)).toHaveBeenCalledWith('admin-id', expect.any(Object));
+    expect(m(faSvc.createForeignAsset)).toHaveBeenCalledWith(VALID_TARGET_ID, expect.any(Object));
   });
 
-  it('PUT /foreign-assets/:id with targetUserId — updates under admin-id', async () => {
+  it('PUT /foreign-assets/:id with targetUserId — updates by ID as admin', async () => {
     await request(makeAdminApp())
       .put(`/api/tax/foreign-assets/fa-1?targetUserId=${VALID_TARGET_ID}`)
       .send({ closingValueINR: 700_000 });
-    expect(m(faSvc.updateForeignAsset)).toHaveBeenCalledWith('admin-id', 'fa-1', expect.any(Object));
+    expect(m(faSvc.updateForeignAsset)).toHaveBeenCalledWith('admin-id', 'fa-1', expect.any(Object), 'ADMIN');
   });
 
-  it('DELETE /foreign-assets/:id with targetUserId — deletes under admin-id', async () => {
+  it('DELETE /foreign-assets/:id with targetUserId — deletes by ID as admin', async () => {
     await request(makeAdminApp())
       .delete(`/api/tax/foreign-assets/fa-1?targetUserId=${VALID_TARGET_ID}`);
-    expect(m(faSvc.deleteForeignAsset)).toHaveBeenCalledWith('admin-id', 'fa-1');
+    expect(m(faSvc.deleteForeignAsset)).toHaveBeenCalledWith('admin-id', 'fa-1', 'ADMIN');
   });
 
-  it('POST /profile with targetUserId — upserts under admin-id', async () => {
+  it('POST /profile with targetUserId — upserts under target member', async () => {
     await request(makeAdminApp())
       .post(`/api/tax/profile?targetUserId=${VALID_TARGET_ID}`)
       .send({ regime: 'NEW' });
-    expect(m(taxSvc.upsertTaxProfile)).toHaveBeenCalledWith('admin-id', expect.any(String), expect.any(Object));
+    expect(m(taxSvc.upsertTaxProfile)).toHaveBeenCalledWith(VALID_TARGET_ID, expect.any(String), expect.any(Object));
   });
 });

@@ -1,14 +1,18 @@
 import crypto from 'crypto';
+import { PaymentMode } from '@prisma/client';
 import Papa from 'papaparse';
 import iconv from 'iconv-lite';
-import pdfParse from 'pdf-parse';
+import * as pdfParseModule from 'pdf-parse';
 
 export interface ParsedTransaction {
   date: Date;
   description: string;
+  remark?: string;
   amount: number;
   type: 'INCOME' | 'EXPENSE';
+  categoryId?: string;
   reference?: string;
+  paymentMode?: PaymentMode;
 }
 
 export interface ParseError {
@@ -22,6 +26,131 @@ export interface ParseResult {
   errors: ParseError[];
   warnings: string[];
   bank: string;
+}
+
+function parseAmount(value: string | undefined): number {
+  const normalized = value?.replace(/,/g, '').trim() || '';
+  if (!normalized) return 0;
+  const amount = parseFloat(normalized);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+const PAYMENT_MODE_RULES: Array<{ mode: PaymentMode; patterns: RegExp[] }> = [
+  { mode: PaymentMode.EMI, patterns: [/\bemi\b/i] },
+  {
+    mode: PaymentMode.AUTO_DEBIT,
+    patterns: [
+      /\bauto[\s-]?debit\b/i,
+      /\bnach\b/i,
+      /\becs\b/i,
+      /\bmandate\b/i,
+      /\bstanding\s+instruction\b/i,
+      /\bsi[-/\s]*(?:mandate|auto|debit|payment|transfer|sip|mf|mutual|insurance|premium|emi)\b/i,
+      /\bautopay\b/i,
+    ],
+  },
+  {
+    mode: PaymentMode.UPI,
+    patterns: [
+      /\bupi(?:\b|[-/0-9])/i,
+      /\bupi[-/]/i,
+      /[-/]\s*upi\b/i,
+      /\b(?:gpay|google\s*pay|phonepe|bharatpe)\b/i,
+      /(?:^|[^a-z0-9._%+-])[a-z0-9._-]{2,}@(okaxis|okhdfcbank|oksbi|okicici|ybl|ibl|axl|upi|paytm|ptaxis|pthdfc|yesbank|barodampay|sbi|hdfcbank|icici|axisbank|kotak|idfcbank|fbl)(?:[^a-z0-9.-]|$)/i,
+    ],
+  },
+  { mode: PaymentMode.IMPS, patterns: [/\bimps(?:\b|[-/0-9])/i] },
+  { mode: PaymentMode.NEFT, patterns: [/\bneft(?:\b|[-/0-9])/i] },
+  { mode: PaymentMode.RTGS, patterns: [/\brtgs(?:\b|[-/0-9])/i] },
+  {
+    mode: PaymentMode.CHEQUE,
+    patterns: [/\bcheque\b/i, /\bcheq\b/i, /\bchq\b/i, /\bclg\b/i, /\bclearing\b/i],
+  },
+  {
+    mode: PaymentMode.CASH,
+    patterns: [
+      /\bcash\b/i,
+      /\batm\b.*\b(?:cash|wdl|withdrawal|withdrawn)\b/i,
+      /\b(?:cash|wdl|withdrawal|withdrawn)\b.*\batm\b/i,
+    ],
+  },
+  {
+    mode: PaymentMode.CARD,
+    patterns: [
+      /\bpos\b/i,
+      /\bvisa\b/i,
+      /\bmastercard\b/i,
+      /\brupay\b/i,
+      /\be[-\s]?com\b/i,
+      /\b(?:debit|credit)\s+card\s+(?:purchase|txn|transaction|pos|swipe)\b/i,
+      /\bcard\s+(?:purchase|txn|transaction|pos|swipe)\b/i,
+    ],
+  },
+];
+
+function inferPaymentModeFromRemark(remark: string): PaymentMode | undefined {
+  const text = remark.trim();
+  if (!text) return undefined;
+
+  const normalized = text.replace(/[_|:]+/g, ' ').replace(/\s+/g, ' ');
+  const searchable = `${text} ${normalized}`;
+
+  return PAYMENT_MODE_RULES.find((rule) => (
+    rule.patterns.some((pattern) => pattern.test(searchable))
+  ))?.mode;
+}
+
+function withInferredPaymentMode(transaction: ParsedTransaction): ParsedTransaction {
+  if (transaction.paymentMode) return transaction;
+
+  const text = [transaction.remark, transaction.description, transaction.reference]
+    .filter((part): part is string => Boolean(part))
+    .join(' ');
+  const paymentMode = inferPaymentModeFromRemark(text);
+
+  return paymentMode ? { ...transaction, paymentMode } : transaction;
+}
+
+function withInferredPaymentModes(result: ParseResult): ParseResult {
+  return {
+    ...result,
+    transactions: result.transactions.map(withInferredPaymentMode),
+  };
+}
+
+function parseBankDate(value: string): Date | null {
+  const dateStr = value.trim();
+  if (!dateStr) return null;
+
+  let match = dateStr.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (match) {
+    const date = new Date(`${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`);
+    return isNaN(date.getTime()) ? null : date;
+  }
+
+  match = dateStr.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
+  if (match) {
+    const year = match[3].length === 2 ? `20${match[3]}` : match[3];
+    const date = new Date(`${year}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`);
+    return isNaN(date.getTime()) ? null : date;
+  }
+
+  match = dateStr.match(/^(\d{1,2})[-\s]([A-Za-z]{3})[-\s](\d{4})$/);
+  if (match) {
+    const date = new Date(`${match[1]} ${match[2]} ${match[3]}`);
+    return isNaN(date.getTime()) ? null : date;
+  }
+
+  const date = new Date(dateStr);
+  return isNaN(date.getTime()) ? null : date;
+}
+
+function findHeaderIndex(headers: string[], patterns: RegExp[]): number {
+  return headers.findIndex((header) => patterns.some((pattern) => pattern.test(header)));
+}
+
+function normalizeHeaders(row: string[]): string[] {
+  return row.map((cell) => cell.trim().toLowerCase().replace(/\s+/g, ' '));
 }
 
 // ─── Bank Parsers ─────────────────────────────────────────────────────────────
@@ -70,10 +199,10 @@ function parseHDFC(rows: string[][]): ParseResult {
       }
 
       if (deposit > 0) {
-        transactions.push({ date, description, amount: deposit, type: 'INCOME', reference: row[2]?.trim() });
+        transactions.push({ date, description, remark: description, amount: deposit, type: 'INCOME', reference: row[2]?.trim() });
       }
       if (withdrawal > 0) {
-        transactions.push({ date, description, amount: withdrawal, type: 'EXPENSE', reference: row[2]?.trim() });
+        transactions.push({ date, description, remark: description, amount: withdrawal, type: 'EXPENSE', reference: row[2]?.trim() });
       }
     /* c8 ignore next 3 -- defensive: standard string/array ops in the try body never throw */
     } catch {
@@ -125,8 +254,8 @@ function parseSBI(rows: string[][]): ParseResult {
         continue;
       }
 
-      if (credit > 0) transactions.push({ date, description, amount: credit, type: 'INCOME', reference: row[3]?.trim() });
-      if (debit > 0) transactions.push({ date, description, amount: debit, type: 'EXPENSE', reference: row[3]?.trim() });
+      if (credit > 0) transactions.push({ date, description, remark: description, amount: credit, type: 'INCOME', reference: row[3]?.trim() });
+      if (debit > 0) transactions.push({ date, description, remark: description, amount: debit, type: 'EXPENSE', reference: row[3]?.trim() });
     /* c8 ignore next 3 -- defensive: standard string/array ops in the try body never throw */
     } catch {
       errors.push({ row: i + 1, message: 'Parse error', raw: row.join(',') });
@@ -140,12 +269,40 @@ function parseICICI(rows: string[][]): ParseResult {
   const transactions: ParsedTransaction[] = [];
   const errors: ParseError[] = [];
   let dataStart = 0;
+  let foundHeader = false;
+  let dateIdx = -1;
+  let descriptionIdx = -1;
+  let referenceIdx = -1;
+  let debitIdx = -1;
+  let creditIdx = -1;
 
   for (let i = 0; i < Math.min(rows.length, 10); i++) {
-    if (rows[i].some((cell) => /transaction date/i.test(cell))) {
+    const headers = normalizeHeaders(rows[i]);
+    if (headers.some((cell) => /transaction date|txn date|value date/.test(cell))) {
+      const transactionDateIdx = findHeaderIndex(headers, [/^transaction date$/, /^txn date$/]);
+      const valueDateIdx = findHeaderIndex(headers, [/^value date$/]);
+      dateIdx = transactionDateIdx >= 0 ? transactionDateIdx : valueDateIdx;
+      const detectedDescriptionIdx = findHeaderIndex(headers, [/description/, /remarks?/, /narration/, /particulars/]);
+      const detectedReferenceIdx = findHeaderIndex(headers, [/ref/, /reference/, /chq/]);
+      const detectedDebitIdx = findHeaderIndex(headers, [/debit/, /withdrawal/, /dr amount/]);
+      const detectedCreditIdx = findHeaderIndex(headers, [/credit/, /deposit/, /cr amount/]);
+      descriptionIdx = detectedDescriptionIdx;
+      referenceIdx = detectedReferenceIdx;
+      debitIdx = detectedDebitIdx;
+      creditIdx = detectedCreditIdx;
       dataStart = i + 1;
+      foundHeader = true;
       break;
     }
+  }
+
+  if (!foundHeader || dateIdx < 0 || descriptionIdx < 0 || (debitIdx < 0 && creditIdx < 0)) {
+    return {
+      transactions,
+      errors: [{ row: 0, message: 'Missing required ICICI CSV headers for date, remarks, debit, and credit columns', raw: '' }],
+      warnings: [],
+      bank: 'ICICI',
+    };
   }
 
   for (let i = dataStart; i < rows.length; i++) {
@@ -153,20 +310,20 @@ function parseICICI(rows: string[][]): ParseResult {
     if (!row[0]?.trim()) continue;
 
     try {
-      // ICICI: Transaction Date | Value Date | Description | Ref | Debit | Credit | Balance
-      const dateStr = row[0].trim();
-      const description = row[2]?.trim() || '';
-      const debit = parseFloat(row[4]?.replace(/,/g, '') || '0');
-      const credit = parseFloat(row[5]?.replace(/,/g, '') || '0');
+      // ICICI variants may include a leading serial-number column.
+      const dateStr = row[dateIdx]?.trim() || '';
+      const description = row[descriptionIdx]?.trim() || '';
+      const debit = debitIdx >= 0 ? parseAmount(row[debitIdx]) : 0;
+      const credit = creditIdx >= 0 ? parseAmount(row[creditIdx]) : 0;
 
-      const date = new Date(dateStr);
-      if (isNaN(date.getTime())) {
+      const date = parseBankDate(dateStr);
+      if (!date) {
         errors.push({ row: i + 1, message: 'Invalid date', raw: row.join(',') });
         continue;
       }
 
-      if (credit > 0) transactions.push({ date, description, amount: credit, type: 'INCOME' });
-      if (debit > 0) transactions.push({ date, description, amount: debit, type: 'EXPENSE' });
+      if (credit > 0) transactions.push({ date, description, remark: description, amount: credit, type: 'INCOME', reference: referenceIdx >= 0 ? row[referenceIdx]?.trim() : undefined });
+      if (debit > 0) transactions.push({ date, description, remark: description, amount: debit, type: 'EXPENSE', reference: referenceIdx >= 0 ? row[referenceIdx]?.trim() : undefined });
     /* c8 ignore next 3 -- defensive: standard string/array ops in the try body never throw */
     } catch {
       errors.push({ row: i + 1, message: 'Parse error', raw: row.join(',') });
@@ -206,8 +363,8 @@ function parseAxis(rows: string[][]): ParseResult {
         continue;
       }
 
-      if (credit > 0) transactions.push({ date, description, amount: credit, type: 'INCOME' });
-      if (debit > 0) transactions.push({ date, description, amount: debit, type: 'EXPENSE' });
+      if (credit > 0) transactions.push({ date, description, remark: description, amount: credit, type: 'INCOME' });
+      if (debit > 0) transactions.push({ date, description, remark: description, amount: debit, type: 'EXPENSE' });
     /* c8 ignore next 3 -- defensive: standard string/array ops in the try body never throw */
     } catch {
       errors.push({ row: i + 1, message: 'Parse error', raw: row.join(',') });
@@ -252,8 +409,8 @@ function parseKotak(rows: string[][]): ParseResult {
         continue;
       }
 
-      if (credit > 0) transactions.push({ date, description, amount: credit, type: 'INCOME' });
-      if (debit > 0) transactions.push({ date, description, amount: debit, type: 'EXPENSE' });
+      if (credit > 0) transactions.push({ date, description, remark: description, amount: credit, type: 'INCOME' });
+      if (debit > 0) transactions.push({ date, description, remark: description, amount: debit, type: 'EXPENSE' });
     /* c8 ignore next 3 -- defensive: standard string/array ops in the try body never throw */
     } catch {
       errors.push({ row: i + 1, message: 'Parse error', raw: row.join(',') });
@@ -302,15 +459,15 @@ export function parseCSV(buffer: Buffer, bankHint?: string): ParseResult {
   const detectedBank = bankHint?.toUpperCase() || detectBank(headerText);
 
   switch (detectedBank) {
-    case 'HDFC': return parseHDFC(rows);
-    case 'SBI': return parseSBI(rows);
-    case 'ICICI': return parseICICI(rows);
-    case 'AXIS': return parseAxis(rows);
-    case 'KOTAK': return parseKotak(rows);
+    case 'HDFC': return withInferredPaymentModes(parseHDFC(rows));
+    case 'SBI': return withInferredPaymentModes(parseSBI(rows));
+    case 'ICICI': return withInferredPaymentModes(parseICICI(rows));
+    case 'AXIS': return withInferredPaymentModes(parseAxis(rows));
+    case 'KOTAK': return withInferredPaymentModes(parseKotak(rows));
     default: {
       // Generic: try to find date + amount columns
       const warnings = ['Bank not detected — using generic parser. Review imported transactions carefully.'];
-      return { ...parseICICI(rows), bank: 'GENERIC', warnings };
+      return withInferredPaymentModes({ ...parseICICI(rows), bank: 'GENERIC', warnings });
     }
   }
 }
@@ -429,10 +586,22 @@ export async function parsePDF(
   password?: string,
 ): Promise<ParseResult> {
   let rawText: string;
+  let parser: { getText: () => Promise<{ text: string }>; destroy: () => Promise<void> } | undefined;
   try {
-    const options: { password?: string; max?: number } = { max: 0 };
-    if (password) options.password = password;
-    const data = await pdfParse(buffer, options);
+    let PDFParseCtor: any;
+    try {
+      PDFParseCtor = (pdfParseModule as any).PDFParse;
+    } catch {
+      PDFParseCtor = undefined;
+    }
+    let data: { text: string };
+    if (PDFParseCtor) {
+      parser = new PDFParseCtor({ data: new Uint8Array(buffer), password });
+      data = await parser!.getText();
+    } else {
+      const pdfParse = (pdfParseModule as any).default ?? pdfParseModule;
+      data = await pdfParse(buffer, { password, max: 0 });
+    }
     rawText = data.text;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -450,6 +619,8 @@ export async function parsePDF(
       warnings: [],
       bank: 'UNKNOWN',
     };
+  } finally {
+    await parser?.destroy();
   }
 
   const trimmedText = rawText.trim();
@@ -529,7 +700,7 @@ export async function parsePDF(
     /* c8 ignore next -- extractAmounts only pushes val > 0, so amount <= 0 is structurally unreachable */
     if (amount <= 0) continue;
 
-    transactions.push({ date, description, amount, type });
+    transactions.push({ date, description, remark: description, amount, type });
   }
 
   if (transactions.length === 0 && errors.length === 0) {
@@ -540,7 +711,7 @@ export async function parsePDF(
     });
   }
 
-  return { transactions, errors, warnings: transactions.length > 0 ? warnings : [], bank };
+  return withInferredPaymentModes({ transactions, errors, warnings: transactions.length > 0 ? warnings : [], bank });
 }
 
 // ─── Import Hash ──────────────────────────────────────────────────────────────
