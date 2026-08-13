@@ -5,20 +5,24 @@
     "",
     "    mkdir -p ~/.pi/agent && cp .pi/models.example.json ~/.pi/agent/models.json",
     "",
-    "Sized for a laptop RTX 5070 Ti (12 GB VRAM). See the VRAM budget table in",
-    ".claude/memory/cost-routing.md for the arithmetic behind these choices.",
+    "Sized for a laptop RTX 5070 Ti (12 GB VRAM). qwen3.5:9b is 6.6 GB at q4_K_M with a",
+    "256K native context; its hybrid DeltaNet/Attention stack means long context costs far",
+    "less memory than on a dense transformer. See .claude/memory/cost-routing.md.",
     "",
-    "Pull first:",
-    "    ollama pull qwen2.5-coder:14b     # 9.0 GB — all three tiers",
-    "    ollama pull qwen2.5-coder:7b      # 4.7 GB — optional override",
+    "Setup:",
+    "    ollama pull qwen3.5:9b",
+    "    export OLLAMA_MAX_LOADED_MODELS=1",
     "",
-    "And set these before starting ollama:",
-    "    export OLLAMA_KV_CACHE_TYPE=q8_0      # halves KV cache; 14B needs it at 12 GB",
-    "    export OLLAMA_MAX_LOADED_MODELS=1     # never hold two models at once",
+    "CONTEXT LENGTH. Ollama does not serve the native 256K by default, and pi reaches it",
+    "over the OpenAI-compatible API, which has no field to request a context size. Setting",
+    "it per-model here would NOT work. Bake it into a derived tag instead:",
     "",
-    "num_ctx is the setting that decides whether this fits. 14B at 16384 with a q8_0 KV",
-    "cache lands near 10.6 GB total. Raising it much past 20k spills into system RAM and",
-    "throughput collapses — watch `ollama ps` if generation suddenly crawls."
+    "    printf 'FROM qwen3.5:9b\\nPARAMETER num_ctx 65536\\n' > Modelfile",
+    "    ollama create qwen3.5:9b-64k -f Modelfile",
+    "",
+    "then use qwen3.5:9b-64k below and in the pi row of the tier map. Verify with",
+    "`ollama ps` — if the reported size nears 12 GB, lower num_ctx before it spills to",
+    "system RAM and throughput collapses."
   ],
   "providers": {
     "ollama": {
@@ -31,18 +35,16 @@
       },
       "models": [
         {
-          "id": "qwen2.5-coder:14b",
-          "name": "Qwen2.5 Coder 14B (all tiers, 12 GB card)",
-          "options": {
-            "num_ctx": 16384
-          }
+          "id": "qwen3.5:9b-64k",
+          "name": "Qwen3.5 9B @ 64k (all tiers)"
         },
         {
-          "id": "qwen2.5-coder:7b",
-          "name": "Qwen2.5 Coder 7B (optional: full 32k context, lower quality)",
-          "options": {
-            "num_ctx": 32768
-          }
+          "id": "qwen3.5:9b",
+          "name": "Qwen3.5 9B (stock context — see note above)"
+        },
+        {
+          "id": "qwen3.5:4b",
+          "name": "Qwen3.5 4B (optional cheaper fast tier)"
         }
       ]
     }

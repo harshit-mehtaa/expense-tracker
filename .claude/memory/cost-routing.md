@@ -29,7 +29,7 @@ The value must match a **Platform** row below.
 | Platform | `fast` | `balanced` | `strong` |
 |---|---|---|---|
 | `claude-code` | `haiku` | `opus` | `opus` (omit the param to inherit the session model) |
-| `pi` | `qwen2.5-coder:14b` | `qwen2.5-coder:14b` | `qwen2.5-coder:14b` |
+| `pi` | `qwen3.5:9b` | `qwen3.5:9b` | `qwen3.5:9b` |
 | `codex` | `gpt-5.4-mini` | `gpt-5.4` | `gpt-5.5` |
 | `cursor` | `cursor-small` | `cursor-medium` | `cursor-large` |
 
@@ -40,51 +40,59 @@ change when you swap a model: the skills only ever ask for a tier, and
 
 ### Why all three `pi` tiers point at one model
 
-Sized for the target machine: a laptop RTX 5070 Ti, **12 GB VRAM**.
+Sized for the target machine: a laptop RTX 5070 Ti, **12 GB VRAM**, already running
+`qwen3.5:9b`.
 
-| Model (Q4_K_M) | Weights | KV/token | KV @32k | Total @32k |
-|---|---|---|---|---|
-| `qwen2.5-coder:7b` (28 layers, 4 KV heads) | 4.7 GB | ~56 KiB | 1.8 GB | **6.5 GB** — fits easily |
-| `qwen2.5-coder:14b` (48 layers, 8 KV heads) | 9.0 GB | ~192 KiB | 6.3 GB | **15.3 GB** — does not fit |
-| `qwen2.5-coder:32b` | 20 GB | — | — | far too large |
+| Model (q4_K_M) | Weights | Native context | Verdict |
+|---|---|---|---|
+| **`qwen3.5:9b`** | **6.6 GB** | **256K** | chosen — ~5 GB headroom on a 12 GB card |
+| `qwen3.5:4b` | 3.4 GB | 256K | fallback if 9b is too slow |
+| `qwen3.5:27b` | 17 GB | 256K | too large |
+| `qwen2.5-coder:14b` | 9.0 GB | 32K | superseded: bigger *and* 8× less context |
 
-14B is the quality ceiling that fits at all, but only with a reduced context: with
-`q8_0` KV cache at 16k it lands near **10.6 GB**, leaving ~1.4 GB for the desktop.
-KV figures are computed from published layer/head counts, not measured — confirm with
-`ollama ps` once it is running.
+qwen3.5 uses a hybrid `8×(3×DeltaNet→FFN→1×Attention→FFN)` stack, so only one block in
+four is full attention and the DeltaNet blocks carry a fixed-size recurrent state rather
+than a growing KV cache. Long context therefore costs far less memory here than on a
+conventional dense transformer, which is what makes 256K viable on a laptop GPU.
 
-**The tiers must share one model**, because `aco-agent` spawns `pi -p` while the parent
-session is still resident. Parent on 14B plus a sub-agent on 7B means 13.7 GB of weights
-at once: either a spill into system RAM, or a load/unload cycle on every sub-agent call.
-One model keeps a single set of weights hot.
+**The tiers share one model** because `aco-agent` spawns `pi -p` while the parent session
+is still resident. Two different tier models means two sets of weights loaded at once —
+a spill into system RAM, or a load/unload cycle on every sub-agent call. With one model
+the weights stay hot across the whole pipeline.
 
-To trade quality for context on a specific run, override per invocation rather than
-editing this table:
+`qwen3.5:4b` (3.4 GB) is small enough to sit alongside 9b within 12 GB if you ever want a
+genuinely cheaper `fast` tier, but it leaves little room for context on both. Prefer a
+per-run override:
 
 ```sh
-ACO_MODEL_FAST=qwen2.5-coder:7b .claude/bin/aco-agent fast - <<'PROMPT'
+ACO_MODEL_FAST=qwen3.5:4b .claude/bin/aco-agent fast - <<'PROMPT'
 ...
 PROMPT
 ```
 
-That still costs a model swap, so it is worth it for a long exploration and not for a
-one-line lookup.
-
 ### Setup on the 12 GB machine
 
 ```sh
-ollama pull qwen2.5-coder:14b          # 9.0 GB — all three tiers
-ollama pull qwen2.5-coder:7b           # 4.7 GB — optional, for context-heavy overrides
-
-# Halve KV cache memory; without this 14B cannot reach a useful context on 12 GB.
-export OLLAMA_KV_CACHE_TYPE=q8_0
-# Keep only one model resident so a sub-agent call cannot force a co-resident pair.
-export OLLAMA_MAX_LOADED_MODELS=1
+ollama pull qwen3.5:9b                 # 6.6 GB — all three tiers
+export OLLAMA_MAX_LOADED_MODELS=1      # never hold two models at once
 ```
 
-Set the context in `~/.pi/agent/models.json` (see `.pi/models.example.json`) to **16384**
-for 14B. Raising it past ~20k on this card will start spilling into system RAM, at which
-point tokens/sec collapses — that is the symptom to watch for.
+`OLLAMA_KV_CACHE_TYPE=q8_0` is optional here rather than required — it buys extra headroom
+if you push context very high, at some quality cost.
+
+**Set the context explicitly.** Ollama does not serve a model's native window by default;
+it applies its own (small) default unless told otherwise, and pi talks to it over the
+OpenAI-compatible API, which has no field for it. Bake it into a derived tag:
+
+```sh
+printf 'FROM qwen3.5:9b\nPARAMETER num_ctx 65536\n' > Modelfile
+ollama create qwen3.5:9b-64k -f Modelfile
+```
+
+then set the `pi` row above to `qwen3.5:9b-64k`. 64k is a deliberate starting point, not a
+limit — the model goes to 256K, but VRAM is what constrains it. Raise it and watch
+`ollama ps`: once the reported size approaches 12 GB you are about to spill into system
+RAM, and throughput collapses when you do.
 
 ## Sub-agents on pi
 
@@ -138,11 +146,13 @@ Qwen — especially a quantised 7B on modest hardware — has a shorter context 
 weaker long-instruction adherence. Expect degradation, and prefer a smaller pipeline over
 a pipeline that silently truncates:
 
-- **Context.** `reviewer-adversarial.md` is the largest agent definition, and the REVIEW
-  phase additionally pastes the diff, every design/verification question, and
-  `bug-patterns.md`. On a short-context model this overflows and the tail is dropped —
-  which is worse than not running it, because the output still looks complete. Prefer
-  Tier 1 review (quality only) unless the model has ≥64k usable context.
+- **Context — no longer the binding constraint.** This section originally advised skipping
+  the adversarial review because a short window would silently truncate the brief. With
+  `qwen3.5:9b` at a 64k `num_ctx` (256K native) that no longer applies: the largest brief
+  in the pipeline is `reviewer-adversarial.md` plus the diff, the questions and
+  `bug-patterns.md`, which fits comfortably. Run the full REVIEW tier. Do still check that
+  `num_ctx` was actually applied — if it silently fell back to Ollama's small default, a
+  long brief gets truncated and the agent still answers confidently, which reads as a pass.
 - **Structured output.** The pipeline depends on agents returning specific section
   headings and verdict tokens (`SOUND` / `NEEDS_WORK` / `RISKY`, `PASS` / `FAIL`). Smaller
   models drift from these. If verdict parsing misbehaves, that is the cause.
@@ -154,6 +164,9 @@ a pipeline that silently truncates:
   entire value is catching what the primary pass missed. A weak model here produces
   confident, empty findings — worse than skipping the agent, because it reads as a pass.
 
-Suggested profile when `ACO_PLATFORM=pi` with a small local model: run ANALYZE, PLAN,
-IMPLEMENT and a Tier 1 REVIEW; skip `plan-challenger` and `reviewer-adversarial`; do the
-adversarial pass later on a frontier-model machine before merging.
+Suggested profile when `ACO_PLATFORM=pi` on the 12 GB machine: run the full pipeline
+including `plan-challenger` and `reviewer-adversarial`, but treat their *findings* as
+leads rather than conclusions — verify each against the code before acting, which the
+Co-Founder Filter in the REVIEW phase already requires. For genuinely high-risk work
+(auth, money handling, migrations), still take the adversarial pass on a frontier-model
+machine before merging: the failure mode there is a missed finding, which is invisible.
