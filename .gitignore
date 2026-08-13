@@ -49,10 +49,10 @@ backups/
 #
 # The bare `logs/` rule above (intended for application logs) also matches
 # .claude/memory/logs/, which would drop the error and success journals the
-# self-improvement loop reads. Re-include the directory, then ignore only the
-# per-session telemetry, which is machine-local and would conflict constantly.
+# self-improvement loop reads. Re-include the whole directory: nothing under
+# .claude/memory/logs/ is ignored, telemetry included.
 !.claude/memory/logs/
-.claude/memory/logs/sessions-*.jsonl
+!.claude/memory/logs/**
 .claude/settings.local.json
 
 # Coverage
