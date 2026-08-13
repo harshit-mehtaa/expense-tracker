@@ -208,7 +208,8 @@ make restart        # Stop and restart
 make build          # Rebuild all images (no cache)
 make reset-db       # ⚠️  Wipe database and restart (confirmation required)
 make seed           # Re-run seed script (safe — skips if admin already exists)
-make migrate        # Run pending Prisma migrations
+make migrate        # Create a new migration after editing schema.prisma
+make generate       # Regenerate the Prisma client after a schema edit while running
 make backup-db      # Backup database to backups/backup_TIMESTAMP.sql
 make restore-db FILE=backups/backup_xxx.sql  # Restore from backup
 make logs           # Tail all container logs
@@ -310,12 +311,107 @@ make start
 # View logs
 make logs
 
-# Run backend tests
-docker compose exec backend npm test
-
 # Access database directly
 make shell-db
+
+# Regenerate the Prisma client after editing schema.prisma while running
+make generate
 ```
+
+### Before you commit
+
+CI runs exactly this set, and the publish jobs will not run if it fails:
+
+```bash
+cd backend  && npx tsc --noEmit && npm run test
+cd frontend && npm run lint && npx tsc --noEmit && npm run test
+```
+
+Frontend lint is not cosmetic here — `react-hooks/rules-of-hooks` has already caught a
+conditional hook that `tsc` and a green test suite both missed, and which would have
+crashed a page at runtime. Unit tests in this repo do not render components.
+
+> Backend coverage is ~93%, below the 100% `vitest.config.ts` asks for:
+> `routes/documents.ts`, `routes/categoryRules.ts` and `services/categoryRuleService.ts`
+> are at 0%. CI therefore gates on `npm run test`, not `test:coverage`.
+
+---
+
+## AI Coding Orchestrator
+
+The repo carries an agent pipeline in `.claude/` — `ANALYZE → PLAN → APPROVE → IMPLEMENT
+→ REVIEW → COMMIT`, driven by `/task <description>`. It is tracked in git, so it travels
+with a clone, and it is not tied to one agent CLI: every model choice is indirected
+through a **tier** (`fast` / `balanced` / `strong`) that each machine maps to its own
+models.
+
+Read `.claude/CLAUDE.md` for the full picture; `AGENTS.md` at the repo root is the entry
+point for harnesses that look for that name.
+
+### Setup per harness
+
+**Claude Code** — nothing to do. `.claude/settings.json` registers the hooks and the
+platform is autodetected.
+
+**pi** — three steps:
+
+```bash
+# 1. Name the platform. pi exports no documented session env vars, so autodetection
+#    cannot be relied on; this is what selects the pi row of the tier map.
+export ACO_PLATFORM=pi          # add to your shell profile
+
+# 2. Point pi at your local models.
+mkdir -p ~/.pi/agent && cp .pi/models.example.json ~/.pi/agent/models.json
+
+# 3. Give the model a usable context window. Ollama does not serve the native window by
+#    default, and pi reaches it over the OpenAI-compatible API, which cannot request one.
+printf 'FROM qwen3.5:9b\nPARAMETER num_ctx 65536\n' > Modelfile
+ollama create qwen3.5:9b-64k -f Modelfile
+export OLLAMA_MAX_LOADED_MODELS=1
+```
+
+Then set the `pi` row of the tier map in `.claude/memory/cost-routing.md` to the tag you
+created. The hooks need no registration — `.pi/extensions/aco.ts` is project-local and
+pi auto-discovers it, binding `session_start`, `tool_result`, `turn_end` and `agent_end`
+to the same bash scripts Claude Code uses.
+
+**Cursor / Codex** — autodetected. Add a row for them to the tier map if you use them.
+
+### Models
+
+`.claude/memory/cost-routing.md` is the single place a machine declares what its tiers
+run. The current `pi` row targets a 12 GB laptop GPU:
+
+| Tier | Claude Code | pi |
+|---|---|---|
+| `fast` | `haiku` | `qwen3.5:9b` |
+| `balanced` | `opus` | `qwen3.5:9b` |
+| `strong` | `opus` | `qwen3.5:9b` |
+
+All three pi tiers share one model deliberately: sub-agents are spawned as separate `pi`
+processes while the parent session is still resident, so two tier models would mean two
+sets of weights loaded at once. That file explains the VRAM arithmetic.
+
+### Sub-agents
+
+Claude Code delegates with its Task tool. pi has no sub-agent primitive, so use the shim,
+which resolves the tier and runs `pi -p --no-session --model <model>`:
+
+```bash
+.claude/bin/aco-agent balanced - <<'PROMPT'
+You are an adversarial plan reviewer. Read .claude/agents/plan-challenger.md for your
+full instructions.
+...
+PROMPT
+```
+
+> The pi runner and extension were written from pi's documentation without a live install
+> to test against. Expect the first run to need small corrections — most likely to event
+> payload field names in `.pi/extensions/aco.ts`. Both fail silently rather than break the
+> agent loop.
+
+**Never name a model in a skill or agent file** — ask for a tier. A hardcoded model name
+breaks the pipeline on every machine that does not run that model.
 
 ---
 
