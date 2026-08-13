@@ -1,10 +1,33 @@
 # Task Progress
 
 ## Status: idle
-## Last Task: Push work, add CI quality gate + missing ESLint config
-## Last Completed: 2026-08-10
+## Last Task: Make the orchestrator portable; add pi/Qwen support
+## Last Completed: 2026-08-13
 ## Steps Completed: all
-## Commits pushed to origin/main: b738193, dab4c40, aad140d, e6a7488
+## Commits pushed to origin/main: b738193, dab4c40, aad140d, e6a7488, c8f1658
+
+## pi harness — verified facts (from pi.dev docs, 2026-08-13)
+- NO sub-agent primitive. Workaround: `pi -p --no-session --no-context-files
+  --model <id> "<prompt>"` via .claude/bin/aco-agent. Better than the tmux the docs suggest.
+- NO hook config. Extensions are TypeScript, auto-discovered from `.pi/extensions/*.ts`
+  (project-local, travels in git) or `~/.pi/agent/extensions/`. Events used:
+  session_start, tool_result, turn_end, agent_end. Full list also has tool_call,
+  before_agent_start, session_shutdown, before_provider_request, model_select, etc.
+- READS BOTH AGENTS.md AND CLAUDE.md (`--no-context-files` disables exactly those two).
+  The pi.dev landing page claiming no CLAUDE.md support is wrong.
+- Models: `~/.pi/agent/models.json` (NOT in-repo). Ollama via baseUrl
+  http://localhost:11434/v1, api "openai-completions". Qwen thinking needs
+  thinkingFormat "qwen-chat-template".
+- Flags: -p/--print, --model, --provider, --thinking, --no-session,
+  --no-context-files/-nc, --tools/-t, --exclude-tools/-xt, --no-builtin-tools/-nbt,
+  --no-tools/-nt, --mode json|rpc.
+- No documented session env vars -> ACO_PLATFORM override is the reliable detection path.
+  The PI_* sniffing in portable.sh is a labelled guess behind that override.
+
+## UNTESTED — first thing to check on the pi machine
+.claude/bin/aco-agent and .pi/extensions/aco.ts were written from docs with no live pi.
+Most likely break: event payload field names in aco.ts (file path / tool name extraction).
+Debug by logging JSON.stringify(event) in the handler. Both fail silently by design.
 
 ## Key learning — validation gap that mattered
 The member-avatar change passed `tsc`, 156 unit tests, and a grep of the served module,
