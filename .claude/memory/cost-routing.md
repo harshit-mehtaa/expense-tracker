@@ -29,17 +29,62 @@ The value must match a **Platform** row below.
 | Platform | `fast` | `balanced` | `strong` |
 |---|---|---|---|
 | `claude-code` | `haiku` | `opus` | `opus` (omit the param to inherit the session model) |
-| `pi` | `qwen2.5-coder:7b` | `qwen2.5-coder:32b` | `qwen2.5-coder:32b` |
+| `pi` | `qwen2.5-coder:14b` | `qwen2.5-coder:14b` | `qwen2.5-coder:14b` |
 | `codex` | `gpt-5.4-mini` | `gpt-5.4` | `gpt-5.5` |
 | `cursor` | `cursor-small` | `cursor-medium` | `cursor-large` |
 
-**The `pi` model IDs above are examples.** Replace them with whatever that machine
-actually serves — `ollama list` shows what is pulled, and the IDs must match entries in
-`~/.pi/agent/models.json` (start from `.pi/models.example.json`). Nothing else needs to
-change: the skills only ever ask for a tier, and `.claude/bin/aco-agent` reads this table.
+The IDs must match entries in `~/.pi/agent/models.json` (start from
+`.pi/models.example.json`); `ollama list` shows what is pulled. Nothing else needs to
+change when you swap a model: the skills only ever ask for a tier, and
+`.claude/bin/aco-agent` reads this table.
 
-If the machine can only run one model, point all three tiers at it and read the
-degradation notes at the end of this file before running the full pipeline.
+### Why all three `pi` tiers point at one model
+
+Sized for the target machine: a laptop RTX 5070 Ti, **12 GB VRAM**.
+
+| Model (Q4_K_M) | Weights | KV/token | KV @32k | Total @32k |
+|---|---|---|---|---|
+| `qwen2.5-coder:7b` (28 layers, 4 KV heads) | 4.7 GB | ~56 KiB | 1.8 GB | **6.5 GB** — fits easily |
+| `qwen2.5-coder:14b` (48 layers, 8 KV heads) | 9.0 GB | ~192 KiB | 6.3 GB | **15.3 GB** — does not fit |
+| `qwen2.5-coder:32b` | 20 GB | — | — | far too large |
+
+14B is the quality ceiling that fits at all, but only with a reduced context: with
+`q8_0` KV cache at 16k it lands near **10.6 GB**, leaving ~1.4 GB for the desktop.
+KV figures are computed from published layer/head counts, not measured — confirm with
+`ollama ps` once it is running.
+
+**The tiers must share one model**, because `aco-agent` spawns `pi -p` while the parent
+session is still resident. Parent on 14B plus a sub-agent on 7B means 13.7 GB of weights
+at once: either a spill into system RAM, or a load/unload cycle on every sub-agent call.
+One model keeps a single set of weights hot.
+
+To trade quality for context on a specific run, override per invocation rather than
+editing this table:
+
+```sh
+ACO_MODEL_FAST=qwen2.5-coder:7b .claude/bin/aco-agent fast - <<'PROMPT'
+...
+PROMPT
+```
+
+That still costs a model swap, so it is worth it for a long exploration and not for a
+one-line lookup.
+
+### Setup on the 12 GB machine
+
+```sh
+ollama pull qwen2.5-coder:14b          # 9.0 GB — all three tiers
+ollama pull qwen2.5-coder:7b           # 4.7 GB — optional, for context-heavy overrides
+
+# Halve KV cache memory; without this 14B cannot reach a useful context on 12 GB.
+export OLLAMA_KV_CACHE_TYPE=q8_0
+# Keep only one model resident so a sub-agent call cannot force a co-resident pair.
+export OLLAMA_MAX_LOADED_MODELS=1
+```
+
+Set the context in `~/.pi/agent/models.json` (see `.pi/models.example.json`) to **16384**
+for 14B. Raising it past ~20k on this card will start spilling into system RAM, at which
+point tokens/sec collapses — that is the symptom to watch for.
 
 ## Sub-agents on pi
 
