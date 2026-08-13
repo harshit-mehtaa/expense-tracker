@@ -1,0 +1,47 @@
+{
+  "//": [
+    "Template for ~/.pi/agent/models.json — pi reads models.json from its own config dir,",
+    "NOT from the repo, so copy this there rather than pointing pi at this file:",
+    "",
+    "    mkdir -p ~/.pi/agent && cp .pi/models.example.json ~/.pi/agent/models.json",
+    "",
+    "Then set the model IDs you actually serve in the `pi` row of the tier map in",
+    ".claude/memory/cost-routing.md. Check what Ollama has with `ollama list`.",
+    "",
+    "The two entries below are a fast/small and a balanced/large Qwen. If the machine can",
+    "only run one, point all three tiers at it in cost-routing.md and read the degradation",
+    "notes there before running the full pipeline."
+  ],
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false
+      },
+      "models": [
+        {
+          "id": "qwen2.5-coder:7b",
+          "name": "Qwen2.5 Coder 7B (fast tier)"
+        },
+        {
+          "id": "qwen2.5-coder:32b",
+          "name": "Qwen2.5 Coder 32B (balanced/strong tier)"
+        },
+        {
+          "id": "qwen3-coder:30b",
+          "name": "Qwen3 Coder 30B",
+          "reasoning": true,
+          "thinkingFormat": "qwen-chat-template",
+          "compat": {
+            "chatTemplateKwargs": {
+              "enable_thinking": { "$var": "thinking.enabled" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

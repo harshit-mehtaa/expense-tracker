@@ -44,8 +44,16 @@ uploads_data/
 # Database backups — contain real financial data, never commit
 backups/
 
-# AI coding orchestrator (machine-local tooling)
-.claude/
+# The AI coding orchestrator (.claude/) IS tracked — it is shared across machines and
+# harnesses. Only its machine-local scratch is ignored.
+#
+# The bare `logs/` rule above (intended for application logs) also matches
+# .claude/memory/logs/, which would drop the error and success journals the
+# self-improvement loop reads. Re-include the directory, then ignore only the
+# per-session telemetry, which is machine-local and would conflict constantly.
+!.claude/memory/logs/
+.claude/memory/logs/sessions-*.jsonl
+.claude/settings.local.json
 
 # Coverage
 coverage/

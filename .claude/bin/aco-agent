@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# aco-agent — run a pipeline sub-agent on harnesses that have no built-in sub-agent tool.
+#
+# Claude Code delegates via its Task tool. pi has no sub-agent primitive, but it does
+# have a one-shot print mode, so a sub-agent is just another pi process:
+#
+#     pi -p --no-session --model <model> "<prompt>"
+#
+# Usage:
+#   .claude/bin/aco-agent <tier> "<prompt>"
+#   .claude/bin/aco-agent <tier> -          # prompt on stdin (preferred for long prompts)
+#   echo "..." | .claude/bin/aco-agent balanced -
+#
+#   tier: fast | balanced | strong
+#
+# The tier is resolved to a concrete model from the active platform's row in
+# .claude/memory/cost-routing.md, so this script never hardcodes a model either.
+# Override for a single run with ACO_MODEL_FAST / ACO_MODEL_BALANCED / ACO_MODEL_STRONG.
+#
+# Prints the sub-agent's response on stdout and nothing else, so callers can capture it.
+# UNTESTED against a live pi install — see "Status" in .claude/memory/cost-routing.md.
+
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${HERE}/../hooks/portable.sh"
+
+die() { printf 'aco-agent: %s\n' "$1" >&2; exit 1; }
+
+tier="${1:-}"
+case "$tier" in
+  fast|balanced|strong) ;;
+  *) die "usage: aco-agent <fast|balanced|strong> \"<prompt>\" | -" ;;
+esac
+
+# ── Prompt: argument or stdin ──
+prompt="${2:-}"
+if [ "$prompt" = "-" ] || [ -z "$prompt" ]; then
+  prompt="$(cat)"
+fi
+[ -n "$prompt" ] || die "empty prompt"
+
+platform="$(aco_detect_platform)"
+
+# ── Explicit env override wins, so a run can be pinned without editing the map ──
+case "$tier" in
+  fast)     override="${ACO_MODEL_FAST:-}" ;;
+  balanced) override="${ACO_MODEL_BALANCED:-}" ;;
+  strong)   override="${ACO_MODEL_STRONG:-}" ;;
+esac
+
+# ── Otherwise read the tier map out of cost-routing.md ──
+# Row shape:  | `pi` | `fast-model` | `balanced-model` | `strong-model` |
+# Columns after splitting on '|': 2=platform 3=fast 4=balanced 5=strong
+resolve_model() {
+  local plat="$1" t="$2" col map
+  case "$t" in fast) col=3 ;; balanced) col=4 ;; strong) col=5 ;; esac
+  map="$(aco_project_root)/$(aco_memory_dir)/cost-routing.md"
+  [ -f "$map" ] || return 0
+  awk -F'|' -v plat="$plat" -v col="$col" '
+    {
+      key = $2
+      gsub(/[` \t]/, "", key)
+      if (key == plat) {
+        val = $col
+        gsub(/`/, "", val)
+        gsub(/^[ \t]+|[ \t]+$/, "", val)
+        # Strip any trailing parenthetical note, e.g. "opus (inherit session)"
+        sub(/[ \t]*\(.*$/, "", val)
+        if (val != "") { print val; exit }
+      }
+    }
+  ' "$map"
+}
+
+model="${override:-$(resolve_model "$platform" "$tier")}"
+
+case "$platform" in
+  pi)
+    [ -n "$model" ] || die "no model for tier '$tier' on platform 'pi'. Add a \`pi\` row to the tier map in cost-routing.md, or set ACO_MODEL_$(printf '%s' "$tier" | tr '[:lower:]' '[:upper:]')."
+    command -v pi >/dev/null 2>&1 || die "pi not found on PATH"
+    # --no-session      : ephemeral, do not pollute session history
+    # --no-context-files: the caller supplies the full agent brief; re-loading AGENTS.md
+    #                     would duplicate the orchestrator rules into every sub-agent and
+    #                     eat context that a local model does not have to spare.
+    exec pi -p --no-session --no-context-files --model "$model" "$prompt"
+    ;;
+  claude-code)
+    die "on claude-code, delegate with the Task tool (tier: $tier) rather than this script"
+    ;;
+  *)
+    die "no sub-agent runner defined for platform '$platform'. Set ACO_PLATFORM, and add a row for it to the tier map in cost-routing.md."
+    ;;
+esac

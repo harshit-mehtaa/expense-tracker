@@ -1,0 +1,51 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\") && cd \"$ROOT\" && bash .claude/hooks/post-write-lint.sh'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\") && cd \"$ROOT\" && bash .claude/hooks/tdd-reminder.sh'"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\") && cd \"$ROOT\" && bash .claude/hooks/context-monitor.sh'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\") && cd \"$ROOT\" && bash .claude/hooks/stop-verify.sh'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\") && cd \"$ROOT\" && bash .claude/hooks/telemetry-emit.sh'"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\") && cd \"$ROOT\" && bash .claude/hooks/session-start-load.sh'"
+          }
+        ]
+      }
+    ]
+  }
+}
