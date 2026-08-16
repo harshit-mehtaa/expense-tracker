@@ -75,6 +75,10 @@ describe('Budgets page — smoke', () => {
   it('an ADMIN viewing family-wide gets no create button', async () => {
     renderPage(<BudgetsPage />, { route: '/budgets', handlers: budgetHandlers() });
     await screen.findByText('Food');
+    // Wait for the ADMIN state to actually exist before asserting a negative: the member
+    // selector renders only once auth has resolved as ADMIN. Without this the assertion
+    // races the session restore and passes for the wrong reason.
+    await screen.findByLabelText(/View:/i);
     expect(screen.queryByRole('button', { name: /add budget/i })).toBeNull();
   });
 

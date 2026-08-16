@@ -167,6 +167,10 @@ describe('Investments page — smoke', () => {
     const user = userEvent.setup();
     renderPage(<InvestmentsPage />, { route: '/investments', handlers: investmentHandlers() });
     await screen.findByText(/Axis Bluechip Fund/);
+    // Wait for the ADMIN state to exist before asserting a negative: the member selector
+    // renders only once auth resolves as ADMIN. Without it this races the session restore
+    // and passes for the wrong reason (proved by delaying /auth/me).
+    await screen.findByLabelText(/View:/i);
 
     await user.click(await screen.findByRole('button', { name: /^FD \(\d+\)$/ }));
 

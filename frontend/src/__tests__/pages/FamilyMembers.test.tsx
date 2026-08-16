@@ -88,7 +88,11 @@ describe('Family Members page — smoke', () => {
     renderPage(<FamilyMembersPage />, { route: '/family', handlers: memberHandlers() });
     await screen.findByText('asha@example.com');
 
-    await user.click(screen.getByRole('button', { name: /add member/i }));
+    // findBy, not getBy: the Add button is gated on isAdmin, which comes from the auth
+    // session restore — a DIFFERENT async source than the users list. Awaiting only the
+    // list can leave auth unresolved and the button unrendered (passed locally, failed
+    // on CI's slower runner).
+    await user.click(await screen.findByRole('button', { name: /add member/i }));
 
     expect(await screen.findByRole('heading', { name: /add family member/i })).toBeInTheDocument();
   });

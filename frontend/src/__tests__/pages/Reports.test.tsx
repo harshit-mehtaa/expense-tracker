@@ -86,10 +86,14 @@ describe('Reports page — smoke', () => {
     renderPage(<ReportsPage />, { route: '/reports', handlers: reportHandlers() });
     await screen.findByRole('heading', { level: 1, name: /reports/i });
 
-    // findBy, not getBy: the page re-enters its loading state once isAdmin flips true
-    // and enables the members query, so the tab bar unmounts and remounts.
+    // waitFor around the WHOLE assertion, not just findBy. The page re-enters loading
+    // once isAdmin flips true and enables the members query, so a node findBy has already
+    // resolved can be unmounted before toBeInTheDocument runs — which is precisely how
+    // this passed locally and failed on CI.
     for (const t of TABS) {
-      expect(await screen.findByRole('button', { name: t.label })).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: t.label })).toBeInTheDocument();
+      });
     }
   });
 

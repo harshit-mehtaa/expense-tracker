@@ -158,6 +158,10 @@ describe('Transactions page — URL-driven tabs', () => {
     await waitFor(() => {
       expect(screen.getAllByText('Grocery run').length).toBeGreaterThan(0);
     });
+    // The bug only manifests AFTER `user` resolves as ADMIN — that resolution is what
+    // flips canCreateForView false and hides the modal. Asserting before it lands would
+    // pass while the modal was still legitimately open (proved by delaying /auth/me).
+    await screen.findByLabelText(/View:/i);
 
     expect(screen.queryByRole('heading', { level: 2, name: 'Add Transaction' })).toBeNull();
   });

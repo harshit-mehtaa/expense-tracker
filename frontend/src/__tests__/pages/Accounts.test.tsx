@@ -65,6 +65,10 @@ describe('Accounts page — smoke', () => {
     // Same gate as Budgets: create is hidden while !isViewingFamilyWide is false (:691).
     renderPage(<AccountsPage />, { route: '/accounts', handlers: accountHandlers() });
     await screen.findByText(/HDFC Bank/);
+    // Wait for the ADMIN state to exist before asserting a negative: the member selector
+    // renders only once auth resolves as ADMIN. Without it this races the session restore
+    // and passes for the wrong reason (proved by delaying /auth/me).
+    await screen.findByLabelText(/View:/i);
     expect(screen.queryByRole('button', { name: /add bank account/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /add card/i })).toBeNull();
   });
