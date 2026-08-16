@@ -2570,12 +2570,10 @@ export default function TransactionsPage() {
             <Download className="h-4 w-4 sm:mr-2" />
             <span className="hidden sm:inline">{exporting ? 'Exporting…' : 'Export CSV'}</span>
           </Button>
-          {canCreateForView && (
-            <Button variant="outline" onClick={() => setShowImport(true)}>
-              <Upload className="h-4 w-4 sm:mr-2" />
-              <span className="hidden sm:inline">Import CSV</span>
-            </Button>
-          )}
+          <Button variant="outline" onClick={() => setShowImport(true)}>
+            <Upload className="h-4 w-4 sm:mr-2" />
+            <span className="hidden sm:inline">Import CSV</span>
+          </Button>
         </div>}
       </div>
 
@@ -2779,8 +2777,8 @@ export default function TransactionsPage() {
           icon={Receipt}
           title="No transactions yet"
           description="Add your first transaction or import a bank statement to start tracking."
-          actionLabel={canCreateForView ? 'Import Bank Statement' : undefined}
-          onAction={canCreateForView ? () => setShowImport(true) : undefined}
+          actionLabel="Import Bank Statement"
+          onAction={() => setShowImport(true)}
         />
       ) : (<>
         <div className="hidden xl:block rounded-xl border border-border bg-card overflow-hidden">
@@ -3036,7 +3034,9 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      {showImport && canCreateForView && <ImportModal onClose={() => setShowImport(false)} targetUserId={viewUserId} />}
+      {/* Import always targets a concrete owner: the selected member, or the admin's own
+          account when viewing "All Family" — without changing the page's own view scope. */}
+      {showImport && <ImportModal onClose={() => setShowImport(false)} targetUserId={viewUserId ?? user?.id} />}
       {showAdd && canCreateForView && (
         <AddTransactionModal
           onClose={() => setShowAdd(false)}
