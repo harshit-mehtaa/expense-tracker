@@ -46,7 +46,7 @@ export function capture(
       body,
       method: request.method,
     };
-    return HttpResponse.json(response);
+    return HttpResponse.json(response as Record<string, unknown>);
   });
 
   server.use(handler);

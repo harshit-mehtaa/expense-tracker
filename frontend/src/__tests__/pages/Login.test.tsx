@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
+import type { RequestHandler } from 'msw';
 import LoginPage from '@/pages/Login';
 import { renderPage, failOnConsoleError } from '../support/renderPage';
 import { url, anonHandlers } from '../support/handlers';
@@ -49,7 +50,7 @@ const loginFails = () => http.post(url('/auth/login'), () =>
   HttpResponse.json({ message: 'Bad credentials' }, { status: 401 }));
 
 /** Login is reached unauthenticated, so session restore must fail. */
-const mount = (extra: Parameters<typeof renderPage>[1] extends { handlers?: infer H } ? H : never = []) =>
+const mount = (extra: RequestHandler[] = []) =>
   renderPage(<LoginPage />, { route: '/login', handlers: [...extra, ...anonHandlers()] });
 
 beforeEach(() => {

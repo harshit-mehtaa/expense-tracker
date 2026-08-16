@@ -67,6 +67,13 @@ jobs:
         working-directory: ./frontend
         run: npx tsc --noEmit
 
+      # Separate config: the main tsconfig excludes src/__tests__, so without this the
+      # ~650 tests and the shared harness are never type-checked. Vitest strips types
+      # without checking them, so fixture drift is otherwise invisible until runtime.
+      - name: Type-check frontend tests
+        working-directory: ./frontend
+        run: npm run typecheck:tests
+
       # Gates on coverage. vite.config.ts sets per-directory thresholds (high for
       # lib/hooks/api/contexts, lower for pages) rather than one global number, so
       # strong coverage in the logic layers can't mask a near-zero page.

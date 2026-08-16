@@ -2353,6 +2353,14 @@ export default function TransactionsPage() {
 
   // Auto-open add modal or filters from URL params
   useEffect(() => {
+    // Wait for `user` before acting. Until the session resolves, isAdmin is false, which
+    // makes canCreateForView misleadingly true — so the first branch below fired, and the
+    // same pass stripped `add` from the URL. By the time the user resolved as ADMIN,
+    // canCreateForView had flipped false, the render gate hid the modal, and the param
+    // was already gone: the deep link silently did nothing, and the ADMIN fallback was
+    // unreachable code. Nothing here is decidable until we know who they are.
+    if (!user) return;
+
     const shouldOpenAdd = searchParams.get('add') === '1';
     if (shouldOpenAdd) {
       if (canCreateForView) {
@@ -2373,7 +2381,7 @@ export default function TransactionsPage() {
         return next;
       }, { replace: true });
     }
-  }, [canCreateForView, isAdmin, searchParams, setSearchParams, setViewUserId, user?.id, viewUserId]);
+  }, [canCreateForView, isAdmin, searchParams, setSearchParams, setViewUserId, user, viewUserId]);
 
   // Close category dropdown on outside click
   useEffect(() => {

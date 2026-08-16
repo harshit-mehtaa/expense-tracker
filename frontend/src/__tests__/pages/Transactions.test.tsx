@@ -139,30 +139,23 @@ describe('Transactions page — URL-driven tabs', () => {
     ).toBeInTheDocument();
   });
 
-  it('?add=1 does NOT open the modal for an ADMIN — known bug, pinned', async () => {
-    // KNOWN PRODUCT BUG, deliberately asserted as-is so the fix is detectable.
-    //
-    // The mount effect (:2355-2376) runs once BEFORE `user` resolves. At that point
-    // isAdmin is false, so isViewingFamilyWide is false and canCreateForView is true —
-    // the first branch fires, sets showAdd, and the same pass strips `add` from the
-    // URL. The ADMIN fallback at :2360-2363 is therefore never reached. When `user`
-    // then resolves as ADMIN with no member selected, canCreateForView flips to false
-    // and the render gate at :3039 (`showAdd && canCreateForView`) hides the modal.
-    // Net effect: an admin's ?add=1 deep link silently does nothing.
+  it('?add=1 opens the Add modal for an ADMIN, self-selecting them as the target', async () => {
+    // Regression guard for a fixed bug. The mount effect used to run BEFORE `user`
+    // resolved: isAdmin was false, so canCreateForView was misleadingly true, the first
+    // branch fired, and the same pass stripped `add` from the URL. Once the user resolved
+    // as ADMIN, canCreateForView flipped false and the render gate hid the modal — the
+    // deep link silently did nothing and the ADMIN fallback was unreachable code.
+    // The effect now waits for `user`, so the fallback runs and self-selects the admin.
     renderPage(<TransactionsPage />, {
       route: '/transactions?add=1',
       handlers: txHandlers(),
     });
 
     await screen.findByRole('heading', { level: 1, name: 'Transactions' });
-    await waitFor(() => {
-      expect(screen.getAllByText('Grocery run').length).toBeGreaterThan(0);
-    });
-    // The bug only manifests AFTER `user` resolves as ADMIN — that resolution is what
-    // flips canCreateForView false and hides the modal. Asserting before it lands would
-    // pass while the modal was still legitimately open (proved by delaying /auth/me).
     await screen.findByLabelText(/View:/i);
 
-    expect(screen.queryByRole('heading', { level: 2, name: 'Add Transaction' })).toBeNull();
+    expect(
+      await screen.findByRole('heading', { level: 2, name: 'Add Transaction' }),
+    ).toBeInTheDocument();
   });
 });

@@ -14,6 +14,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import React from 'react';
+import { Route, Routes } from 'react-router-dom';
+import { AppShell } from '@/components/layout/AppShell';
 import { http, HttpResponse } from 'msw';
 import { url } from './support/handlers';
 import { ADMIN_USER, MEMBER_USER } from './support/fixtures';
@@ -117,5 +119,39 @@ describe('App shell', () => {
   it('mounts the login route directly without the shell', async () => {
     renderPage(<App />, { route: '/login', handlers: shellHandlers() });
     expect(await screen.findByText(/Welcome back/i)).toBeInTheDocument();
+  });
+});
+
+// ─── The ErrorBoundary wiring itself ──────────────────────────────────────────
+
+describe('AppShell error containment', () => {
+  it('wraps the routed outlet in an ErrorBoundary, so a page crash spares the shell', async () => {
+    // Guards the WIRING, not the component. ErrorBoundary.test.tsx proves the boundary
+    // works in isolation; this proves AppShell actually uses it. Deleting the wrapper
+    // from AppShell.tsx passes every other test in the suite — verified.
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    authState.user = ADMIN_USER;
+    authState.isAuthenticated = true;
+    authState.isLoading = false;
+
+    function Exploding(): JSX.Element {
+      throw new Error('page exploded');
+    }
+
+    renderPage(
+      <Routes>
+        <Route element={<AppShell />}>
+          <Route path="/boom" element={<Exploding />} />
+        </Route>
+      </Routes>,
+      { route: '/boom', handlers: shellHandlers() },
+    );
+
+    // Fallback replaces the page...
+    expect(await screen.findByText(/Something went wrong/i)).toBeInTheDocument();
+    // ...and the shell's own navigation is still mounted and usable.
+    expect(await screen.findByRole('navigation')).toBeInTheDocument();
+
+    spy.mockRestore();
   });
 });

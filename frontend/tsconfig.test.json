@@ -1,0 +1,18 @@
+{
+  // Typechecks the test suite, which the main tsconfig deliberately excludes.
+  //
+  // Without this, `tsc --noEmit` (and therefore CI's type-check step) covers none of the
+  // ~650 tests or the shared harness — Vitest strips types without checking them, so a
+  // fixture whose shape drifts from the API type is invisible until runtime. A real
+  // instance was already found this way: baseHandlers(user: typeof ADMIN_USER) pinned
+  // `role` to the literal 'ADMIN', making every MEMBER_USER call site a silent error.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["vitest/globals", "@testing-library/jest-dom"],
+    // Test files legitimately declare helper props they don't consume in every branch.
+    "noUnusedLocals": true,
+    "noUnusedParameters": false
+  },
+  "include": ["src"],
+  "exclude": []
+}

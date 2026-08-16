@@ -32,6 +32,10 @@ function getApiBaseURL(): string {
 const api = axios.create({
   baseURL: getApiBaseURL(),
   withCredentials: true, // Required for HttpOnly cookie auth
+  // Without this a hung backend leaves every query pending forever with no client-side
+  // bound — React Query never retries, and the UI sits on a spinner indefinitely.
+  // 30s is well above the slowest real call (a large bank-statement import).
+  timeout: 30_000,
   headers: {
     'Content-Type': 'application/json',
   },
