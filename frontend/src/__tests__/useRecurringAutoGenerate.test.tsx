@@ -1,7 +1,8 @@
 /**
  * Tests for useRecurringAutoGenerate hook.
- * Uses vi.mock for the API call and a localStorage stub (jsdom v1.3.0 does not
- * expose the full Storage API — we replace globalThis.localStorage directly).
+ * Uses vi.mock for the API call, plus a SPY-based localStorage stub. The shared
+ * setup.ts already installs a working in-memory localStorage, but these tests assert
+ * on the calls themselves (toHaveBeenCalledWith), which needs vi.fn() spies.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
@@ -17,9 +18,9 @@ const triggerMock = triggerGenerate as ReturnType<typeof vi.fn>;
 const STORAGE_KEY = 'last-recurring-generate';
 const TODAY = new Date().toISOString().slice(0, 10);
 
-// ── localStorage stub ─────────────────────────────────────────────────────────
-// Vitest 1.3.0 + jsdom does not expose removeItem/clear on the built-in
-// localStorage implementation (it uses --localstorage-file). Replace it.
+// ── localStorage spy stub ─────────────────────────────────────────────────────
+// Not a polyfill — setup.ts already provides working storage. This exists so the
+// tests can assert WHICH key/value was written, which needs vi.fn() spies.
 let store: Record<string, string> = {};
 const localStorageMock = {
   getItem: vi.fn((key: string) => store[key] ?? null),
@@ -35,6 +36,10 @@ Object.defineProperty(globalThis, 'localStorage', {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks resets calls but NOT implementations, so a mockRejectedValue set by
+  // one test leaks into every later test. Re-establish the default explicitly, or the
+  // file only passes in declaration order (reproducible with --sequence.shuffle).
+  triggerMock.mockResolvedValue({ generated: 0 });
   store = {};
 });
 

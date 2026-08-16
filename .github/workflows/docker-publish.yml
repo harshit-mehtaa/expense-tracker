@@ -67,9 +67,12 @@ jobs:
         working-directory: ./frontend
         run: npx tsc --noEmit
 
+      # Gates on coverage. vite.config.ts sets per-directory thresholds (high for
+      # lib/hooks/api/contexts, lower for pages) rather than one global number, so
+      # strong coverage in the logic layers can't mask a near-zero page.
       - name: Test frontend
         working-directory: ./frontend
-        run: npm run test
+        run: npm run test:coverage
 
   mirror-base-images:
     name: Mirror base images to GHCR

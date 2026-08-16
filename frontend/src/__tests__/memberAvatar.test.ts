@@ -81,6 +81,11 @@ describe('avatarInitial', () => {
   it('does not split surrogate pairs', () => {
     expect(avatarInitial('🙂Papa')).toBe('🙂');
   });
+
+  // A member with a blank name must render an empty badge, not "undefined".
+  it('returns an empty string for an empty name', () => {
+    expect(avatarInitial('')).toBe('');
+  });
 });
 
 describe('palette accessibility', () => {

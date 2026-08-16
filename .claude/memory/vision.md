@@ -40,30 +40,38 @@
   when next touching those files.
 - [low] Three hand-rolled duplicates of `resolveTargetUserId`'s logic:
   `transactions.ts:56`, `loans.ts:40`, `budgets.ts:63`. Should call the shared util.
-- [low] `auditService.ts:20`'s `if (isTest) return null` guard could now be removed —
-  route-level tests observe the payload by mocking the module, so the guard is no longer
-  needed for testability. Declined in 2026-08-16 as too wide a blast radius (every
-  existing test would attempt a real audit write). Revisit deliberately, not casually.
+- [low] `auditService.ts:20`'s `if (isTest) return null` could now go — route tests observe
+  the payload by mocking the module. Declined 2026-08-16: too wide a blast radius.
 - [medium] The import insert loop (`services/statementImportService.ts`) is serial and
   unbounded inside one open `$transaction`. Prisma's default interactive-transaction
   timeout is 5s, so a large statement throws P2028 — which now surfaces as a clear 500
   rather than the old silent "201, imported: 0". Fix with `createMany` or chunking; both
   change dedup/atomicity semantics, so it needs its own plan.
 - [medium] `transactionService.bulkImportTransactions` (~:1133) is DEAD (zero non-test
-  callers) yet fully tested, so it inflates the coverage denominator with unreachable code.
-  It also writes `bankStatementImport.filename` UNSANITIZED at ~:1169 — bypassing
-  `utils/sanitizeFilename`, which the other writer applies. And its `buildImportHash`
-  (~:34) disagrees with the live `makeImportHash` (omits `type`, applies `Math.abs`), so
-  if it were ever wired up, dedup would silently diverge. No live vector today because
-  nothing calls it. Delete it (and its ~50 lines of tests) as its own task.
+  callers) yet fully tested, inflating the coverage denominator. It writes
+  `bankStatementImport.filename` UNSANITIZED (~:1169), bypassing `utils/sanitizeFilename`
+  which the other writer applies, and its `buildImportHash` (~:34) disagrees with the live
+  `makeImportHash` (omits `type`, applies `Math.abs`). No live vector — nothing calls it.
+  Delete it and its ~50 lines of tests as its own task.
+- [medium] Frontend has no ERROR BOUNDARY. `shared/ErrorBoundary.tsx` exists with zero
+  importers (grep-verified), so any render throw blanks the whole app instead of one
+  panel. One-line wiring fix in `AppShell.tsx`. `PageHeader.tsx` is likewise dead; both
+  are coverage-excluded rather than tested.
+- [low] `pages/Dashboard.tsx:72` builds the snapshot month key from
+  `new Date().toISOString()` (UTC) while the app runs IST, so between 00:00-05:29 IST on
+  the 1st the new month's net-worth snapshot is skipped (00:30 IST 1-Apr yields "2026-03").
+- [low] `pages/Transactions.tsx` `?add=1` deep link broken for ADMIN: the mount effect
+  runs BEFORE `user` resolves (`isAdmin` false), takes its first branch and strips the
+  param; the ADMIN fallback is dead code. Works for MEMBER. Pinned by a "known bug" test.
+- [low] `!isViewingFamilyWide` gates create buttons across 10 pages — an ADMIN with no
+  member selected cannot create anything anywhere. Consistent; confirm it is intended.
+- [medium] `frontend/src/lib/api.ts:32` `axios.create()` sets no `timeout` — bug-pattern
+  P2 (external I/O without a bound). A hung backend leaves every query pending forever
+  with no client-side limit. Pre-existing; the file is now at 100% coverage, which
+  certifies the absence of a timeout. Add `timeout: 30_000`.
 - [medium] No backend lint at all — `tsc --noEmit` and tests are the only backend gates.
   Style/quality issues that ESLint would catch on the frontend go unchecked here.
-- [medium] Frontend has ~3% coverage and no test mounts a page component. Explicitly
-  deferred to its own task on 2026-08-16; needs its own plan, not a drive-by.
-- [low] Frontend coverage thresholds in `vite.config.ts` are a near-zero floor (3%
-  statements) — not a real gate, don't read frontend coverage % as a quality signal.
-- [note] Zero TODO/FIXME/HACK/XXX markers in `backend/src` or `frontend/src` as of last
-  scan — the debt that exists isn't self-flagged in comments, it's structural (above).
+- [note] Zero TODO/FIXME markers in either tree — the debt is structural, not flagged.
 
 ## What We Will NOT Do
 - No controllers layer — routes call services directly; adding one would be an
@@ -80,7 +88,12 @@
   statement import handler, the multer upload filter and the filename sanitizer at 0% —
   that was fixed by extracting `app.ts` / `routes/import.ts` / `statementImportService.ts`.
   The 100% figure no longer carries an asterisk.
-- Frontend: `npm run lint` clean (0 warnings for the rules currently enabled),
-  `tsc --noEmit` clean, `npm run test` green.
+- Frontend: `npm run lint` clean (0 warnings), `tsc --noEmit` clean, and
+  `npm run test:coverage` green — **enforced in CI** at PER-DIRECTORY thresholds
+  (api/lib/hooks/contexts ~95%, components ~88%, pages ~60%), not one global number,
+  because a single figure lets 100% in the logic layers mask a near-zero page.
+  Measured 69.31% statements overall. NOTE: threshold globs MUST be written
+  `'**/src/x/**'` — Vitest matches absolute paths, so `'src/x/**'` silently matches
+  nothing, enforces nothing, and still exits 0.
 - CI (`quality` job) runs all of the above on every PR and push to `main`; every other
   CI job depends on it passing.

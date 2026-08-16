@@ -1,93 +1,50 @@
 # Task Progress
 
-## Status: implement (plan challenged -> RISKY -> revised -> user re-approved)
-## Task: Make backend/src/index.ts testable and drop its coverage exclusion
-## Started: 2026-08-16
-## Risk: medium. Type: refactor + bugfix + security coverage.
+## Status: review (adversarial pass outstanding) — awaiting COMMIT approval
+## Task: Frontend test coverage — logic modules + page smoke tests, gated in CI
 
-## Previous task: DONE — backend 100% coverage, commit c3a49be, pushed, all 5 CI jobs green.
-## Baseline now: 48 files / 1722 tests, 100% S/B/F/L, CI gates on `npm run test:coverage`.
+## RESULT
+5.32 -> **69.31%** stmts | 56.83 -> 71.88 br | 28.24 -> 46.4 fn. 11 -> 41 files,
+156 -> **651 tests**. `test:coverage` EXIT 0. Frontend CI now gates on coverage.
+Beat both the ~52-57% projection and the original 55-65% target.
+Backend unaffected: 100%, 56 files / 1823 tests, still green.
 
-## User decisions (locked in at APPROVE — do not re-litigate)
-- Run plan-challenger BEFORE implementing.
-- **P8 fix now, in this task**: import endpoint returns 201 after a TOTAL batch-insert
-  failure; change to 500. Contract change, explicitly approved. Isolate as the LAST commit
-  so it can be reverted alone.
-- **bulkImportTransactions dead code: SEPARATE follow-up task.** Do NOT delete here.
-- P9 (unbounded serial inserts in one $transaction) deferred. It fails SILENTLY today:
-  Prisma's 5s $transaction timeout -> P2028 -> caught -> 201 "imported: 0". Fixing P8 makes
-  it loud. That ordering is deliberate.
+## PRODUCTION BUG FOUND + FIXED
+`ChangePassword.tsx` called `navigate()` during the RENDER phase. On success `logout()`
+cleared the user -> re-render -> re-entered the branch -> navigated during render ->
+infinite loop that HUNG the vitest worker (exit 144). Fixed with `<Navigate>`, matching
+App.tsx's 5 existing uses. **Quality review caught that the fix was UNGUARDED** — a stale
+comment plus a never-settling `/auth/logout` handler meant reverting the fix still passed
+all 9 tests. Proven, then fixed: reverting now fails 9 of 10.
 
-## Two findings that reshape the task (I verified both independently)
-1. `__tests__/routes/import.routes.test.ts` does NOT test production code. `makeImportApp()`
-   at :66 rebuilds the endpoint inline (own `app.post` at :86) and tests that. Already
-   drifted: omits resolveWriteUserId, applyCategoryRules, the account-ownership check,
-   empty-parse rejection, and the audit log. Line 139 passes `req.file.originalname` RAW
-   while production calls sanitizeFilename — **the suite asserts the UNSANITIZED behaviour**,
-   so it would stay green if the XSS mitigation were deleted. Delete all 244 lines, rewrite.
-2. `transactionService.bulkImportTransactions` (:1133) + `buildImportHash` (:34) are dead
-   (zero non-test callers) with an INCOMPATIBLE hash vs live `makeImportHash` (omits `type`,
-   applies Math.abs). Part of today's 100% is coverage of dead code shadowing the live code
-   the exclusion hides.
+## HARD-WON FACTS (do not re-derive)
+- Threshold globs MUST be `'**/src/x/**'`. Vitest matches ABSOLUTE paths, so `'src/x/**'`
+  matches nothing, enforces nothing, and exits 0. Proven all 6 enforce by setting each to
+  100 and confirming its own named ERROR line.
+- Globbed files are REMOVED from the global bucket, so the trailing global numbers govern
+  only the residual — currently just `src/App.tsx`.
+- MSW `onUnhandledRequest: 'error'` (was 'warn') is what stops page tests being theatre:
+  with 'warn' a forgotten handler renders the empty state, which on most pages is
+  identical to success, and the test passes asserting nothing.
+- **Awaiting `<h1>` does NOT prove loading finished.** Only Reports, Transactions and
+  Dashboard have a real loading early-return; the rest render the heading unconditionally
+  ABOVE the loading switch. Use a per-page loaded sentinel + assert loading text is gone.
+- jsdom lacks matchMedia/ResizeObserver/scrollIntoView/hasPointerCapture/createObjectURL,
+  and its localStorage does NOT round-trip. All polyfilled in setup.ts, `typeof`-guarded
+  so node-environment test files still work.
+- `renderPage` must build a FRESH QueryClient — the lib singleton has staleTime 5min and
+  retry<2, which leaks cache between tests and times out 500-path tests.
+- The harness deliberately omits `<React.StrictMode>` (double-render breaks
+  request-count assertions). Documented in the docblock; redirect tests cover the gap.
 
-## CHALLENGER REFUTED 2 LOAD-BEARING PREMISES (I re-verified both empirically)
-1. "Only app.listen blocks import" — FALSE. `multer({dest:'/app/uploads'})` calls mkdirp.sync
-   AT CONSTRUCTION: `node -e "require('multer')({dest:'/app/uploads'})"` -> **EROFS**.
-   `vi.mock('fs')` CANNOT fix it (multer is externalized CJS; its require('fs') is real).
-   Killed the test strategy for steps 4/5/6/8. -> new Step 0.
-2. "P8 shows 'Failed to save imported transactions'" — FALSE. AppError.ts:14 sets
-   `isOperational = statusCode < 500`, and errorHandler.ts:32 only echoes the message when
-   operational. A 500 renders generic 'An unexpected error occurred'. User's original
-   approval was given on my inaccurate description; re-asked and re-approved.
+## OUTSTANDING
+- Adversarial review still running; triage its findings before commit.
+- Quality review: FAIL -> all 7 items fixed (unguarded fix, latent TestUser type error,
+  2 slack thresholds ratcheted, StrictMode docblock, sessionStorage aliasing, URL guard,
+  token reset moved to global teardown).
+- Frontend test files are NOT typechecked (`tsconfig.json` excludes `src/__tests__`).
+  A `tsconfig.test.json` + `typecheck:tests` CI step is worth its own task.
 
-## REVISED PLAN (11 steps) — ONE ATOMIC COMMIT
-vitest include is `src/**/*.ts`, so every NEW file is under the 100% gate the moment it
-lands. Steps are an authoring order, NOT landable increments. Partial landing = red main.
-0 [MED] `env.UPLOADS_DIR` (default '/app/uploads'), used by BOTH routes/import.ts AND
-  routes/documents.ts; setup.ts sets os.tmpdir(). Unlocks real multer + real .attach().
-1 [LOW] unify sanitizeFilename -> utils/ (byte-identical dupe index.ts:18 + documents.ts:71)
-2 [MED] services/statementImportService.ts — owns all 4 Prisma calls. SANITIZE INSIDE the
-  service (write boundary). ROUND netDelta to 2dp before compare+increment (user-approved
-  Decimal fix; a cancelling set can leave 1e-13 and write a bogus increment).
-3 [LOW] unit-test it — use the FULL branch enumeration, not 4 cases
-4 [MED] routes/import.ts using env.UPLOADS_DIR
-5 [MED] DELETE the 244-line fake test; rewrite preserving its 7 real assertions as a FLOOR:
-  csv->parseCSV only; pdf->parsePDF only; x-pdf accepted; pdfPassword fwd as 3rd arg w/ bank
-  undefined; image/jpeg->400; no file->400; body has bank+total. Then add branch cases.
-6 [MED] app.ts createApp(); mount /api/transactions/import BEFORE transactionsRouter
-  (also removes today's double requireAuth: transactions.ts:23 + index.ts:122)
-7 [LOW] recurringScheduler.ts — return/unref timer handles so vitest can't hang
-8 [LOW] index.ts -> ~10 lines. Two test files. MUST mock ./app AND ./services/
-  recurringScheduler, else: real port bind, leaked 1h setInterval, real PrismaClient.
-  Mock as `listen: vi.fn((_p, cb) => cb())` or the listen callback fails FUNCTION coverage.
-9 [MED] P8: add explicit isOperational override to AppError; throw curated 500
-  "Import failed — no transactions were saved." + console.error the ORIGINAL prisma error
-  (else it's destroyed; today it at least reaches the client in errors[]).
-10 [LOW] drop 'src/index.ts' from vitest.config.ts exclude — THIS IS THE ACCEPTANCE TEST.
-  Update vision.md/patterns.md + makeApp.ts:1-5 docstring (soften, don't delete: index.ts
-  still calls listen when !isTest).
-
-## Branch enumeration that WILL be needed for 100% once the exclusion drops
-index.ts:78 isDev ternary (isDev always false under test -> likely c8 ignore w/ reason);
-:82 existsSync both arms; fileFilter :87-97 needs CSV-by-EXTENSION-only and PDF-by-
-EXTENSION-only (octet-stream + .csv/.pdf) — currently only mimetype paths are covered;
-:132-134 isPDF extension-only; :141 unlink catch (make unlinkSync throw); :137-142
-try/finally (readFileSync throws, unlink still runs); ?? at :165,177,192,195,197,199,227
-need BOTH sides (one tx with remark/paymentMode/categoryId and one without; with and
-without accountId); :207 accountId && toCreate.length>0 (accountId set + all-duplicates);
-:209 netDelta !== 0 (net-zero set); :262 listen callback must execute for FUNCTION metric.
-
-## Key precedents to copy (do not reinvent)
-- documents.routes.test.ts:29-33,54-56 — vi.hoisted() multer-opts capture (may become
-  unnecessary after Step 0 lets real multer run)
-- documentsModuleLoad.test.ts — separate file for a module-load branch
-- errorHandler.prod.test.ts:13-20 — mock ./config/env then `await import()` the subject
-
-## Gotchas
-- Middleware order in createApp() is load-bearing: trust proxy BEFORE rate limiter,
-  errorHandler strictly LAST.
-- createApp() carries the global rateLimit (500/15min) that helpers/makeApp.ts lacks.
-- Dockerfile:38 mkdir /app/uploads; CMD + package.json main/start still -> dist/index.js.
-
-## Next after this: frontend coverage (~3%, no test mounts a page) — its own full pipeline.
-## Standing instruction: every commit includes pending .claude/ + AGENTS.md changes, pushed.
+## Next candidates: wire up ErrorBoundary (app currently has none); delete dead
+## bulkImportTransactions; 43 raw prisma calls in route handlers. See vision.md.
+## Standing instruction: every commit includes pending .claude/ changes, and gets pushed.

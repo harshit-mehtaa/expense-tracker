@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
 import { z } from 'zod';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -37,10 +37,13 @@ export default function ChangePasswordPage() {
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({ resolver: zodResolver(schema) });
 
-  // Redirect unauthenticated visitors to login
+  // Redirect unauthenticated visitors to login.
+  // <Navigate>, not navigate(): calling navigate() here ran a side effect during the
+  // render phase, and on the success path logout() clears the user, which re-renders
+  // into this branch, which navigates again — an infinite loop that hung the page.
+  // This matches how App.tsx does every one of its redirects.
   if (!isLoading && !isAuthenticated) {
-    navigate('/login', { replace: true });
-    return null;
+    return <Navigate to="/login" replace />;
   }
 
   async function onSubmit(values: FormValues) {

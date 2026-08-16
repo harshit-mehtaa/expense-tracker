@@ -7,9 +7,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test": "TZ=Asia/Kolkata vitest run",
+    "test:watch": "TZ=Asia/Kolkata vitest",
+    "test:coverage": "TZ=Asia/Kolkata vitest run --coverage"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.3.4",
