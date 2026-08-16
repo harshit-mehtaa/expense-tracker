@@ -2,6 +2,7 @@ import { Prisma, LoanType, TransactionType } from '@prisma/client';
 import prisma from '../config/prisma';
 import { getFYRange, getCurrentFY, getPreviousFY, getMonthStart } from '../utils/financialYear';
 import { generateDueRecurringTransactions } from './recurringService';
+import { computeMonthlyPreEmi } from '../utils/loanMath';
 import {
   getNetExpenseByUserCategory,
   getNetExpenseTotal,
@@ -159,10 +160,17 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string, t
           },
         },
       }),
-      // Loan EMIs
+      // Loan EMIs. Its own predicate rather than the shared `userFilter`, because a
+      // co-owner needs to see the EMI on a loan they part-hold, and widening userFilter
+      // would widen the five sibling queries in this Promise.all too.
       prisma.loan.findMany({
-        where: { ...userFilter, endDate: { gte: now } },
-        select: { id: true, lenderName: true, emiAmount: true, emiDate: true, loanType: true },
+        where: { ...loanVisibilityWhere(effectiveUserId), endDate: { gte: now } },
+        select: {
+          id: true, lenderName: true, emiAmount: true, emiDate: true, loanType: true,
+          userId: true, preEmiAmount: true, firstEmiDate: true,
+          outstandingBalance: true, interestRate: true,
+          owners: { select: { userId: true, sharePercent: true } },
+        },
       }),
       // Advance tax due dates (scoped to user where applicable)
       prisma.advanceTaxEvent.findMany({
@@ -247,10 +255,27 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string, t
     const today = now.getDate();
     const daysUntil = loan.emiDate >= today ? loan.emiDate - today : 30 - today + loan.emiDate;
     if (daysUntil <= 7) {
+      // During the pre-EMI period only interest is payable, so alerting with the full
+      // EMI would overstate what actually leaves the account.
+      // `preEmiAmount` is the TOTAL across the whole gap (computePreEmi returns
+      // monthly x months), but this row is a single month's due. Using it directly
+      // overstated the alert by the length of the moratorium — a 6-month pre-EMI period
+      // showed 6x the actual outgo. Derive the monthly figure instead.
+      const inPreEmiPeriod = loan.firstEmiDate != null && now < loan.firstEmiDate;
+      const monthlyPreEmi = inPreEmiPeriod
+        ? computeMonthlyPreEmi(Number(loan.outstandingBalance), Number(loan.interestRate))
+        : null;
+      const monthlyDue = monthlyPreEmi ?? Number(loan.emiAmount);
+
+      // Share-weighted, so a 40% co-owner is alerted for their 40%.
+      const share = loanShareMultiplier(loan, effectiveUserId);
+
       alerts.push({
         type: 'EMI' as const,
-        title: `EMI: ${loan.lenderName} (${loan.loanType})`,
-        amount: Number(loan.emiAmount),
+        title: inPreEmiPeriod
+          ? `Pre-EMI: ${loan.lenderName} (${loan.loanType})`
+          : `EMI: ${loan.lenderName} (${loan.loanType})`,
+        amount: monthlyDue * share,
         dueDate: new Date(now.getFullYear(), now.getMonth(), loan.emiDate).toISOString(),
         daysUntilDue: daysUntil,
         entityId: loan.id,
@@ -541,20 +566,61 @@ export async function computeNetWorthAssets(userId?: string): Promise<number> {
   return breakdown.total;
 }
 
+
+/**
+ * A loan's share for one user, mirroring how RealEstate apportions co-owned property.
+ *
+ * Falls back to 100% for the primary owner, or when a loan predates the owners table.
+ * A user with no stake gets 0 — which is what stops a co-owned loan being counted in
+ * full for every owner and inflating each of their net-worth figures.
+ */
+function loanShareMultiplier(
+  loan: { userId: string; owners?: { userId: string; sharePercent: unknown }[] },
+  userId?: string,
+): number {
+  if (!userId) return 1;
+  const owners = loan.owners ?? [];
+  // Owner rows win outright — see decorateLoan in loanService for why crediting the
+  // primary 100% alongside them double-counts the liability.
+  const sharePercent = Number(
+    owners.find((o) => o.userId === userId)?.sharePercent
+      ?? (owners.length === 0 ? 100 : 0),
+  );
+  return sharePercent / 100;
+}
+
+/** Loans a user owns outright or holds a share of. */
+function loanVisibilityWhere(userId?: string): Prisma.LoanWhereInput {
+  return userId ? { OR: [{ userId }, { owners: { some: { userId } } }] } : {};
+}
+
 export async function computeNetWorthStatement(userId?: string) {
-  const where = userId ? { userId } : {};
-  const [assetBreakdown, loanBreakdown] = await Promise.all([
+  // findMany + JS weighting rather than groupBy: Prisma has no weighted-sum expression,
+  // and a raw SUM would count a co-owned loan in full for each owner.
+  const [assetBreakdown, loans] = await Promise.all([
     fetchAssetBreakdown(userId),
-    prisma.loan.groupBy({
-      by: ['loanType'],
-      where: { ...where, endDate: { gte: new Date() } },
-      _sum: { outstandingBalance: true },
+    prisma.loan.findMany({
+      where: { ...loanVisibilityWhere(userId), endDate: { gte: new Date() } },
+      select: {
+        loanType: true,
+        outstandingBalance: true,
+        userId: true,
+        owners: { select: { userId: true, sharePercent: true } },
+      },
     }),
   ]);
+
+  const loanBreakdown = Object.entries(
+    loans.reduce<Record<string, number>>((acc, loan) => {
+      const share = Number(loan.outstandingBalance) * loanShareMultiplier(loan, userId);
+      acc[loan.loanType] = (acc[loan.loanType] ?? 0) + share;
+      return acc;
+    }, {}),
+  ).map(([loanType, sum]) => ({ loanType: loanType as LoanType, _sum: { outstandingBalance: sum } }));
   const liabilities: Partial<Record<LoanType, number>> = {};
   let totalLiabilities = 0;
   for (const entry of loanBreakdown) {
-    const amt = Number(entry._sum.outstandingBalance ?? 0);
+    const amt = Number(entry._sum.outstandingBalance);
     if (amt > 0) {
       liabilities[entry.loanType] = amt;
       totalLiabilities += amt;
@@ -577,12 +643,19 @@ export async function computeNetWorthStatement(userId?: string) {
 }
 
 export async function computeTotalLiabilities(userId?: string): Promise<number> {
-  const where = userId ? { userId } : {};
-  const result = await prisma.loan.aggregate({
-    where: { ...where, endDate: { gte: new Date() } },
-    _sum: { outstandingBalance: true },
+  // Same reason as above: aggregate() would sum a co-owned loan at 100% for each owner.
+  const loans = await prisma.loan.findMany({
+    where: { ...loanVisibilityWhere(userId), endDate: { gte: new Date() } },
+    select: {
+      outstandingBalance: true,
+      userId: true,
+      owners: { select: { userId: true, sharePercent: true } },
+    },
   });
-  return Number(result._sum.outstandingBalance ?? 0);
+  return loans.reduce(
+    (sum, loan) => sum + Number(loan.outstandingBalance) * loanShareMultiplier(loan, userId),
+    0,
+  );
 }
 
 export async function upsertNetWorthSnapshot(userId: string) {

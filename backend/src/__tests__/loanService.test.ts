@@ -13,6 +13,10 @@ vi.mock('../config/prisma', () => {
       update: vi.fn(),
       delete: vi.fn(),
     },
+    // assertActiveLoanOwners checks every owner is an active family member.
+    user: { findMany: vi.fn() },
+    // assertAssetOwned confirms the collateral belongs to the loan's owner.
+    asset: { findFirst: vi.fn() },
   };
   return { default: mockPrisma, prisma: mockPrisma };
 });
@@ -30,16 +34,33 @@ import {
 } from '../services/loanService';
 
 const loanMock = (prisma as any).loan;
+const userMock = (prisma as any).user;
+const assetMock = (prisma as any).asset;
 
 const MOCK_LOAN = {
   id: 'loan-1',
   userId: 'u1',
+  loanType: 'PERSONAL',
+  assetId: null,
   outstandingBalance: 4500000,
   interestRate: 8.5,
   emiAmount: 45000,
   emiDate: 5,
-  prepaymentChargesPct: null,
+  prepaymentChargesAmount: null,
+  owners: [],
 };
+
+/** The include shape every loan read now uses. */
+const LOAN_INCLUDE = {
+  user: { select: { name: true } },
+  owners: { include: { user: { select: { name: true } } } },
+  asset: true,
+};
+
+/** A loan is visible to its primary owner OR anyone holding a share of it. */
+const ownerInclusive = (userId: string) => ({
+  OR: [{ userId }, { owners: { some: { userId } } }],
+});
 
 // Pin system time for deterministic amortization schedule assertions
 beforeAll(() => {
@@ -53,6 +74,9 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: the asset exists and belongs to the loan's owner. Tests that specifically
+  // exercise the cross-owner leak override this with null.
+  assetMock.findFirst.mockResolvedValue({ id: 'asset-1' });
 });
 
 // ─── Guard conditions ─────────────────────────────────────────────────────────
@@ -183,8 +207,8 @@ describe('getLoans', () => {
     loanMock.findMany.mockResolvedValue([MOCK_LOAN]);
     const result = await getLoans('u1');
     expect(loanMock.findMany).toHaveBeenCalledWith({
-      where: { userId: 'u1' },
-      include: { user: { select: { name: true } } },
+      where: ownerInclusive('u1'),
+      include: LOAN_INCLUDE,
       orderBy: { emiDate: 'asc' },
     });
     expect(result).toHaveLength(1);
@@ -195,7 +219,7 @@ describe('getLoans', () => {
     await getLoans();
     expect(loanMock.findMany).toHaveBeenCalledWith({
       where: {},
-      include: { user: { select: { name: true } } },
+      include: LOAN_INCLUDE,
       orderBy: { emiDate: 'asc' },
     });
   });
@@ -226,9 +250,22 @@ describe('createLoan', () => {
       emiDate: 5,
       tenureMonths: 180,
     };
-    loanMock.create.mockResolvedValue({ ...data, id: 'loan-new', userId: 'u1' });
-    const result = await createLoan('u1', data as any);
-    expect(loanMock.create).toHaveBeenCalledWith({ data: { ...data, userId: 'u1' } });
+    // A HOME loan is secured, so it now needs an asset — see the secured-type tests below.
+    const withAsset = { ...data, assetId: 'asset-1' };
+    userMock.findMany.mockResolvedValue([{ id: 'u1' }]);
+    loanMock.create.mockResolvedValue({ ...withAsset, id: 'loan-new', userId: 'u1', owners: [] });
+
+    const result = await createLoan('u1', withAsset as any);
+
+    expect(loanMock.create).toHaveBeenCalledWith({
+      data: {
+        ...withAsset,
+        userId: 'u1',
+        // Omitting owners seeds the creator at 100%, preserving pre-multi-owner behaviour.
+        owners: { create: [{ userId: 'u1', sharePercent: 100 }] },
+      },
+      include: LOAN_INCLUDE,
+    });
     expect((result as any).id).toBe('loan-new');
   });
 });
@@ -238,7 +275,9 @@ describe('updateLoan', () => {
     loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
     loanMock.update.mockResolvedValue({ ...MOCK_LOAN, emiAmount: 46000 });
     const result = await updateLoan('u1', 'loan-1', { emiAmount: 46000 });
-    expect(loanMock.update).toHaveBeenCalledWith({ where: { id: 'loan-1' }, data: { emiAmount: 46000 } });
+    expect(loanMock.update).toHaveBeenCalledWith({
+      where: { id: 'loan-1' }, data: { emiAmount: 46000 }, include: LOAN_INCLUDE,
+    });
     expect((result as any).emiAmount).toBe(46000);
   });
 
@@ -266,7 +305,7 @@ describe('getLoanForAudit', () => {
   it('scopes to the requester for MEMBER', async () => {
     loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
     const result = await getLoanForAudit('u1', 'loan-1', 'MEMBER');
-    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1', userId: 'u1' } });
+    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1', ...ownerInclusive('u1') } });
     expect(result).toBe(MOCK_LOAN);
   });
 
@@ -284,7 +323,7 @@ describe('getLoanForAudit', () => {
 
   it('defaults requesterRole to MEMBER when omitted', async () => {
     await getLoanForAudit('u1', 'loan-1');
-    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1', userId: 'u1' } });
+    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1', ...ownerInclusive('u1') } });
   });
 });
 
@@ -302,7 +341,7 @@ describe('getLoanAmortization', () => {
   it('scopes findFirst to userId when provided', async () => {
     loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
     await getLoanAmortization('u1', 'loan-1');
-    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1', userId: 'u1' } });
+    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1', ...ownerInclusive('u1') } });
   });
 
   it('omits userId in query when undefined (ADMIN family-wide)', async () => {
@@ -332,8 +371,38 @@ describe('simulatePrepayment', () => {
     expect(result.savings.interestSaved).toBeGreaterThan(0);
   });
 
-  it('prepaymentCharges is 0 when prepaymentChargesPct is null', async () => {
-    loanMock.findFirst.mockResolvedValue({ ...MOCK_LOAN, prepaymentChargesPct: null });
+  it('reduce_emi derives the new EMI from computeEmi, not an inline formula', async () => {
+    // Guards the extraction: simulatePrepayment used to carry its own copy of
+    // P*r*(1+r)^n/((1+r)^n-1). The derived EMI must clear buildAmortizationSchedule's
+    // first-month-interest floor, which is exactly why computeEmi rounds UP.
+    loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
+
+    // The guard is structural: buildAmortizationSchedule THROWS on an EMI at or below
+    // the first month's interest, so a schedule that builds at all proves the derived
+    // EMI cleared the floor. A nearest-rounded EMI can fail exactly here.
+    const result = await simulatePrepayment('u1', 'loan-1', 500_000, 'reduce_emi');
+
+    expect(result.after.months).toBeGreaterThan(0);
+    // reduce_emi keeps the tenure and shrinks the payment, unlike reduce_tenure.
+    const reduceTenure = await simulatePrepayment('u1', 'loan-1', 500_000, 'reduce_tenure');
+    expect(result.after.months).toBeGreaterThan(reduceTenure.after.months);
+    expect(result.savings.monthsSaved).toBeLessThan(reduceTenure.savings.monthsSaved);
+  });
+
+  it('reduce_emi survives a prepayment that clears the whole balance', async () => {
+    // newOutstanding hits 0, so computeEmi returns null and the existing EMI is used.
+    // Without the fallback this passed null into buildAmortizationSchedule.
+    loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
+    const full = Number(MOCK_LOAN.outstandingBalance);
+
+    const result = await simulatePrepayment('u1', 'loan-1', full, 'reduce_emi');
+    expect(result.after.months).toBe(0);
+    expect(result.after.totalInterest).toBe(0);
+    expect(result.savings.interestSaved).toBeGreaterThan(0);
+  });
+
+  it('prepaymentCharges is 0 when no charge is recorded', async () => {
+    loanMock.findFirst.mockResolvedValue({ ...MOCK_LOAN, prepaymentChargesAmount: 0 });
     const result = await simulatePrepayment('u1', 'loan-1', 100_000, 'reduce_tenure');
     expect(result.prepaymentCharges).toBe(0);
   });
@@ -347,5 +416,343 @@ describe('simulatePrepayment', () => {
     loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
     await simulatePrepayment(undefined, 'loan-1', 100_000, 'reduce_tenure');
     expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1' } });
+  });
+});
+
+// ─── Requirement 4: co-owner visibility (the security surface) ────────────────
+
+describe('loan visibility — who can see and edit a shared loan', () => {
+  beforeEach(() => {
+    userMock.findMany.mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]);
+  });
+
+  it('a MEMBER sees loans they own OR co-own, and nothing else', async () => {
+    loanMock.findMany.mockResolvedValue([]);
+    await getLoans('u2');
+
+    // The OR is the whole point: without the owners clause a co-owner sees nothing.
+    expect(loanMock.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { OR: [{ userId: 'u2' }, { owners: { some: { userId: 'u2' } } }] },
+      }),
+    );
+  });
+
+  it.each([
+    ['updateLoan', () => updateLoan('u2', 'loan-1', { emiAmount: 1 })],
+    ['deleteLoan', () => deleteLoan('u2', 'loan-1')],
+    ['getLoanForAudit', () => getLoanForAudit('u2', 'loan-1')],
+  ])('%s scopes a MEMBER to loans they own or co-own', async (_name, call) => {
+    loanMock.findFirst.mockResolvedValue({ ...MOCK_LOAN, userId: 'u1' });
+    loanMock.update.mockResolvedValue(MOCK_LOAN);
+    loanMock.delete.mockResolvedValue(MOCK_LOAN);
+
+    await call().catch(() => { /* only the predicate matters here */ });
+
+    expect(loanMock.findFirst).toHaveBeenCalledWith({
+      where: { id: 'loan-1', OR: [{ userId: 'u2' }, { owners: { some: { userId: 'u2' } } }] },
+    });
+  });
+
+  it.each([
+    ['updateLoan', () => updateLoan('admin-1', 'loan-1', { emiAmount: 1 }, 'ADMIN')],
+    ['deleteLoan', () => deleteLoan('admin-1', 'loan-1', 'ADMIN')],
+    ['getLoanForAudit', () => getLoanForAudit('admin-1', 'loan-1', 'ADMIN')],
+  ])('%s drops the owner filter entirely for an ADMIN', async (_name, call) => {
+    loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
+    loanMock.update.mockResolvedValue(MOCK_LOAN);
+    loanMock.delete.mockResolvedValue(MOCK_LOAN);
+
+    await call();
+    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1' } });
+  });
+
+  it('a stranger gets NotFound, not someone else\'s loan', async () => {
+    // The predicate matches nothing, so findFirst returns null and the service 404s.
+    loanMock.findFirst.mockResolvedValue(null);
+    await expect(updateLoan('stranger', 'loan-1', {})).rejects.toThrow(/not found/i);
+    await expect(deleteLoan('stranger', 'loan-1')).rejects.toThrow(/not found/i);
+    expect(loanMock.update).not.toHaveBeenCalled();
+    expect(loanMock.delete).not.toHaveBeenCalled();
+  });
+
+  it('a co-owner cannot hijack the primary by omitting owners', async () => {
+    // Owners default from the ROW's userId, never the requester — otherwise u2 could
+    // send owners:[] and quietly become the sole 100% owner.
+    loanMock.findFirst.mockResolvedValue({ ...MOCK_LOAN, userId: 'u1' });
+    loanMock.update.mockResolvedValue({ ...MOCK_LOAN, owners: [] });
+
+    await updateLoan('u2', 'loan-1', {}, 'MEMBER', []);
+
+    const call = loanMock.update.mock.calls[0][0];
+    expect(call.data.owners.create).toEqual([{ userId: 'u1', sharePercent: 100 }]);
+  });
+
+  it('a co-owner cannot remove the primary owner with a NON-empty owners array', async () => {
+    // The empty-array default above only guards the empty case. A non-empty array was
+    // taken verbatim and written with `deleteMany: {}`, so a 1% co-owner could send
+    // [{self, 100}] and delete the primary owner's row from their own loan.
+    loanMock.findFirst.mockResolvedValue({ ...MOCK_LOAN, userId: 'u1' });
+
+    await expect(
+      updateLoan('u2', 'loan-1', {}, 'MEMBER', [{ userId: 'u2', sharePercent: 100 }]),
+    ).rejects.toThrow(/only the loan owner or an admin/i);
+
+    expect(loanMock.update).not.toHaveBeenCalled();
+  });
+
+  it('the primary owner may restructure ownership away from themselves', async () => {
+    loanMock.findFirst.mockResolvedValue({ ...MOCK_LOAN, userId: 'u1' });
+    loanMock.update.mockResolvedValue({ ...MOCK_LOAN, owners: [] });
+    userMock.findMany.mockResolvedValue([{ id: 'u2' }]);
+
+    await updateLoan('u1', 'loan-1', {}, 'MEMBER', [{ userId: 'u2', sharePercent: 100 }]);
+
+    const call = loanMock.update.mock.calls[0][0];
+    expect(call.data.owners.create).toEqual([{ userId: 'u2', sharePercent: 100 }]);
+  });
+
+  it('refuses to attach an asset belonging to another member', async () => {
+    // loanInclude returns the asset's name and value, so an unvalidated assetId let
+    // member A read member B's collateral back through their own loan — and B's asset
+    // list then disclosed A's loan in return.
+    loanMock.findFirst.mockResolvedValue({ ...MOCK_LOAN, userId: 'u1' });
+    assetMock.findFirst.mockResolvedValue(null); // not owned by the loan's owner
+
+    await expect(
+      updateLoan('u1', 'loan-1', { assetId: 'asset-of-u2' } as never, 'MEMBER'),
+    ).rejects.toThrow(/asset/i);
+
+    expect(loanMock.update).not.toHaveBeenCalled();
+    expect(assetMock.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'asset-of-u2', userId: 'u1' } }),
+    );
+  });
+
+  it('a non-numeric share is rejected', async () => {
+    loanMock.findFirst.mockResolvedValue({ ...MOCK_LOAN, userId: 'u1' });
+
+    await expect(
+      updateLoan('u1', 'loan-1', {}, 'MEMBER', [
+        { userId: 'u1', sharePercent: Number.NaN },
+      ]),
+    ).rejects.toThrow(/greater than 0/i);
+
+    expect(loanMock.update).not.toHaveBeenCalled();
+  });
+
+  it('a share that rounds to 0% is rejected rather than granting silent write access', async () => {
+    // 0.001 passed the raw `> 0` check and then stored as 0. Because the visibility
+    // predicates key on owner membership alone, that 0% row still granted full
+    // view/edit/delete rights on the loan.
+    loanMock.findFirst.mockResolvedValue({ ...MOCK_LOAN, userId: 'u1' });
+
+    await expect(
+      updateLoan('u1', 'loan-1', {}, 'MEMBER', [
+        { userId: 'u1', sharePercent: 99.999 },
+        { userId: 'u3', sharePercent: 0.001 },
+      ]),
+    ).rejects.toThrow(/greater than 0/i);
+
+    expect(loanMock.update).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Owner share validation ───────────────────────────────────────────────────
+
+describe('loan owner shares', () => {
+  beforeEach(() => {
+    userMock.findMany.mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]);
+    loanMock.create.mockResolvedValue({ ...MOCK_LOAN, owners: [] });
+  });
+
+  const base = { lenderName: 'HDFC', loanType: 'PERSONAL', principalAmount: 100000 };
+
+  it('accepts shares that total 100', async () => {
+    await createLoan('u1', base as any, [
+      { userId: 'u1', sharePercent: 60 },
+      { userId: 'u2', sharePercent: 40 },
+    ]);
+    expect(loanMock.create).toHaveBeenCalled();
+  });
+
+  it('accepts fractional shares within the 0.01 tolerance', async () => {
+    await createLoan('u1', base as any, [
+      { userId: 'u1', sharePercent: 33.33 },
+      { userId: 'u2', sharePercent: 66.67 },
+    ]);
+    expect(loanMock.create).toHaveBeenCalled();
+  });
+
+  it.each([
+    [[{ userId: 'u1', sharePercent: 60 }, { userId: 'u2', sharePercent: 30 }], /add up to 100/i],
+    [[{ userId: 'u1', sharePercent: 60 }, { userId: 'u2', sharePercent: 50 }], /add up to 100/i],
+    [[{ userId: 'u1', sharePercent: 50 }, { userId: 'u1', sharePercent: 50 }], /only be added once/i],
+    [[{ userId: 'u1', sharePercent: 0 }, { userId: 'u2', sharePercent: 100 }], /greater than 0/i],
+    [[{ userId: 'u1', sharePercent: 101 }], /at most 100/i],
+    [[{ userId: '', sharePercent: 100 }], /owner is required/i],
+  ])('rejects invalid shares (%#)', async (owners, message) => {
+    await expect(createLoan('u1', base as any, owners as any)).rejects.toThrow(message);
+    expect(loanMock.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an inactive or deleted family member as an owner', async () => {
+    userMock.findMany.mockResolvedValue([{ id: 'u1' }]); // u2 is not active
+    await expect(createLoan('u1', base as any, [
+      { userId: 'u1', sharePercent: 50 },
+      { userId: 'u2', sharePercent: 50 },
+    ])).rejects.toThrow(/active family members/i);
+  });
+});
+
+// ─── Requirement 5: secured loans must name their collateral ──────────────────
+
+describe('secured loans require an asset', () => {
+  beforeEach(() => {
+    userMock.findMany.mockResolvedValue([{ id: 'u1' }]);
+    loanMock.create.mockResolvedValue({ ...MOCK_LOAN, owners: [] });
+  });
+
+  it.each(['HOME', 'AUTO', 'LAP', 'GOLD'])('rejects a %s loan with no asset', async (loanType) => {
+    await expect(createLoan('u1', { loanType, lenderName: 'X' } as any))
+      .rejects.toThrow(/secured and must be linked to an asset/i);
+    expect(loanMock.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['PERSONAL', 'EDUCATION', 'BUSINESS', 'OTHER'])(
+    'allows an unsecured %s loan with no asset', async (loanType) => {
+      await createLoan('u1', { loanType, lenderName: 'X' } as any);
+      expect(loanMock.create).toHaveBeenCalled();
+    },
+  );
+
+  it('allows a secured loan once an asset is linked', async () => {
+    await createLoan('u1', { loanType: 'HOME', lenderName: 'X', assetId: 'asset-1' } as any);
+    expect(loanMock.create).toHaveBeenCalled();
+  });
+
+  it('blocks a PARTIAL update that flips an assetless loan to a secured type', async () => {
+    // The route parses updates with .partial(), so the body carries no assetId for a Zod
+    // refinement to inspect. Only the service sees the merged state.
+    loanMock.findFirst.mockResolvedValue({ ...MOCK_LOAN, loanType: 'PERSONAL', assetId: null });
+    await expect(updateLoan('u1', 'loan-1', { loanType: 'HOME' } as any))
+      .rejects.toThrow(/secured and must be linked to an asset/i);
+    expect(loanMock.update).not.toHaveBeenCalled();
+  });
+
+  it('allows that same flip when an asset is supplied in the same update', async () => {
+    loanMock.findFirst.mockResolvedValue({ ...MOCK_LOAN, loanType: 'PERSONAL', assetId: null });
+    loanMock.update.mockResolvedValue({ ...MOCK_LOAN, owners: [] });
+    await updateLoan('u1', 'loan-1', { loanType: 'HOME', assetId: 'asset-1' } as any);
+    expect(loanMock.update).toHaveBeenCalled();
+  });
+
+  it('keeps an existing asset when the update only changes the type', async () => {
+    loanMock.findFirst.mockResolvedValue({ ...MOCK_LOAN, loanType: 'AUTO', assetId: 'asset-9' });
+    loanMock.update.mockResolvedValue({ ...MOCK_LOAN, owners: [] });
+    await updateLoan('u1', 'loan-1', { loanType: 'HOME' } as any);
+    expect(loanMock.update).toHaveBeenCalled();
+  });
+});
+
+// ─── Share apportionment (what stops a co-owned loan being counted twice) ─────
+
+describe('per-user share decoration', () => {
+  const shared = {
+    ...MOCK_LOAN,
+    userId: 'u1',
+    outstandingBalance: 5_000_000,
+    emiAmount: 50_000,
+    owners: [
+      { userId: 'u1', sharePercent: 60, user: { name: 'Asha' } },
+      { userId: 'u2', sharePercent: 40, user: { name: 'Ravi' } },
+    ],
+    user: { name: 'Asha' },
+  };
+
+  it('gives each owner their own share of the balance and EMI', async () => {
+    loanMock.findMany.mockResolvedValue([shared]);
+
+    const [forAsha] = await getLoans('u1');
+    expect(forAsha.sharePercent).toBe(60);
+    expect(forAsha.outstandingBalanceShare).toBe(3_000_000);
+    expect(forAsha.emiAmountShare).toBe(30_000);
+
+    const [forRavi] = await getLoans('u2');
+    expect(forRavi.sharePercent).toBe(40);
+    expect(forRavi.outstandingBalanceShare).toBe(2_000_000);
+
+    // The point of all this: the two shares reconstitute the whole, never double it.
+    expect(forAsha.outstandingBalanceShare + forRavi.outstandingBalanceShare)
+      .toBe(Number(shared.outstandingBalance));
+  });
+
+  it('exposes every owner with their name, for the UI', async () => {
+    loanMock.findMany.mockResolvedValue([shared]);
+    const [loan] = await getLoans('u1');
+    expect(loan.owners).toEqual([
+      { userId: 'u1', sharePercent: 60, userName: 'Asha' },
+      { userId: 'u2', sharePercent: 40, userName: 'Ravi' },
+    ]);
+  });
+
+  it('gives a non-owner a 0% share rather than the full amount', async () => {
+    // Reachable for an ADMIN viewing family-wide: they see the loan but hold none of it.
+    loanMock.findMany.mockResolvedValue([shared]);
+    const [loan] = await getLoans('stranger');
+    expect(loan.sharePercent).toBe(0);
+    expect(loan.outstandingBalanceShare).toBe(0);
+  });
+
+  it('falls back to 100% for a legacy loan with no owner rows', async () => {
+    loanMock.findMany.mockResolvedValue([{ ...shared, owners: [] }]);
+    const [loan] = await getLoans('u1');
+    expect(loan.sharePercent).toBe(100);
+    expect(loan.outstandingBalanceShare).toBe(5_000_000);
+  });
+
+  it('gives the primary owner 0% when they assigned the whole share away', async () => {
+    // u1 is Loan.userId but holds no share. Crediting them 100% here — as an earlier
+    // version did — meant u1 AND u2 each reported the full balance and each claimed the
+    // full section 24B interest on one loan. Owner rows are the source of truth.
+    loanMock.findMany.mockResolvedValue([{
+      ...shared,
+      owners: [{ userId: 'u2', sharePercent: 100, user: { name: 'Ravi' } }],
+    }]);
+    const [loan] = await getLoans('u1');
+    expect(loan.sharePercent).toBe(0);
+    expect(loan.outstandingBalanceShare).toBe(0);
+  });
+
+  it('never lets two people report more than the whole loan between them', async () => {
+    loanMock.findMany.mockResolvedValue([{
+      ...shared,
+      owners: [{ userId: 'u2', sharePercent: 100, user: { name: 'Ravi' } }],
+    }]);
+    const [asPrimary] = await getLoans('u1');
+    loanMock.findMany.mockResolvedValue([{
+      ...shared,
+      owners: [{ userId: 'u2', sharePercent: 100, user: { name: 'Ravi' } }],
+    }]);
+    const [asOwner] = await getLoans('u2');
+
+    expect(asPrimary.outstandingBalanceShare + asOwner.outstandingBalanceShare)
+      .toBe(Number(shared.outstandingBalance));
+  });
+
+  it('reports 100% on the family-wide view, where no user is scoped', async () => {
+    loanMock.findMany.mockResolvedValue([shared]);
+    const [loan] = await getLoans();
+    expect(loan.sharePercent).toBe(100);
+    expect(loan.outstandingBalanceShare).toBe(5_000_000);
+  });
+
+  it('handles a missing owner name without crashing', async () => {
+    loanMock.findMany.mockResolvedValue([{
+      ...shared,
+      owners: [{ userId: 'u1', sharePercent: 100, user: null }],
+    }]);
+    const [loan] = await getLoans('u1');
+    expect(loan.owners[0].userName).toBe('');
   });
 });

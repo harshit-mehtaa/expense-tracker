@@ -1,40 +1,256 @@
 import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
-import { ownerScopedWhere } from '../utils/resolveTargetUserId';
-import type { Prisma } from '@prisma/client';
+import { computeEmi } from '../utils/loanMath';
+import type { Prisma, LoanType } from '@prisma/client';
+
+export interface LoanOwnerInput {
+  userId: string;
+  sharePercent: number;
+}
+
+/** Loan types secured against collateral — these must name the asset they're against. */
+const SECURED_LOAN_TYPES: LoanType[] = ['HOME', 'AUTO', 'LAP', 'GOLD'];
+
+// ─── Visibility ───────────────────────────────────────────────────────────────
+//
+// These are file-local ON PURPOSE, exactly as investmentService keeps
+// userRealEstateWhere/userRealEstateWriteWhere private rather than promoting them into
+// resolveTargetUserId. The shared `ownerScopedWhere` has ~52 call sites across 11
+// entities and a flat `{ id, userId? }` shape with no OR; adding a co-owner clause there
+// would silently widen visibility for budgets, insurance, capital gains and eight others.
+// A loan-shaped predicate belongs to loans.
+
+function userLoanWhere(userId: string): Prisma.LoanWhereInput {
+  return {
+    OR: [
+      { userId },
+      { owners: { some: { userId } } },
+    ],
+  };
+}
+
+function userLoanWriteWhere(id: string, requesterId: string, requesterRole: string): Prisma.LoanWhereInput {
+  if (requesterRole === 'ADMIN') return { id };
+  return {
+    id,
+    OR: [
+      { userId: requesterId },
+      { owners: { some: { userId: requesterId } } },
+    ],
+  };
+}
+
+// ─── Owners ───────────────────────────────────────────────────────────────────
+
+function normalizeLoanOwners(defaultUserId: string, owners?: LoanOwnerInput[]) {
+  const rows = owners?.length ? owners : [{ userId: defaultUserId, sharePercent: 100 }];
+  const seen = new Set<string>();
+  let totalShare = 0;
+
+  const normalized = rows.map((owner) => {
+    const sharePercent = Number(owner.sharePercent);
+    if (!owner.userId) throw AppError.validationError('Loan owner is required');
+    if (seen.has(owner.userId)) throw AppError.validationError('A loan owner can only be added once');
+    if (!Number.isFinite(sharePercent)) {
+      throw AppError.validationError('Owner share must be greater than 0 and at most 100');
+    }
+
+    // Round BEFORE validating, not after. Validating the raw value let 0.001 pass the
+    // `> 0` check and then store as 0 — and since the visibility predicates key on
+    // owner membership alone, that 0% row still granted full view/edit/delete rights.
+    const roundedShare = Math.round(sharePercent * 100) / 100;
+    if (roundedShare <= 0 || roundedShare > 100) {
+      throw AppError.validationError('Owner share must be greater than 0 and at most 100');
+    }
+
+    seen.add(owner.userId);
+    totalShare += roundedShare;
+    return { userId: owner.userId, sharePercent: roundedShare };
+  });
+
+  if (Math.abs(totalShare - 100) > 0.01) {
+    throw AppError.validationError('Loan owner shares must add up to 100%');
+  }
+
+  return normalized;
+}
+
+async function assertActiveLoanOwners(owners: LoanOwnerInput[]) {
+  const ownerIds = owners.map((owner) => owner.userId);
+  const activeUsers = await prisma.user.findMany({
+    where: { id: { in: ownerIds }, isActive: true, deletedAt: null },
+    select: { id: true },
+  });
+  const activeIds = new Set(activeUsers.map((user) => user.id));
+  const missing = ownerIds.find((ownerId) => !activeIds.has(ownerId));
+  if (missing) throw AppError.validationError('All loan owners must be active family members');
+}
+
+/**
+ * Secured loans must name their collateral.
+ *
+ * Enforced here rather than only in the route's Zod schema because the update route
+ * parses with `.partial()`, so a PUT body of `{ loanType: 'HOME' }` carries no assetId
+ * for a refinement to inspect — the check has to see the MERGED state, which only the
+ * service has.
+ */
+/**
+ * The linked asset must belong to the loan's owner.
+ *
+ * Presence alone is not enough: `loanInclude` returns the asset, so accepting an
+ * arbitrary id would let one family member attach another's asset to their loan and
+ * read its name, value and notes straight back out. It would also block the real owner
+ * from deleting their own asset, since deleteAsset refuses while a loan is attached.
+ * Mirrors the bankAccount ownership check in transactionService.
+ */
+async function assertAssetOwned(userId: string, assetId: string | null | undefined) {
+  if (!assetId) return;
+  const asset = await prisma.asset.findFirst({ where: { id: assetId, userId }, select: { id: true } });
+  if (!asset) throw AppError.notFound('Asset');
+}
+
+export function assertAssetRequired(loanType: LoanType, assetId: string | null | undefined) {
+  if (SECURED_LOAN_TYPES.includes(loanType) && !assetId) {
+    throw AppError.validationError(
+      `A ${loanType} loan is secured and must be linked to an asset`,
+    );
+  }
+}
+
+/** Attaches the requesting user's share, plus their proportion of the money figures. */
+function decorateLoan(row: any, scopedUserId?: string) {
+  const { user, owners = [], ...loan } = row;
+  const ownerRows = owners.map((o: any) => ({
+    userId: o.userId,
+    sharePercent: Number(o.sharePercent),
+    userName: o.user?.name ?? '',
+  }));
+
+  // When owner rows exist they ARE the source of truth — do NOT also fall back to 100%
+  // for the primary. A loan can legitimately have owners:[{B:100}] while Loan.userId is
+  // A (A created it, then assigned the whole share to B); crediting A 100% as well made
+  // BOTH report the full balance and BOTH claim the full section 24B interest.
+  // ownerRows.length === 0 covers loans predating the owners table.
+  const sharePercent = scopedUserId
+    ? ownerRows.find((o: any) => o.userId === scopedUserId)?.sharePercent
+      ?? (ownerRows.length === 0 ? 100 : 0)
+    : 100;
+  const multiplier = sharePercent / 100;
+
+  return {
+    ...loan,
+    userName: user?.name ?? '',
+    owners: ownerRows,
+    sharePercent,
+    // Rounded to the paisa so the API never emits 1499999.9999999998.
+    outstandingBalanceShare: Math.round(Number(loan.outstandingBalance) * multiplier * 100) / 100,
+    emiAmountShare: Math.round(Number(loan.emiAmount) * multiplier * 100) / 100,
+  };
+}
+
+const loanInclude = {
+  user: { select: { name: true } },
+  owners: { include: { user: { select: { name: true } } } },
+  asset: true,
+} as const;
+
+// ─── CRUD ─────────────────────────────────────────────────────────────────────
 
 export async function getLoans(userId?: string) {
   const rows = await prisma.loan.findMany({
-    where: userId ? { userId } : {},
-    include: { user: { select: { name: true } } },
+    where: userId ? userLoanWhere(userId) : {},
+    include: loanInclude,
     orderBy: { emiDate: 'asc' },
   });
-  return rows.map(({ user, ...loan }) => ({ ...loan, userName: user?.name ?? '' }));
+  return rows.map((row) => decorateLoan(row, userId));
 }
 
-export async function createLoan(userId: string, data: Omit<Prisma.LoanCreateInput, 'user'>) {
-  return prisma.loan.create({ data: { ...data, userId } as Prisma.LoanUncheckedCreateInput });
+export async function createLoan(
+  userId: string,
+  data: Omit<Prisma.LoanCreateInput, 'user'>,
+  owners?: LoanOwnerInput[],
+) {
+  assertAssetRequired(data.loanType as LoanType, (data as any).assetId);
+  await assertAssetOwned(userId, (data as any).assetId);
+  const ownerRows = normalizeLoanOwners(userId, owners);
+  await assertActiveLoanOwners(ownerRows);
+
+  const loan = await prisma.loan.create({
+    data: {
+      ...data,
+      userId,
+      owners: { create: ownerRows.map((o) => ({ userId: o.userId, sharePercent: o.sharePercent })) },
+    } as Prisma.LoanUncheckedCreateInput,
+    include: loanInclude,
+  });
+  return decorateLoan(loan, userId);
 }
 
-export async function updateLoan(requesterId: string, id: string, data: Prisma.LoanUpdateInput, requesterRole = 'MEMBER') {
-  const loan = await prisma.loan.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
+export async function updateLoan(
+  requesterId: string,
+  id: string,
+  data: Prisma.LoanUpdateInput,
+  requesterRole = 'MEMBER',
+  owners?: LoanOwnerInput[],
+) {
+  const loan = await prisma.loan.findFirst({ where: userLoanWriteWhere(id, requesterId, requesterRole) });
   if (!loan) throw AppError.notFound('Loan');
-  return prisma.loan.update({ where: { id }, data });
+
+  // Validate against the MERGED state: a partial update changing only loanType must
+  // still be checked against the asset already on the row.
+  const nextLoanType = (data.loanType as LoanType | undefined) ?? loan.loanType;
+  const nextAssetId = 'assetId' in data ? (data as any).assetId : loan.assetId;
+  assertAssetRequired(nextLoanType, nextAssetId);
+  // Scoped to the loan's owner, not the requester — a co-owner attaching an asset must
+  // attach one the loan's owner holds, not one of their own.
+  if ('assetId' in data) await assertAssetOwned(loan.userId, nextAssetId);
+
+  let ownerRows: ReturnType<typeof normalizeLoanOwners> | undefined;
+  if (owners !== undefined) {
+    // The empty-array default below protects the primary owner only when the array is
+    // EMPTY. A non-empty array was taken as-is, so a 1% co-owner could PUT
+    // `owners: [{self, 100}]`, and the `deleteMany: {}` further down would remove the
+    // primary owner from their own loan. Only the primary owner or an admin may
+    // restructure ownership in a way that drops the primary.
+    if (owners.length > 0 && !owners.some((o) => o.userId === loan.userId)) {
+      if (requesterRole !== 'ADMIN' && requesterId !== loan.userId) {
+        throw AppError.forbidden('Only the loan owner or an admin can remove the primary owner');
+      }
+    }
+    // Default from the ROW's owner, never the requester — otherwise a co-owner could
+    // reassign the loan to themselves by sending an empty owners array.
+    ownerRows = normalizeLoanOwners(loan.userId, owners);
+    await assertActiveLoanOwners(ownerRows);
+  }
+
+  const updated = await prisma.loan.update({
+    where: { id },
+    data: {
+      ...data,
+      ...(ownerRows
+        ? { owners: { deleteMany: {}, create: ownerRows.map((o) => ({ userId: o.userId, sharePercent: o.sharePercent })) } }
+        : {}),
+    },
+    include: loanInclude,
+  });
+  // undefined for an ADMIN, matching the GET path: an admin is not an owner, and
+  // decorating with their id would write sharePercent 0 into the audit newValue.
+  return decorateLoan(updated, requesterRole === 'ADMIN' ? undefined : requesterId);
 }
 
 export async function deleteLoan(requesterId: string, id: string, requesterRole = 'MEMBER') {
-  const loan = await prisma.loan.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
+  const loan = await prisma.loan.findFirst({ where: userLoanWriteWhere(id, requesterId, requesterRole) });
   if (!loan) throw AppError.notFound('Loan');
   return prisma.loan.delete({ where: { id } });
 }
 
 /**
- * Snapshot fetch for audit logging — not an authorization check. The caller (route)
- * still relies on updateLoan/deleteLoan's own ownerScopedWhere lookup to enforce
- * access; this just captures the pre-mutation state for `recordAuditLog`.
+ * Snapshot fetch for audit logging — not an authorization check. updateLoan/deleteLoan
+ * still enforce access via their own userLoanWriteWhere lookup; this only captures the
+ * pre-mutation state for `recordAuditLog`.
  */
 export async function getLoanForAudit(requesterId: string, id: string, requesterRole = 'MEMBER') {
-  return prisma.loan.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
+  return prisma.loan.findFirst({ where: userLoanWriteWhere(id, requesterId, requesterRole) });
 }
 
 // ─── Amortization Schedule ────────────────────────────────────────────────────
@@ -99,7 +315,9 @@ export function buildAmortizationSchedule(
 }
 
 export async function getLoanAmortization(userId: string | undefined, id: string) {
-  const loan = await prisma.loan.findFirst({ where: userId ? { id, userId } : { id } });
+  // Owner-inclusive: a co-owner must be able to see the schedule for a loan they
+  // partly hold. `undefined` userId is the ADMIN family-wide path.
+  const loan = await prisma.loan.findFirst({ where: userId ? { id, ...userLoanWhere(userId) } : { id } });
   if (!loan) throw AppError.notFound('Loan');
 
   const schedule = buildAmortizationSchedule(
@@ -124,7 +342,9 @@ export async function simulatePrepayment(
   prepaymentAmount: number,
   mode: 'reduce_tenure' | 'reduce_emi',
 ) {
-  const loan = await prisma.loan.findFirst({ where: userId ? { id, userId } : { id } });
+  // Owner-inclusive: a co-owner must be able to see the schedule for a loan they
+  // partly hold. `undefined` userId is the ADMIN family-wide path.
+  const loan = await prisma.loan.findFirst({ where: userId ? { id, ...userLoanWhere(userId) } : { id } });
   if (!loan) throw AppError.notFound('Loan');
 
   const outstanding = Number(loan.outstandingBalance);
@@ -141,9 +361,10 @@ export async function simulatePrepayment(
   if (mode === 'reduce_emi') {
     // Recalculate EMI for remaining tenure
     const remainingMonths = current.length;
-    const monthlyRate = rate / 100 / 12;
-    const newEmi = (newOutstanding * monthlyRate * Math.pow(1 + monthlyRate, remainingMonths))
-      / (Math.pow(1 + monthlyRate, remainingMonths) - 1);
+    // Same formula the loan form derives from — shared so the two can never disagree.
+    // Falls back to the existing EMI when the prepayment clears the balance entirely
+    // (newOutstanding === 0), where there is nothing left to amortise.
+    const newEmi = computeEmi(newOutstanding, rate, remainingMonths) ?? Number(loan.emiAmount);
     afterSchedule = buildAmortizationSchedule(newOutstanding, rate, newEmi, loan.emiDate, new Date());
   } else {
     afterSchedule = buildAmortizationSchedule(newOutstanding, rate, emi, loan.emiDate, new Date());
@@ -158,6 +379,8 @@ export async function simulatePrepayment(
       interestSaved: currentTotalInterest - newTotalInterest,
       monthsSaved: current.length - afterSchedule.length,
     },
-    prepaymentCharges: Number(loan.prepaymentChargesPct ?? 0) * prepaymentAmount / 100,
+    // A flat fee now, not a percentage of the prepayment — so it no longer scales
+    // with how much is being repaid.
+    prepaymentCharges: Number(loan.prepaymentChargesAmount ?? 0),
   };
 }

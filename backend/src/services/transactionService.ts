@@ -469,7 +469,15 @@ export async function createTransaction(
 
     // Validate loan ownership and balance if loanId provided
     if (effectiveLoanId) {
-      const loan = await tx.loan.findFirst({ where: { id: effectiveLoanId, userId } });
+      // Owner-inclusive, matching loanService's visibility rule. Scoping this to
+      // `userId` alone would let a co-owner view and edit a loan but not record an EMI
+      // payment against it — requirement 4 half-landing as a confusing "Loan not found".
+      const loan = await tx.loan.findFirst({
+        where: {
+          id: effectiveLoanId,
+          OR: [{ userId }, { owners: { some: { userId } } }],
+        },
+      });
       if (!loan) throw AppError.notFound('Loan');
       if (data.amount > Number(loan.outstandingBalance)) {
         throw AppError.badRequest('Payment amount exceeds outstanding loan balance');

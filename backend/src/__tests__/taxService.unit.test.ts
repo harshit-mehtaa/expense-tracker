@@ -636,3 +636,60 @@ describe('get80CTracker', () => {
     expect(result.breakdown.licPremiums).toBeCloseTo(7_500);
   });
 });
+
+// ─── §24B apportionment for jointly-held home loans ──────────────────────────
+
+describe('section 24B is apportioned by ownership share', () => {
+  const twelveMonthsAt15k = Array.from({ length: 12 }, (_, i) => ({
+    month: i + 1, interest: 15_000, principal: 15_000, balance: 0,
+  }));
+
+  function mockJointLoan(owners: { userId: string; sharePercent: number }[]) {
+    (prisma.loan.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 'loan-1', userId: 'u1', outstandingBalance: 3_000_000, interestRate: 0.085,
+        emiAmount: 30_000, emiDate: new Date('2025-01-01'), section24bEligible: true, owners,
+      },
+    ]);
+    (buildAmortizationSchedule as ReturnType<typeof vi.fn>).mockReturnValue(twelveMonthsAt15k);
+    profileMock.mockResolvedValue(makeProfile(1_500_000));
+  }
+
+  it('gives each owner their proportion of the ₹1.8L interest', async () => {
+    mockJointLoan([{ userId: 'u1', sharePercent: 60 }, { userId: 'u2', sharePercent: 40 }]);
+    expect((await getTaxSummary('u1', '2025-26')).deductions.section24B).toBe(108_000);
+
+    mockJointLoan([{ userId: 'u1', sharePercent: 60 }, { userId: 'u2', sharePercent: 40 }]);
+    expect((await getTaxSummary('u2', '2025-26')).deductions.section24B).toBe(72_000);
+  });
+
+  it('applies the ₹2L ceiling PER OWNER, after the share', async () => {
+    // ₹6L annual interest split 50/50 = ₹3L each, capped to ₹2L each — not one ₹2L cap
+    // shared between them, which is how joint home-loan relief actually works.
+    (prisma.loan.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 'loan-1', userId: 'u1', outstandingBalance: 9_000_000, interestRate: 0.085,
+        emiAmount: 80_000, emiDate: new Date('2025-01-01'), section24bEligible: true,
+        owners: [{ userId: 'u1', sharePercent: 50 }, { userId: 'u2', sharePercent: 50 }],
+      },
+    ]);
+    (buildAmortizationSchedule as ReturnType<typeof vi.fn>).mockReturnValue(
+      Array.from({ length: 12 }, (_, i) => ({ month: i + 1, interest: 50_000, principal: 10_000, balance: 0 })),
+    );
+    profileMock.mockResolvedValue(makeProfile(2_500_000));
+
+    expect((await getTaxSummary('u1', '2025-26')).deductions.section24B).toBe(200_000);
+  });
+
+  it('still gives the primary owner the full deduction on a solely-held loan', async () => {
+    mockJointLoan([]);
+    expect((await getTaxSummary('u1', '2025-26')).deductions.section24B).toBe(180_000);
+  });
+
+  it('claims nothing for a user with no stake, and skips the schedule entirely', async () => {
+    mockJointLoan([{ userId: 'u2', sharePercent: 100 }]);
+    const result = await getTaxSummary('stranger', '2025-26');
+    expect(result.deductions.section24B).toBe(0);
+    expect(buildAmortizationSchedule).not.toHaveBeenCalled();
+  });
+});

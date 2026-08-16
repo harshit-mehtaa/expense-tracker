@@ -66,14 +66,43 @@ describe('normalizeLoan', () => {
       outstandingBalance: '4800000.00' as any,
       interestRate: '8.5' as any,
       emiAmount: '43391.00' as any,
-      prepaymentChargesPct: '2.0' as any,
+      prepaymentChargesAmount: '25000.00' as any,
+      preEmiAmount: '67500.00' as any,
+      sharePercent: '60' as any,
+      outstandingBalanceShare: '2880000.00' as any,
+      emiAmountShare: '26034.60' as any,
+      owners: [{ userId: 'u1', sharePercent: '60' as any, userName: 'Asha' }],
+      asset: { id: 'a1', assetType: 'PROPERTY', name: 'Flat 3B', value: '8500000.00' as any },
     });
     expect(typeof l.principalAmount).toBe('number');
     expect(l.principalAmount).toBe(5000000);
     expect(l.outstandingBalance).toBe(4800000);
     expect(l.interestRate).toBe(8.5);
     expect(l.emiAmount).toBe(43391);
-    expect(l.prepaymentChargesPct).toBe(2);
+    expect(l.prepaymentChargesAmount).toBe(25000);
+    expect(l.preEmiAmount).toBe(67500);
+    expect(l.sharePercent).toBe(60);
+    expect(l.outstandingBalanceShare).toBe(2880000);
+    expect(l.emiAmountShare).toBe(26034.6);
+    expect(l.owners?.[0].sharePercent).toBe(60);
+    expect(l.asset?.value).toBe(8500000);
+  });
+
+  it('keeps a null preEmiAmount null rather than coercing it to 0', () => {
+    // Number(null) is 0, which would render "no pre-EMI" as a real ₹0 charge.
+    const l = normalizeLoan({ ...base, preEmiAmount: null } as any);
+    expect(l.preEmiAmount).toBeNull();
+  });
+
+  it('defaults a missing prepayment charge to 0, not NaN', () => {
+    const l = normalizeLoan({ ...base, prepaymentChargesAmount: undefined } as any);
+    expect(l.prepaymentChargesAmount).toBe(0);
+  });
+
+  it('leaves owners and asset undefined when absent', () => {
+    const l = normalizeLoan({ ...base } as any);
+    expect(l.owners).toBeUndefined();
+    expect(l.asset).toBeUndefined();
   });
 });
 

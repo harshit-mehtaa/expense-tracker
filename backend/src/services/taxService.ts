@@ -138,7 +138,14 @@ export async function getTaxSummary(userId: string, fy: string) {
     prisma.fixedDeposit.findMany({ where: { userId, isTaxSaver: true, startDate: { gte: start, lt: end } } }),
     prisma.insurancePolicy.findMany({ where: { userId, is80cEligible: true } }),
     prisma.insurancePolicy.findMany({ where: { userId, is80dEligible: true } }),
-    prisma.loan.findMany({ where: { userId, section24bEligible: true } }),
+    // Owner-inclusive: a co-owner is entitled to claim their share of the interest.
+    prisma.loan.findMany({
+      where: {
+        section24bEligible: true,
+        OR: [{ userId }, { owners: { some: { userId } } }],
+      },
+      include: { owners: { select: { userId: true, sharePercent: true } } },
+    }),
   ]);
 
   const invAmount = investments.reduce((s, i) => s + Number(i.unitsOrQuantity) * Number(i.purchasePricePerUnit), 0);
@@ -158,8 +165,23 @@ export async function getTaxSummary(userId: string, fy: string) {
     .reduce((s, p) => s + getAnnualPremium(p), 0);
   const total80D = Math.min(ins80dSelf, 25000) + Math.min(ins80dParents, 25000);
 
-  // Section 24(b): use amortization schedule for accurate annual interest (not outstanding * rate)
-  const total24B = loans.reduce((s, l) => {
+  // Section 24(b): annual interest from the amortization schedule, not outstanding * rate.
+  //
+  // Apportioned by ownership share. A jointly-held home loan is claimable by each owner
+  // in proportion to their stake, and the ₹2L ceiling applies PER OWNER — so the cap is
+  // applied after the share, not before. Without this a 50% co-owner would either claim
+  // the whole interest or none of it, and their deduction would contradict the
+  // share-weighted liability shown on their dashboard.
+  const rawTotal24B = loans.reduce((s, l) => {
+    const owners = l.owners ?? [];
+    // Owner rows win outright. Crediting the primary 100% as well let two people each
+    // claim the full interest on one loan — a double deduction.
+    const sharePercent = Number(
+      owners.find((o) => o.userId === userId)?.sharePercent
+        ?? (owners.length === 0 ? 100 : 0),
+    );
+    if (sharePercent <= 0) return s;
+
     const schedule = buildAmortizationSchedule(
       Number(l.outstandingBalance),
       Number(l.interestRate),
@@ -168,8 +190,11 @@ export async function getTaxSummary(userId: string, fy: string) {
       new Date(),
     );
     const annualInterest = schedule.slice(0, 12).reduce((sum, r) => sum + r.interest, 0);
-    return s + Math.min(annualInterest, 200000);
+    return s + annualInterest * (sharePercent / 100);
   }, 0);
+  // The section 24(b) ceiling is per TAXPAYER, not per loan — applying it inside the
+  // reduce let someone with two eligible home loans claim 4L.
+  const total24B = Math.min(rawTotal24B, 200000);
 
   const nps80Ccd1b = Math.min(Number(profile?.nps80Ccd1B ?? 0), 50000);
   const deduction80E = Number(profile?.deduction80E ?? 0);

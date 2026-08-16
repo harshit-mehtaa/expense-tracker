@@ -120,6 +120,13 @@ enum BudgetPeriod {
   FY
 }
 
+enum AssetType {
+  PROPERTY
+  VEHICLE
+  GOLD
+  OTHER
+}
+
 enum LoanType {
   HOME
   AUTO
@@ -257,6 +264,8 @@ model User {
   goldHoldings            GoldHolding[]
   realEstate              RealEstate[]
   realEstateOwnerships    RealEstateOwner[]
+  assets                  Asset[]
+  loanOwnerships          LoanOwner[]
   budgets                 Budget[]
   taxEntries              TaxEntry[]
   taxProfiles             TaxProfile[]
@@ -533,6 +542,7 @@ model RealEstate {
 
   user            User                  @relation(fields: [userId], references: [id])
   loan            Loan?                 @relation(fields: [loanId], references: [id])
+  asset           Asset?
   houseProperties HousePropertyDetail[]
   owners          RealEstateOwner[]
 
@@ -743,12 +753,27 @@ model Loan {
   endDate              DateTime
   isTaxDeductible      Boolean  @default(false)
   section24bEligible   Boolean  @default(false) // Home loan interest up to ₹2L
-  prepaymentChargesPct Decimal  @default(0) @db.Decimal(5, 2)
+  // Flat rupee amount, not a percentage. Decimal(15,2) to match principalAmount —
+  // the old Decimal(5,2) capped at 999.99, which a converted charge overflows.
+  prepaymentChargesAmount Decimal @default(0) @db.Decimal(15, 2)
+  /// When full EMIs begin. The gap from disbursementDate is the pre-EMI period, during
+  /// which only interest is paid and the principal does not amortise. Distinct from
+  /// `emiDate`, which is the recurring day-of-month (1-28).
+  firstEmiDate            DateTime?
+  /// Interest accruing between disbursement and firstEmiDate. Derived by default but
+  /// editable — a construction-linked plan accrues on the amount disbursed so far,
+  /// which is less than the sanctioned principal.
+  preEmiAmount            Decimal? @db.Decimal(15, 2)
+  assetId                 String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
   user         User             @relation(fields: [userId], references: [id])
   bankAccount  BankAccount?     @relation(fields: [bankAccountId], references: [id])
+  asset        Asset?           @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  owners       LoanOwner[]
+  // SUPERSEDED by `asset`. Kept because routes/investments.ts still accepts loanId on
+  // RealEstate; zero rows populate it. Removal tracked as debt in vision.md.
   realEstate   RealEstate[]
   prepayments  LoanPrepayment[]
   transactions Transaction[]
@@ -756,6 +781,43 @@ model Loan {
   @@index([userId])
   @@index([loanType])
   @@index([emiDate])
+  @@index([assetId])
+}
+
+/// What a loan is secured against. Required for HOME/AUTO/LAP/GOLD, optional otherwise.
+model Asset {
+  id           String    @id @default(cuid())
+  userId       String
+  assetType    AssetType
+  name         String
+  value        Decimal   @db.Decimal(15, 2)
+  /// Optional link to the detailed property record, when the asset is a property.
+  realEstateId String?   @unique
+  notes        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id])
+  realEstate RealEstate? @relation(fields: [realEstateId], references: [id])
+  loans      Loan[]
+
+  @@index([userId])
+  @@index([assetType])
+}
+
+/// Per-user share of a loan. Mirrors RealEstateOwner: shares must total 100%.
+model LoanOwner {
+  id           String   @id @default(cuid())
+  loanId       String
+  userId       String
+  sharePercent Decimal  @db.Decimal(5, 2)
+  createdAt    DateTime @default(now())
+
+  loan Loan @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([loanId, userId])
+  @@index([userId])
 }
 
 model LoanPrepayment {

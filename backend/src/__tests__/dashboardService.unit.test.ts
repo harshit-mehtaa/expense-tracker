@@ -54,6 +54,7 @@ import {
   getCashflow,
   getUpcomingAlerts,
   computeNetWorthStatement,
+  computeTotalLiabilities,
   upsertNetWorthSnapshot,
   getFamilyOverview,
   getProfitAndLoss,
@@ -99,6 +100,7 @@ function resetAllMocks() {
   loanMock.findMany.mockResolvedValue([]);
   loanMock.aggregate.mockResolvedValue(ZERO_LOAN_AGGREGATE);
   loanMock.groupBy.mockResolvedValue([]);
+  loanMock.findMany.mockResolvedValue([]);
   snapshotMock.upsert.mockResolvedValue({});
   snapshotMock.findMany.mockResolvedValue([]);
   userMock.findMany.mockResolvedValue([]);
@@ -318,8 +320,8 @@ describe('computeNetWorthStatement', () => {
   });
 
   it('includes loan outstanding balance in totalLiabilities', async () => {
-    loanMock.groupBy.mockResolvedValue([
-      { loanType: 'HOME', _sum: { outstandingBalance: 500000 } },
+    loanMock.findMany.mockResolvedValue([
+      { loanType: 'HOME', outstandingBalance: 500000, userId: 'u1', owners: [] },
     ]);
     const r = await computeNetWorthStatement('u1');
     expect(r.totalLiabilities).toBe(500000);
@@ -327,10 +329,10 @@ describe('computeNetWorthStatement', () => {
   });
 
   it('breaks down liabilities by loanType', async () => {
-    loanMock.groupBy.mockResolvedValue([
-      { loanType: 'HOME', _sum: { outstandingBalance: 4000000 } },
-      { loanType: 'AUTO', _sum: { outstandingBalance: 200000 } },
-      { loanType: 'PERSONAL', _sum: { outstandingBalance: 100000 } },
+    loanMock.findMany.mockResolvedValue([
+      { loanType: 'HOME', outstandingBalance: 4000000, userId: 'u1', owners: [] },
+      { loanType: 'AUTO', outstandingBalance: 200000, userId: 'u1', owners: [] },
+      { loanType: 'PERSONAL', outstandingBalance: 100000, userId: 'u1', owners: [] },
     ]);
     const r = await computeNetWorthStatement('u1');
     expect(r.liabilities).toEqual({ HOME: 4000000, AUTO: 200000, PERSONAL: 100000 });
@@ -338,9 +340,9 @@ describe('computeNetWorthStatement', () => {
   });
 
   it('excludes zero-balance loan types from liabilities', async () => {
-    loanMock.groupBy.mockResolvedValue([
-      { loanType: 'HOME', _sum: { outstandingBalance: 500000 } },
-      { loanType: 'PERSONAL', _sum: { outstandingBalance: 0 } },
+    loanMock.findMany.mockResolvedValue([
+      { loanType: 'HOME', outstandingBalance: 500000, userId: 'u1', owners: [] },
+      { loanType: 'PERSONAL', outstandingBalance: 0, userId: 'u1', owners: [] },
     ]);
     const r = await computeNetWorthStatement('u1');
     expect(r.liabilities).toEqual({ HOME: 500000 });
@@ -557,9 +559,9 @@ describe('upsertNetWorthSnapshot', () => {
   });
 
   it('persists totalLiabilities as loans in snapshot', async () => {
-    loanMock.groupBy.mockResolvedValue([
-      { loanType: 'HOME', _sum: { outstandingBalance: 3000000 } },
-      { loanType: 'AUTO', _sum: { outstandingBalance: 150000 } },
+    loanMock.findMany.mockResolvedValue([
+      { loanType: 'HOME', outstandingBalance: 3000000, userId: 'u1', owners: [] },
+      { loanType: 'AUTO', outstandingBalance: 150000, userId: 'u1', owners: [] },
     ]);
     await upsertNetWorthSnapshot('u1');
     expect(snapshotMock.upsert).toHaveBeenCalledWith(
@@ -1386,5 +1388,147 @@ describe('getUpcomingAlerts', () => {
       insMock.findMany.mockResolvedValue(policy(null, '2025-01-01T00:00:00.000Z'));
       expect(await hasPremiumAlert()).toBe(true); // older than the 2025-03-20 window
     });
+  });
+});
+
+// ─── Co-owned loans must not be counted twice ────────────────────────────────
+
+describe('share-weighted liabilities', () => {
+  const coOwned = {
+    loanType: 'HOME',
+    outstandingBalance: 5_000_000,
+    userId: 'u1',
+    owners: [
+      { userId: 'u1', sharePercent: 60 },
+      { userId: 'u2', sharePercent: 40 },
+    ],
+  };
+
+  it('splits a co-owned loan by share instead of charging each owner the full amount', async () => {
+    loanMock.findMany.mockResolvedValue([coOwned]);
+
+    const forU1 = await computeNetWorthStatement('u1');
+    const forU2 = await computeNetWorthStatement('u2');
+
+    expect(forU1.totalLiabilities).toBe(3_000_000);
+    expect(forU2.totalLiabilities).toBe(2_000_000);
+
+    // The regression this guards: unweighted, both would read 5,000,000 and the family
+    // would appear to owe 10,000,000 on a 5,000,000 loan.
+    expect(forU1.totalLiabilities + forU2.totalLiabilities).toBe(5_000_000);
+  });
+
+  it('counts the whole loan once on the family-wide view', async () => {
+    loanMock.findMany.mockResolvedValue([coOwned]);
+    const familyWide = await computeNetWorthStatement();
+    expect(familyWide.totalLiabilities).toBe(5_000_000);
+  });
+
+  it('gives a non-owner nothing, even though the query is owner-inclusive', async () => {
+    loanMock.findMany.mockResolvedValue([coOwned]);
+    const stranger = await computeNetWorthStatement('stranger');
+    expect(stranger.totalLiabilities).toBe(0);
+  });
+
+  it('treats a legacy loan with no owner rows as fully the primary owner\'s', async () => {
+    loanMock.findMany.mockResolvedValue([{ ...coOwned, owners: [] }]);
+    const r = await computeNetWorthStatement('u1');
+    expect(r.totalLiabilities).toBe(5_000_000);
+  });
+
+  it('weights the per-type breakdown too, not just the total', async () => {
+    loanMock.findMany.mockResolvedValue([
+      coOwned,
+      { loanType: 'AUTO', outstandingBalance: 400_000, userId: 'u1', owners: [] },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+    expect(r.liabilities).toEqual({ HOME: 3_000_000, AUTO: 400_000 });
+  });
+
+  it('computeTotalLiabilities agrees with the statement', async () => {
+    loanMock.findMany.mockResolvedValue([coOwned]);
+    expect(await computeTotalLiabilities('u2')).toBe(2_000_000);
+    expect(await computeTotalLiabilities()).toBe(5_000_000);
+  });
+});
+
+// ─── Pre-EMI period changes what the alert says and how much it claims is due ─
+
+describe('EMI alerts during a pre-EMI period', () => {
+  const emiDay = new Date().getDate();
+
+  function loanDue(over: Record<string, unknown> = {}) {
+    return {
+      id: 'loan-1', lenderName: 'HDFC', loanType: 'HOME', emiAmount: 50_000,
+      emiDate: emiDay, userId: 'u1', owners: [], preEmiAmount: null, firstEmiDate: null,
+      outstandingBalance: 5_000_000, interestRate: 9,
+      ...over,
+    };
+  }
+
+  it('alerts the full EMI once full repayment has started', async () => {
+    loanMock.findMany.mockResolvedValue([loanDue()]);
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    const emi = alerts.find((a: any) => a.type === 'EMI')!;
+    expect(emi.title).toMatch(/^EMI:/);
+    expect(emi.amount).toBe(50_000);
+  });
+
+  it('alerts ONE MONTH of pre-EMI interest, not the whole-period total', async () => {
+    // `preEmiAmount` is the total across the entire gap (computePreEmi returns
+    // monthly x months). This alert row is a single month's due, so using the stored
+    // total overstated it by the length of the moratorium — a 6-month pre-EMI period
+    // showed 6x the real outgo. 50L at 9% is 37,500/month regardless of the total.
+    const future = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+    loanMock.findMany.mockResolvedValue([
+      loanDue({ firstEmiDate: future, preEmiAmount: 225_000 }),
+    ]);
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    const emi = alerts.find((a: any) => a.type === 'EMI')!;
+    expect(emi.title).toMatch(/^Pre-EMI:/);
+    expect(emi.amount).toBe(37_500);
+  });
+
+  it('still shows interest-only during the moratorium when nothing was recorded', async () => {
+    // The alert no longer depends on the nullable stored total: during the moratorium
+    // only interest is payable, so the full EMI is the wrong number whether or not a
+    // pre-EMI figure was saved. Deriving it from balance and rate removes the
+    // dependency entirely.
+    const future = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+    loanMock.findMany.mockResolvedValue([
+      loanDue({ firstEmiDate: future, preEmiAmount: null }),
+    ]);
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    expect(alerts.find((a: any) => a.type === 'EMI')!.amount).toBe(37_500);
+  });
+
+  it('shows the full EMI once the moratorium has ended', async () => {
+    const past = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    loanMock.findMany.mockResolvedValue([
+      loanDue({ firstEmiDate: past, preEmiAmount: 225_000 }),
+    ]);
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    const emi = alerts.find((a: any) => a.type === 'EMI')!;
+    expect(emi.title).toMatch(/^EMI:/);
+    expect(emi.amount).toBe(50_000);
+  });
+
+  it('uses the full EMI once firstEmiDate has passed', async () => {
+    const past = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    loanMock.findMany.mockResolvedValue([
+      loanDue({ firstEmiDate: past, preEmiAmount: 12_000 }),
+    ]);
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    const emi = alerts.find((a: any) => a.type === 'EMI')!;
+    expect(emi.title).toMatch(/^EMI:/);
+    expect(emi.amount).toBe(50_000);
+  });
+
+  it('alerts a co-owner for their share of the payment, not the whole', async () => {
+    loanMock.findMany.mockResolvedValue([
+      loanDue({ owners: [{ userId: 'u1', sharePercent: 60 }, { userId: 'u2', sharePercent: 40 }] }),
+    ]);
+    const alerts = await getUpcomingAlerts('u2', 'MEMBER');
+    expect(alerts.find((a: any) => a.type === 'EMI')!.amount).toBe(20_000);
   });
 });

@@ -90,6 +90,8 @@ const VALID_LOAN_BODY = {
   tenureMonths: 180,
   disbursementDate: '2022-01-01',
   endDate: '2037-01-01',
+  // HOME is a secured type, so the asset link is now mandatory at the schema level.
+  assetId: 'asset-1',
 };
 
 beforeEach(() => {
@@ -164,7 +166,7 @@ describe('PUT /api/loans/:id', () => {
   it('returns 200 on valid update', async () => {
     const res = await request(app).put('/api/loans/loan-1').send({ emiAmount: 46000 });
     expect(res.status).toBe(200);
-    expect(updateMock).toHaveBeenCalledWith('u1', 'loan-1', { emiAmount: 46000 }, 'MEMBER');
+    expect(updateMock).toHaveBeenCalledWith('u1', 'loan-1', { emiAmount: 46000 }, 'MEMBER', undefined);
   });
 
   it('records the audit log with the pre-mutation snapshot as oldValue', async () => {
@@ -264,5 +266,214 @@ describe('POST /api/loans/:id/prepayment-simulation', () => {
       .post('/api/loans/loan-1/prepayment-simulation')
       .send({ prepaymentAmount: -100, mode: 'reduce_tenure' });
     expect(res.status).toBe(422);
+  });
+});
+
+// ─── POST /api/loans/derive — the auto-fill source ───────────────────────────
+
+describe('POST /api/loans/derive', () => {
+  const BASE = { principalAmount: 5_000_000, interestRate: 8.5, tenureMonths: 240 };
+
+  it('returns the EMI, rounded up so the app will accept its own suggestion', async () => {
+    const res = await request(app).post('/api/loans/derive').send(BASE);
+    expect(res.status).toBe(200);
+    // Exact is 43391.161668 — ceil, because a nearest-rounded EMI can fall below the
+    // amortization schedule's first-month-interest floor and be rejected on save.
+    expect(res.body.data.emiAmount).toBe(43_391.17);
+  });
+
+  it('pre-fills the outstanding balance with the principal', async () => {
+    const res = await request(app).post('/api/loans/derive').send(BASE);
+    expect(res.body.data.outstandingBalance).toBe(5_000_000);
+  });
+
+  it('derives the end date from the disbursement date', async () => {
+    const res = await request(app).post('/api/loans/derive')
+      .send({ ...BASE, disbursementDate: '2026-01-15' });
+    expect(res.body.data.endDate).toMatch(/^2046-01-15/);
+  });
+
+  it('pushes the end date out when a first-EMI date is supplied', async () => {
+    const res = await request(app).post('/api/loans/derive')
+      .send({ ...BASE, disbursementDate: '2026-01-15', firstEmiDate: '2027-01-15' });
+    // 240 payments beginning 2027-01-15: the FIRST is 2027-01-15, so the 240th falls
+    // 239 months later, on 2046-12-15. Counting a full 240 months from the first EMI
+    // would describe a 241-payment loan and leave it showing as a liability for an
+    // extra month after it is repaid.
+    expect(res.body.data.endDate).toMatch(/^2046-12-15/);
+  });
+
+  it('computes the pre-EMI interest across the gap between the two dates', async () => {
+    const res = await request(app).post('/api/loans/derive').send({
+      principalAmount: 3_000_000, interestRate: 9, tenureMonths: 240,
+      disbursementDate: '2026-01-15', firstEmiDate: '2026-04-15',
+    });
+    // 3,000,000 x 9% / 12 = 22,500/month over 3 months.
+    expect(res.body.data.preEmiAmount).toBe(67_500);
+    expect(res.body.data.monthlyPreEmiAmount).toBe(22_500);
+  });
+
+  it('returns null pre-EMI when there is no gap', async () => {
+    const res = await request(app).post('/api/loans/derive')
+      .send({ ...BASE, disbursementDate: '2026-01-15' });
+    expect(res.body.data.preEmiAmount).toBeNull();
+  });
+
+  it.each([
+    ['principalAmount', { ...BASE, principalAmount: 0 }],
+    ['interestRate', { ...BASE, interestRate: 0 }],
+    ['tenureMonths', { ...BASE, tenureMonths: 0 }],
+  ])('rejects a non-positive %s with 422', async (_f, body) => {
+    const res = await request(app).post('/api/loans/derive').send(body);
+    expect(res.status).toBe(422);
+  });
+
+  it('ignores an unparseable date rather than returning NaN', async () => {
+    const res = await request(app).post('/api/loans/derive')
+      .send({ ...BASE, disbursementDate: 'not-a-date' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.endDate).toBeNull();
+  });
+});
+
+// ─── Secured loans must name their collateral ────────────────────────────────
+
+describe('secured-type asset requirement', () => {
+  it.each(['HOME', 'AUTO', 'LAP', 'GOLD'])(
+    'rejects a %s loan created without an asset', async (loanType) => {
+      const { assetId, ...withoutAsset } = VALID_LOAN_BODY;
+      const res = await request(app).post('/api/loans').send({ ...withoutAsset, loanType });
+      expect(res.status).toBe(422);
+      expect(JSON.stringify(res.body)).toMatch(/secured and must be linked to an asset/i);
+    },
+  );
+
+  it.each(['PERSONAL', 'EDUCATION', 'BUSINESS', 'OTHER'])(
+    'accepts an unsecured %s loan without an asset', async (loanType) => {
+      const { assetId, ...withoutAsset } = VALID_LOAN_BODY;
+      const res = await request(app).post('/api/loans').send({ ...withoutAsset, loanType });
+      expect(res.status).toBe(201);
+    },
+  );
+
+  it('passes owners through to the service on create', async () => {
+    const owners = [{ userId: 'u1', sharePercent: 60 }, { userId: 'u2', sharePercent: 40 }];
+    await request(app).post('/api/loans').send({ ...VALID_LOAN_BODY, owners });
+    expect(createMock).toHaveBeenCalledWith('u1', expect.any(Object), owners);
+  });
+
+  it('passes owners through on update', async () => {
+    const owners = [{ userId: 'u2', sharePercent: 100 }];
+    await request(app).put('/api/loans/loan-1').send({ owners });
+    expect(updateMock).toHaveBeenCalledWith('u1', 'loan-1', expect.any(Object), 'MEMBER', owners);
+  });
+
+  it('rejects an owner share above 100', async () => {
+    const res = await request(app).post('/api/loans')
+      .send({ ...VALID_LOAN_BODY, owners: [{ userId: 'u1', sharePercent: 101 }] });
+    expect(res.status).toBe(422);
+  });
+
+  it('rejects an empty owners array — omit the key instead', async () => {
+    const res = await request(app).post('/api/loans').send({ ...VALID_LOAN_BODY, owners: [] });
+    expect(res.status).toBe(422);
+  });
+});
+
+// ─── New persisted fields ────────────────────────────────────────────────────
+
+describe('pre-EMI and prepayment fields', () => {
+  it('accepts firstEmiDate and preEmiAmount', async () => {
+    const res = await request(app).post('/api/loans').send({
+      ...VALID_LOAN_BODY, firstEmiDate: '2026-04-15', preEmiAmount: 67_500,
+    });
+    expect(res.status).toBe(201);
+    const [, data] = createMock.mock.calls[0];
+    expect(data.preEmiAmount).toBe(67_500);
+    expect(data.firstEmiDate).toBeInstanceOf(Date);
+  });
+
+  it('takes prepayment charges as a rupee amount, not a percentage', async () => {
+    const res = await request(app).post('/api/loans')
+      .send({ ...VALID_LOAN_BODY, prepaymentChargesAmount: 25_000 });
+    expect(res.status).toBe(201);
+    expect(createMock.mock.calls[0][1].prepaymentChargesAmount).toBe(25_000);
+  });
+
+  it('defaults prepayment charges to 0', async () => {
+    await request(app).post('/api/loans').send(VALID_LOAN_BODY);
+    expect(createMock.mock.calls[0][1].prepaymentChargesAmount).toBe(0);
+  });
+
+  it('rejects a negative prepayment charge', async () => {
+    const res = await request(app).post('/api/loans')
+      .send({ ...VALID_LOAN_BODY, prepaymentChargesAmount: -1 });
+    expect(res.status).toBe(422);
+  });
+});
+
+/**
+ * Regression: an HTML form serializes a cleared field as `""`, not as an absent key.
+ * These fields previously reached Prisma as an `Invalid Date` and an FK matching no row,
+ * surfacing as a bare HTTP 500 and making every pre-existing loan uneditable.
+ *
+ * The route suite mocks loanService, so these assert on what the SERVICE RECEIVES —
+ * which is precisely the boundary the bug crossed.
+ */
+describe('empty-string form fields are normalized at the API boundary', () => {
+  beforeEach(() => {
+    createMock.mockResolvedValue(MOCK_LOAN);
+    updateMock.mockResolvedValue(MOCK_LOAN);
+    getForAuditMock.mockResolvedValue(MOCK_LOAN);
+    userFindFirstMock.mockResolvedValue({ id: 'u1' });
+  });
+
+  it('turns an empty firstEmiDate into null, not an Invalid Date', async () => {
+    const res = await request(app)
+      .post('/api/loans')
+      .send({ ...VALID_LOAN_BODY, firstEmiDate: '' });
+
+    expect(res.status).toBe(201);
+    const received = createMock.mock.calls[0][1];
+    expect(received.firstEmiDate).toBeNull();
+  });
+
+  it('turns an empty assetId into null so the FK is not violated', async () => {
+    const res = await request(app)
+      .post('/api/loans')
+      .send({ ...VALID_LOAN_BODY, loanType: 'PERSONAL', assetId: '' });
+
+    expect(res.status).toBe(201);
+    const received = createMock.mock.calls[0][1];
+    expect(received.assetId).toBeNull();
+  });
+
+  it('turns an empty preEmiAmount into null rather than 0', async () => {
+    const res = await request(app)
+      .post('/api/loans')
+      .send({ ...VALID_LOAN_BODY, preEmiAmount: '' });
+
+    expect(res.status).toBe(201);
+    expect(createMock.mock.calls[0][1].preEmiAmount).toBeNull();
+  });
+
+  it('still rejects a genuinely malformed date', async () => {
+    const res = await request(app)
+      .post('/api/loans')
+      .send({ ...VALID_LOAN_BODY, firstEmiDate: 'not-a-date' });
+
+    expect(res.status).toBe(422);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('edits a legacy loan whose optional fields are all empty', async () => {
+    const res = await request(app)
+      .put('/api/loans/loan-1')
+      .send({ emiAmount: 46000, firstEmiDate: '', preEmiAmount: '', assetId: '' });
+
+    expect(res.status).toBe(200);
+    const received = updateMock.mock.calls[0][2];
+    expect(received.firstEmiDate).toBeNull();
+    expect(received.assetId).toBeNull();
   });
 });

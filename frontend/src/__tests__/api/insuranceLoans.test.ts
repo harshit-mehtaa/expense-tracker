@@ -30,7 +30,7 @@ const RAW_LOAN = {
   disbursementDate: '2020-01-01', endDate: '2040-01-01',
   isTaxDeductible: true, section24bEligible: true,
   principalAmount: '5000000.00', outstandingBalance: '4250000.00',
-  interestRate: '8.50', emiAmount: '43391.00', prepaymentChargesPct: '2.00',
+  interestRate: '8.50', emiAmount: '43391.00', prepaymentChargesAmount: '25000.00',
 };
 
 describe('insuranceApi — reads scope with `userId`', () => {
@@ -150,7 +150,7 @@ describe('loansApi', () => {
     expect(loan.outstandingBalance).toBe(4250000);
     expect(loan.interestRate).toBe(8.5);
     expect(loan.emiAmount).toBe(43391);
-    expect(loan.prepaymentChargesPct).toBe(2);
+    expect(loan.prepaymentChargesAmount).toBe(25000);
   });
 
   it('create sends targetUserId and normalizes the response', async () => {

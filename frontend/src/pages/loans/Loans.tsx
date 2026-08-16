@@ -1,6 +1,6 @@
-import { useState, useEffect, useId } from 'react';
+import { useState, useEffect, useId, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useForm } from 'react-hook-form';
+import { useFieldArray, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { CreditCard, Plus, Trash2, Edit2, Calculator, X } from 'lucide-react';
@@ -10,15 +10,50 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { loansApi, type Loan, type AmortizationRow } from '@/api/loans';
+import { assetsApi, ASSET_TYPES, type AssetType } from '@/api/assets';
 import { formatINRShort } from '@/lib/indianFormat';
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, CustomTooltip } from '@/lib/chartUtils';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
+import { useAuth } from '@/contexts/AuthContext';
 
 const LOAN_TYPES: Record<string, string> = {
   HOME: 'Home Loan', AUTO: 'Car Loan', PERSONAL: 'Personal Loan',
   EDUCATION: 'Education Loan', GOLD: 'Gold Loan', LAP: 'Loan Against Property',
   BUSINESS: 'Business Loan', OTHER: 'Other',
 };
+
+/** The asset kind a secured loan is normally held against, used to pre-select the type
+ *  when creating one inline. A guess, not a constraint — the user can change it. */
+function defaultAssetTypeFor(loanType: string): AssetType {
+  if (loanType === 'HOME' || loanType === 'LAP') return 'PROPERTY';
+  if (loanType === 'AUTO') return 'VEHICLE';
+  if (loanType === 'GOLD') return 'GOLD';
+  return 'OTHER';
+}
+
+/** Secured against collateral — the backend rejects these (422) without an assetId. */
+const SECURED_LOAN_TYPES = ['HOME', 'AUTO', 'LAP', 'GOLD'];
+export const isSecuredLoanType = (t: string) => SECURED_LOAN_TYPES.includes(t);
+
+const ownerSchema = z.object({
+  userId: z.string().min(1, 'Owner required'),
+  sharePercent: z.coerce.number().positive('Share must be greater than 0').max(100, 'Share cannot exceed 100'),
+});
+
+const ownersSchema = z.array(ownerSchema).min(1, 'Add at least one owner').superRefine((owners, ctx) => {
+  const seen = new Set<string>();
+  owners.forEach((owner, index) => {
+    if (seen.has(owner.userId)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Owner already added', path: [index, 'userId'] });
+    }
+    seen.add(owner.userId);
+  });
+
+  const total = owners.reduce((sum, owner) => sum + Number(owner.sharePercent || 0), 0);
+  if (Math.abs(total - 100) > 0.01) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Owner shares must add up to 100%' });
+  }
+});
 
 const loanSchema = z.object({
   lenderName: z.string().min(1, 'Required'),
@@ -32,9 +67,28 @@ const loanSchema = z.object({
   tenureMonths: z.coerce.number().int().positive(),
   disbursementDate: z.string(),
   endDate: z.string(),
+  firstEmiDate: z.string().optional(),
+  // NOT z.coerce.number(): that turns a cleared input's '' into 0, so editing a loan
+  // with no pre-EMI wrote 0 over NULL and the dashboard then alerted "Pre-EMI ₹0 due".
+  // Empty must stay empty.
+  preEmiAmount: z.preprocess(
+    (v) => (v === '' || v == null ? undefined : v),
+    z.coerce.number().min(0).optional(),
+  ),
   isTaxDeductible: z.boolean().default(false),
   section24bEligible: z.boolean().default(false),
-  prepaymentChargesPct: z.coerce.number().min(0).default(0),
+  prepaymentChargesAmount: z.coerce.number().min(0).default(0),
+  assetId: z.string().optional(),
+  owners: ownersSchema,
+}).superRefine((val, ctx) => {
+  // Mirrors the backend rule so the user sees it inline rather than as a 422.
+  if (isSecuredLoanType(val.loanType) && !val.assetId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['assetId'],
+      message: `A ${LOAN_TYPES[val.loanType] ?? val.loanType} is secured — link the asset it is held against`,
+    });
+  }
 });
 
 type LoanForm = z.infer<typeof loanSchema>;
@@ -225,8 +279,8 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
         </div>
         {!readOnly && (
           <div className="flex gap-1">
-            <Button variant="ghost" size="icon" onClick={onEdit}><Edit2 className="h-4 w-4" /></Button>
-            <Button variant="ghost" size="icon" onClick={onDelete}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+            <Button variant="ghost" size="icon" onClick={onEdit} aria-label="Edit loan"><Edit2 className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" onClick={onDelete} aria-label="Delete loan"><Trash2 className="h-4 w-4 text-destructive" /></Button>
           </div>
         )}
       </div>
@@ -248,7 +302,39 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
           <p className="text-muted-foreground">End Date</p>
           <p className="font-semibold">{new Date(loan.endDate).toLocaleDateString('en-IN')}</p>
         </div>
+        {loan.preEmiAmount != null && loan.preEmiAmount > 0 && (
+          <div>
+            <p className="text-muted-foreground">Pre-EMI Interest</p>
+            <INRDisplay amount={loan.preEmiAmount} className="font-semibold" />
+          </div>
+        )}
+        {loan.asset && (
+          <div>
+            <p className="text-muted-foreground">Secured Against</p>
+            <p className="font-semibold">{loan.asset.name}</p>
+          </div>
+        )}
       </div>
+
+      {loan.owners && loan.owners.length > 0 && (
+        <div className="rounded-md bg-muted/40 px-3 py-2">
+          <p className="text-xs font-medium text-muted-foreground mb-1">Owners</p>
+          <div className="flex flex-wrap gap-1.5">
+            {loan.owners.map((owner) => (
+              <span key={owner.userId} className="text-xs rounded-full border bg-background px-2 py-0.5">
+                {owner.userName || 'Owner'} {owner.sharePercent}%
+              </span>
+            ))}
+          </div>
+          {loan.sharePercent != null && loan.sharePercent < 100 && (
+            <p className="text-xs text-muted-foreground mt-1">
+              This view counts {loan.sharePercent}% of this loan:
+              {' '}
+              <INRDisplay amount={loan.outstandingBalanceShare ?? 0} className="text-xs font-medium" />
+            </p>
+          )}
+        </div>
+      )}
 
       <div>
         <div className="flex justify-between text-xs text-muted-foreground mb-1">
@@ -322,6 +408,7 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
 
 export default function LoansPage() {
   const qc = useQueryClient();
+  const { user } = useAuth();
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Loan | null>(null);
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
@@ -332,18 +419,150 @@ export default function LoansPage() {
     queryFn: () => loansApi.getAll(viewUserId),
   });
 
-  const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm<LoanForm>({
-    resolver: zodResolver(loanSchema),
-    defaultValues: { loanType: 'HOME', isTaxDeductible: false, section24bEligible: false, prepaymentChargesPct: 0 },
+  const { data: assets = [] } = useQuery({
+    queryKey: ['assets', viewUserId],
+    queryFn: () => assetsApi.getAll(viewUserId),
   });
 
+  // Secured loans require an asset, and there is no Assets page yet — so without an
+  // inline way to create one, a user with no matching asset simply cannot create the
+  // loan. Defaults the new asset's type from the loan type, since that is almost always
+  // what they want (a car loan is secured against a vehicle).
+  const [showNewAsset, setShowNewAsset] = useState(false);
+  const [newAsset, setNewAsset] = useState({ name: '', value: '', assetType: 'OTHER' as AssetType });
+
+  const createAssetMutation = useMutation({
+    mutationFn: () => assetsApi.create({
+      assetType: newAsset.assetType,
+      name: newAsset.name.trim(),
+      value: Number(newAsset.value) || 0,
+    }, viewUserId ? { targetUserId: viewUserId } : undefined),
+    onSuccess: (created) => {
+      qc.invalidateQueries({ queryKey: ['assets'] });
+      setValue('assetId', created.id, { shouldValidate: true });
+      setShowNewAsset(false);
+      setNewAsset({ name: '', value: '', assetType: 'OTHER' });
+    },
+  });
+
+  // A <select> cannot display a value it has no <option> for. A MEMBER's `members` list
+  // is always empty (useMemberSelector fetches /admin/users with `enabled: isAdmin`), so
+  // when a co-owner opened a shared loan the other owners' rows collapsed to blank and
+  // saving silently reassigned the loan. Merging the loan's existing owners in keeps
+  // edit lossless regardless of who is looking.
+  //
+  // NOTE: a MEMBER still cannot ADD a co-owner they do not already share a loan with —
+  // there is no non-admin member-listing endpoint. RealEstate.tsx:67 has the identical
+  // limitation, so this is a pre-existing product-wide gap rather than something the
+  // loans work introduced. Fixing it needs a new endpoint and is filed separately.
+  const ownerOptions = useMemo(() => {
+    const byId = new Map<string, { id: string; name: string }>();
+    if (user) byId.set(user.id, { id: user.id, name: user.name });
+    members.forEach((m) => byId.set(m.id, { id: m.id, name: m.name }));
+    editing?.owners?.forEach((o) => {
+      if (!byId.has(o.userId)) byId.set(o.userId, { id: o.userId, name: o.userName ?? 'Co-owner' });
+    });
+    return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [members, user, editing]);
+
+  // Same problem for collateral: assets are scoped to the requester, so a co-owner never
+  // receives the primary owner's asset and the picker rendered "Not secured" — which the
+  // secured-loan rule then rejected, making every co-owned HOME/AUTO/LAP/GOLD loan
+  // uneditable by anyone but its primary owner.
+  const assetOptions = useMemo(() => {
+    const byId = new Map<string, { id: string; name: string; assetType: string }>();
+    assets.forEach((a) => byId.set(a.id, { id: a.id, name: a.name, assetType: a.assetType }));
+    if (editing?.asset && !byId.has(editing.asset.id)) {
+      byId.set(editing.asset.id, {
+        id: editing.asset.id, name: editing.asset.name, assetType: editing.asset.assetType,
+      });
+    }
+    return Array.from(byId.values());
+  }, [assets, editing]);
+  const defaultOwnerId = () => viewUserId || user?.id || ownerOptions[0]?.id || '';
+
+  const {
+    register, handleSubmit, reset, setValue, control, watch, formState: { errors },
+  } = useForm<LoanForm>({
+    resolver: zodResolver(loanSchema),
+    defaultValues: {
+      loanType: 'HOME',
+      isTaxDeductible: false,
+      section24bEligible: false,
+      prepaymentChargesAmount: 0,
+      owners: [{ userId: '', sharePercent: 100 }],
+    },
+  });
+
+  const ownerFields = useFieldArray({ control, name: 'owners' });
+  const watchedOwners = watch('owners') ?? [];
+  const ownerTotal = watchedOwners.reduce((sum, o) => sum + Number(o?.sharePercent || 0), 0);
+  const watchedLoanType = watch('loanType');
+
+  const getNextOwnerId = () =>
+    ownerOptions.find((option) => !watchedOwners.some((o) => o?.userId === option.id))?.id ?? '';
+
+  /**
+   * Ask the backend to derive EMI, end date, pre-EMI and opening balance.
+   *
+   * CREATE MODE ONLY. Deliberately not gated on `dirtyFields`: startEdit uses
+   * setValue() without { shouldDirty: true }, so dirtyFields is empty right after the
+   * edit modal opens — a dirtyFields guard would let a principal edit silently
+   * overwrite the real outstandingBalance and wipe years of repayment.
+   */
+  const autoFill = async () => {
+    if (editing !== null) return;
+
+    const principalAmount = Number(watch('principalAmount'));
+    const interestRate = Number(watch('interestRate'));
+    const tenureMonths = Number(watch('tenureMonths'));
+    if (!(principalAmount > 0) || !(interestRate > 0) || !(tenureMonths > 0)) return;
+
+    const disbursementDate = watch('disbursementDate');
+    const firstEmiDate = watch('firstEmiDate');
+
+    try {
+      const derived = await loansApi.derive({
+        principalAmount,
+        interestRate,
+        tenureMonths,
+        ...(disbursementDate ? { disbursementDate } : {}),
+        ...(firstEmiDate ? { firstEmiDate } : {}),
+      });
+      // Suggestions only — every field stays editable. A lender's real EMI rarely
+      // matches the textbook figure to the paisa.
+      if (derived.emiAmount != null) setValue('emiAmount', derived.emiAmount);
+      if (derived.outstandingBalance != null) setValue('outstandingBalance', derived.outstandingBalance);
+      if (derived.endDate) setValue('endDate', derived.endDate.slice(0, 10));
+      if (derived.preEmiAmount != null) setValue('preEmiAmount', derived.preEmiAmount);
+    } catch {
+      // A derive failure must never block manual entry; the toast already reports it.
+    }
+  };
+
+  /**
+   * A cleared <input> serializes as `""`, not as an absent key. Sent verbatim, the
+   * backend turned `firstEmiDate: ""` into an Invalid Date and `assetId: ""` into an FK
+   * matching no row — both surfacing as a bare HTTP 500 that made every pre-existing
+   * loan uneditable. The API boundary now normalizes these too; stripping them here as
+   * well keeps the wire payload honest about what the user actually left blank.
+   */
+  const stripBlanks = (data: LoanForm): LoanForm => {
+    const out: Record<string, unknown> = { ...data };
+    for (const key of ['firstEmiDate', 'assetId', 'bankAccountId', 'loanAccountNumber'] as const) {
+      if (out[key] === '') out[key] = null;
+    }
+    if (out.preEmiAmount === '' || Number.isNaN(out.preEmiAmount)) out.preEmiAmount = null;
+    return out as LoanForm;
+  };
+
   const createMutation = useMutation({
-    mutationFn: (data: LoanForm) => loansApi.create(data, viewUserId ? { targetUserId: viewUserId } : undefined),
+    mutationFn: (data: LoanForm) => loansApi.create(stripBlanks(data), viewUserId ? { targetUserId: viewUserId } : undefined),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['loans'] }); setShowForm(false); reset(); },
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: LoanForm }) => loansApi.update(id, data),
+    mutationFn: ({ id, data }: { id: string; data: LoanForm }) => loansApi.update(id, stripBlanks(data)),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['loans'] }); setEditing(null); setShowForm(false); reset(); },
   });
 
@@ -354,14 +573,50 @@ export default function LoansPage() {
 
   function startEdit(loan: Loan) {
     setEditing(loan);
-    Object.entries(loan).forEach(([k, v]) => setValue(k as any, v ?? ''));
-    setValue('disbursementDate', loan.disbursementDate.slice(0, 10));
-    setValue('endDate', loan.endDate.slice(0, 10));
+    // Explicit reset, not Object.entries(loan).forEach(setValue): `owners` is an array
+    // and `asset` an object, and pushing those through form fields corrupts the form.
+    // RealEstate handles owners the same way.
+    reset({
+      lenderName: loan.lenderName,
+      loanAccountNumber: loan.loanAccountNumber ?? '',
+      loanType: loan.loanType,
+      principalAmount: loan.principalAmount,
+      outstandingBalance: loan.outstandingBalance,
+      interestRate: loan.interestRate,
+      emiAmount: loan.emiAmount,
+      emiDate: loan.emiDate,
+      tenureMonths: loan.tenureMonths,
+      disbursementDate: loan.disbursementDate.slice(0, 10),
+      endDate: loan.endDate.slice(0, 10),
+      firstEmiDate: loan.firstEmiDate ? loan.firstEmiDate.slice(0, 10) : '',
+      preEmiAmount: loan.preEmiAmount ?? undefined,
+      isTaxDeductible: loan.isTaxDeductible,
+      section24bEligible: loan.section24bEligible,
+      prepaymentChargesAmount: loan.prepaymentChargesAmount ?? 0,
+      assetId: loan.assetId ?? '',
+      owners: loan.owners?.length
+        ? loan.owners.map((o) => ({ userId: o.userId, sharePercent: Number(o.sharePercent) }))
+        : [{ userId: defaultOwnerId(), sharePercent: 100 }],
+    } as LoanForm);
     setShowForm(true);
   }
 
-  const totalEMI = loans.reduce((s, l) => s + l.emiAmount, 0);
-  const totalOutstanding = loans.reduce((s, l) => s + l.outstandingBalance, 0);
+  function startCreate() {
+    setEditing(null);
+    reset({
+      loanType: 'HOME',
+      isTaxDeductible: false,
+      section24bEligible: false,
+      prepaymentChargesAmount: 0,
+      owners: [{ userId: defaultOwnerId(), sharePercent: 100 }],
+    } as LoanForm);
+    setShowForm(true);
+  }
+
+  // Share-weighted, matching the dashboard. Falls back to the full figure for loans
+  // with no owner rows (pre-multi-owner records).
+  const totalEMI = loans.reduce((s, l) => s + (l.emiAmountShare ?? l.emiAmount), 0);
+  const totalOutstanding = loans.reduce((s, l) => s + (l.outstandingBalanceShare ?? l.outstandingBalance), 0);
 
   return (
     <div className="space-y-6">
@@ -396,7 +651,7 @@ export default function LoansPage() {
           )}
         </div>
         {!isViewingFamilyWide && (
-          <Button onClick={() => { setEditing(null); reset(); setShowForm(true); }}>
+          <Button onClick={startCreate}>
             <Plus className="h-4 w-4 mr-2" /> Add Loan
           </Button>
         )}
@@ -414,7 +669,8 @@ export default function LoansPage() {
         <div className="rounded-lg border bg-card p-4">
           <p className="text-sm text-muted-foreground">Sec 24(b) Home Loans</p>
           <INRDisplay
-            amount={loans.filter((l) => l.section24bEligible).reduce((s, l) => s + l.outstandingBalance, 0)}
+            amount={loans.filter((l) => l.section24bEligible)
+              .reduce((s, l) => s + (l.outstandingBalanceShare ?? l.outstandingBalance), 0)}
             short className="text-2xl font-bold text-green-600"
           />
         </div>
@@ -448,56 +704,207 @@ export default function LoansPage() {
             <form onSubmit={handleSubmit((data) => editing ? updateMutation.mutate({ id: editing.id, data }) : createMutation.mutate(data))} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <Label required>Loan Type</Label>
-                  <select {...register('loanType')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                  <Label required htmlFor="loan-loanType">Loan Type</Label>
+                  <select {...register('loanType')} id="loan-loanType" className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                     {Object.entries(LOAN_TYPES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <Label required>Lender Name</Label>
-                  <Input {...register('lenderName')} placeholder="HDFC Bank, SBI…" />
+                  <Label required htmlFor="loan-lenderName">Lender Name</Label>
+                  <Input {...register('lenderName')} id="loan-lenderName" placeholder="HDFC Bank, SBI…" />
                   {errors.lenderName && <p className="text-xs text-destructive">{errors.lenderName.message}</p>}
                 </div>
                 <div className="space-y-1">
-                  <Label>Loan Account Number (optional)</Label>
-                  <Input {...register('loanAccountNumber')} placeholder="Optional" />
+                  <Label htmlFor="loan-loanAccountNumber">Loan Account Number (optional)</Label>
+                  <Input {...register('loanAccountNumber')} id="loan-loanAccountNumber" placeholder="Optional" />
                 </div>
                 <div className="space-y-1">
-                  <Label required>Principal Amount (₹)</Label>
-                  <Input {...register('principalAmount')} type="number" />
+                  <Label required htmlFor="loan-principalAmount">Principal Amount (₹)</Label>
+                  <Input {...register('principalAmount', { onBlur: autoFill })} id="loan-principalAmount" type="number" />
                 </div>
                 <div className="space-y-1">
-                  <Label required>Outstanding Balance (₹)</Label>
-                  <Input {...register('outstandingBalance')} type="number" />
+                  <Label required htmlFor="loan-outstandingBalance">Outstanding Balance (₹)</Label>
+                  <Input {...register('outstandingBalance')} id="loan-outstandingBalance" type="number" />
+                  {!editing && (
+                    <p className="text-xs text-muted-foreground">Defaults to the principal — edit if the loan is already part-repaid.</p>
+                  )}
                 </div>
                 <div className="space-y-1">
-                  <Label required>Interest Rate (% p.a.)</Label>
-                  <Input {...register('interestRate')} type="number" step="0.01" />
+                  <Label required htmlFor="loan-interestRate">Interest Rate (% p.a.)</Label>
+                  <Input {...register('interestRate', { onBlur: autoFill })} id="loan-interestRate" type="number" step="0.01" />
                 </div>
                 <div className="space-y-1">
-                  <Label required>EMI Amount (₹)</Label>
-                  <Input {...register('emiAmount')} type="number" />
+                  <Label required htmlFor="loan-emiAmount">EMI Amount (₹)</Label>
+                  <Input {...register('emiAmount')} id="loan-emiAmount" type="number" />
                 </div>
                 <div className="space-y-1">
-                  <Label required>EMI Date (1-28)</Label>
-                  <Input {...register('emiDate')} type="number" min="1" max="28" />
+                  <Label required htmlFor="loan-emiDate">EMI Date (1-28)</Label>
+                  <Input {...register('emiDate')} id="loan-emiDate" type="number" min="1" max="28" />
                 </div>
                 <div className="space-y-1">
-                  <Label required>Tenure (months)</Label>
-                  <Input {...register('tenureMonths')} type="number" />
+                  <Label required htmlFor="loan-tenureMonths">Tenure (months)</Label>
+                  <Input {...register('tenureMonths', { onBlur: autoFill })} id="loan-tenureMonths" type="number" />
                 </div>
                 <div className="space-y-1">
-                  <Label required>Disbursement Date</Label>
-                  <Input {...register('disbursementDate')} type="date" />
+                  <Label required htmlFor="loan-disbursementDate">Disbursement Date</Label>
+                  <Input {...register('disbursementDate', { onBlur: autoFill })} id="loan-disbursementDate" type="date" />
                 </div>
                 <div className="space-y-1">
-                  <Label required>End Date</Label>
-                  <Input {...register('endDate')} type="date" />
+                  <Label htmlFor="loan-firstEmiDate">First EMI Date (optional)</Label>
+                  <Input {...register('firstEmiDate', { onBlur: autoFill })} id="loan-firstEmiDate" type="date" />
+                  <p className="text-xs text-muted-foreground">Leave blank if full EMIs start immediately.</p>
                 </div>
                 <div className="space-y-1">
-                  <Label>Prepayment Charges (%, optional)</Label>
-                  <Input {...register('prepaymentChargesPct')} type="number" step="0.01" />
+                  <Label required htmlFor="loan-endDate">End Date</Label>
+                  <Input {...register('endDate')} id="loan-endDate" type="date" />
                 </div>
+                <div className="space-y-1">
+                  <Label htmlFor="loan-preEmiAmount">Pre-EMI Amount (₹, optional)</Label>
+                  <Input {...register('preEmiAmount')} id="loan-preEmiAmount" type="number" step="0.01" />
+                  <p className="text-xs text-muted-foreground">Interest accruing between disbursement and the first EMI.</p>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="loan-prepaymentChargesAmount">Prepayment Charges (₹, optional)</Label>
+                  <Input {...register('prepaymentChargesAmount')} id="loan-prepaymentChargesAmount" type="number" step="0.01" />
+                  <p className="text-xs text-muted-foreground">A flat fee, not a percentage.</p>
+                </div>
+                <div className="space-y-1">
+                  <Label required={isSecuredLoanType(watchedLoanType)} htmlFor="loan-assetId">Secured Against</Label>
+                  <select {...register('assetId')} id="loan-assetId" className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                    <option value="">
+                      {isSecuredLoanType(watchedLoanType) ? 'Select an asset…' : 'Not secured'}
+                    </option>
+                    {assetOptions.map((a) => (
+                      <option key={a.id} value={a.id}>{a.name} ({ASSET_TYPES[a.assetType as AssetType] ?? a.assetType})</option>
+                    ))}
+                  </select>
+                  {errors.assetId && <p className="text-xs text-destructive">{errors.assetId.message}</p>}
+
+                  {!showNewAsset && (
+                    <button
+                      type="button"
+                      className="text-xs text-primary underline"
+                      onClick={() => {
+                        setNewAsset((prev) => ({ ...prev, assetType: defaultAssetTypeFor(watchedLoanType) }));
+                        setShowNewAsset(true);
+                      }}
+                    >
+                      + Add a new asset
+                    </button>
+                  )}
+
+                  {showNewAsset && (
+                    <div className="rounded-md border p-3 space-y-2">
+                      <div className="space-y-1">
+                        <Label htmlFor="new-asset-name" required>Asset name</Label>
+                        <Input
+                          id="new-asset-name"
+                          value={newAsset.name}
+                          placeholder="Honda City, Flat 3B…"
+                          onChange={(e) => setNewAsset((p) => ({ ...p, name: e.target.value }))}
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <Label htmlFor="new-asset-type">Type</Label>
+                          <select
+                            id="new-asset-type"
+                            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                            value={newAsset.assetType}
+                            onChange={(e) => setNewAsset((p) => ({ ...p, assetType: e.target.value as AssetType }))}
+                          >
+                            {Object.entries(ASSET_TYPES).map(([k, label]) => (
+                              <option key={k} value={k}>{label}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <Label htmlFor="new-asset-value">Current value (₹)</Label>
+                          <Input
+                            id="new-asset-value"
+                            type="number"
+                            value={newAsset.value}
+                            onChange={(e) => setNewAsset((p) => ({ ...p, value: e.target.value }))}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={!newAsset.name.trim() || createAssetMutation.isPending}
+                          onClick={() => createAssetMutation.mutate()}
+                        >
+                          {createAssetMutation.isPending ? 'Saving…' : 'Save asset'}
+                        </Button>
+                        <Button type="button" size="sm" variant="outline" onClick={() => setShowNewAsset(false)}>
+                          Cancel
+                        </Button>
+                      </div>
+                      {createAssetMutation.isError && (
+                        <p className="text-xs text-destructive">Could not save the asset. Please try again.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Owners — mirrors the RealEstate co-ownership editor. */}
+              <div className="space-y-2 border-t pt-4">
+                <div className="flex items-center justify-between">
+                  <Label required>Owners</Label>
+                  <span className={`text-xs ${Math.abs(ownerTotal - 100) <= 0.01 ? 'text-muted-foreground' : 'text-destructive'}`}>
+                    Total {ownerTotal || 0}%
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {ownerFields.fields.map((field, index) => (
+                    <div key={field.id} className="grid grid-cols-[1fr_120px_32px] gap-2 items-start">
+                      <div>
+                        <select
+                          {...register(`owners.${index}.userId`)}
+                          aria-label={`Owner ${index + 1}`}
+                          className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                        >
+                          <option value="">Select owner</option>
+                          {ownerOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                        </select>
+                        {errors.owners?.[index]?.userId && (
+                          <p className="text-xs text-destructive mt-1">{errors.owners[index]?.userId?.message}</p>
+                        )}
+                      </div>
+                      <div>
+                        <Input
+                          {...register(`owners.${index}.sharePercent`)}
+                          aria-label={`Share ${index + 1}`}
+                          type="number" min="0" max="100" step="0.01" placeholder="%"
+                        />
+                        {errors.owners?.[index]?.sharePercent && (
+                          <p className="text-xs text-destructive mt-1">{errors.owners[index]?.sharePercent?.message}</p>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        disabled={ownerFields.fields.length === 1}
+                        onClick={() => ownerFields.remove(index)}
+                        title="Remove owner"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+                {errors.owners?.message && <p className="text-xs text-destructive">{errors.owners.message}</p>}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => ownerFields.append({ userId: getNextOwnerId(), sharePercent: 0 })}
+                >
+                  <Plus className="h-4 w-4 mr-1" /> Add Owner
+                </Button>
               </div>
               <div className="flex gap-4">
                 <label className="flex items-center gap-2 cursor-pointer">

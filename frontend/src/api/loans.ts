@@ -1,5 +1,18 @@
 import api from '@/lib/api';
 
+export interface LoanOwner {
+  userId: string;
+  sharePercent: number;
+  userName?: string;
+}
+
+export interface LoanAsset {
+  id: string;
+  assetType: string;
+  name: string;
+  value: number;
+}
+
 export interface Loan {
   id: string;
   lenderName: string;
@@ -13,9 +26,21 @@ export interface Loan {
   tenureMonths: number;
   disbursementDate: string;
   endDate: string;
+  /** When full EMIs begin. The gap from disbursementDate is the pre-EMI period. */
+  firstEmiDate?: string | null;
+  /** Interest accruing across that gap. */
+  preEmiAmount?: number | null;
   isTaxDeductible: boolean;
   section24bEligible: boolean;
-  prepaymentChargesPct: number;
+  /** A flat rupee amount, not a percentage. */
+  prepaymentChargesAmount: number;
+  assetId?: string | null;
+  asset?: LoanAsset | null;
+  owners?: LoanOwner[];
+  /** The requesting user's share, and their proportion of the money figures. */
+  sharePercent?: number;
+  outstandingBalanceShare?: number;
+  emiAmountShare?: number;
   userName?: string;
 }
 
@@ -30,7 +55,27 @@ export interface AmortizationRow {
   totalInterestPaid: number;
 }
 
+/** What POST /loans/derive returns. Every field may be null when inputs are incomplete. */
+export interface DerivedLoanFields {
+  emiAmount: number | null;
+  endDate: string | null;
+  preEmiAmount: number | null;
+  monthlyPreEmiAmount: number | null;
+  outstandingBalance: number | null;
+}
+
+export interface DeriveLoanInput {
+  principalAmount: number;
+  interestRate: number;
+  tenureMonths: number;
+  disbursementDate?: string;
+  firstEmiDate?: string;
+}
+
 const unwrap = <T>(res: { data: { data: T } }): T => res.data.data;
+
+/** Coerce a Decimal-or-null field without turning null into 0. */
+const numOrNull = (v: unknown): number | null => (v == null ? null : Number(v));
 
 // Prisma Decimal fields serialize as strings in JSON; coerce to number at the API boundary.
 export function normalizeLoan(l: Loan): Loan {
@@ -40,7 +85,13 @@ export function normalizeLoan(l: Loan): Loan {
     outstandingBalance: Number(l.outstandingBalance),
     interestRate: Number(l.interestRate),
     emiAmount: Number(l.emiAmount),
-    prepaymentChargesPct: Number(l.prepaymentChargesPct),
+    prepaymentChargesAmount: Number(l.prepaymentChargesAmount ?? 0),
+    preEmiAmount: numOrNull(l.preEmiAmount),
+    sharePercent: numOrNull(l.sharePercent) ?? undefined,
+    outstandingBalanceShare: numOrNull(l.outstandingBalanceShare) ?? undefined,
+    emiAmountShare: numOrNull(l.emiAmountShare) ?? undefined,
+    owners: l.owners?.map((o) => ({ ...o, sharePercent: Number(o.sharePercent) })),
+    asset: l.asset ? { ...l.asset, value: Number(l.asset.value) } : l.asset,
   };
 }
 
@@ -53,4 +104,17 @@ export const loansApi = {
   getAmortization: (id: string) => api.get<{ data: { loan: Loan; schedule: AmortizationRow[]; summary: any } }>(`/loans/${id}/amortization-schedule`).then(unwrap).then((r) => ({ ...r, loan: normalizeLoan(r.loan) })),
   simulatePrepayment: (id: string, data: { prepaymentAmount: number; mode: string }) =>
     api.post<{ data: any }>(`/loans/${id}/prepayment-simulation`, data).then(unwrap),
+  /**
+   * Ask the backend for the fields a user shouldn't have to compute.
+   * The formulas live server-side only — duplicating financial maths across two
+   * codebases that must agree was deliberately rejected.
+   */
+  derive: (input: DeriveLoanInput) =>
+    api.post<{ data: DerivedLoanFields }>('/loans/derive', input).then(unwrap).then((d) => ({
+      ...d,
+      emiAmount: numOrNull(d.emiAmount),
+      preEmiAmount: numOrNull(d.preEmiAmount),
+      monthlyPreEmiAmount: numOrNull(d.monthlyPreEmiAmount),
+      outstandingBalance: numOrNull(d.outstandingBalance),
+    })),
 };

@@ -116,6 +116,10 @@ async function getEntityOwner(entityType: RelatedEntityType, entityId: string): 
       return row.userId;
     }
     case 'Loan': {
+      // Deliberately the PRIMARY owner only, not co-owners. Document ACLs are a
+      // separate threat surface from loan data, and RealEstate already behaves this way
+      // for its co-owned properties — widening one without the other would be
+      // inconsistent. Known limitation: a loan co-owner cannot attach or read documents.
       const row = await prisma.loan.findUnique({ where: { id: entityId }, select: { userId: true } });
       if (!row) throw AppError.notFound('Loan');
       return row.userId;
