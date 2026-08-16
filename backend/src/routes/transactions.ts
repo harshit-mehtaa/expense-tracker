@@ -38,6 +38,7 @@ const createTransactionSchema = z.object({
   transferToAccountId: z.string().cuid().optional(), // Double-entry destination for TRANSFER type
   loanId: z.string().cuid().optional(), // Linked loan for EMI/payment tracking
   insurancePolicyId: z.string().cuid().optional(), // Linked insurance premium payment
+  subscriptionId: z.string().cuid().optional(), // Linked subscription charge
   refundForTransactionId: z.string().cuid().optional(), // Linked refund for original expense
 }).refine(
   (d) => d.type !== 'TRANSFER' || !!d.transferToAccountId,

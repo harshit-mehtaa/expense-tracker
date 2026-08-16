@@ -9,6 +9,10 @@ export interface RecurringRule {
   frequency: RecurringFrequency;
   nextRunDate: string;
   isActive: boolean;
+  /** Set when a Subscription owns this rule. The backend refuses direct edits/deletes
+   *  (409) so a subscription's money has one source of truth — manage it on
+   *  /subscriptions instead. */
+  subscriptionId?: string | null;
   createdAt: string;
   updatedAt: string;
   templateTransaction: {

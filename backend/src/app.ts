@@ -26,6 +26,7 @@ import snapshotsRouter from './routes/snapshots';
 import reportsRouter from './routes/reports';
 import categoryRulesRouter from './routes/categoryRules';
 import assetsRouter from './routes/assets';
+import subscriptionsRouter from './routes/subscriptions';
 import documentsRouter from './routes/documents';
 
 /**
@@ -90,6 +91,7 @@ export function createApp() {
   app.use('/api/reports', reportsRouter);
   app.use('/api/category-rules', categoryRulesRouter);
   app.use('/api/assets', assetsRouter);
+  app.use('/api/subscriptions', subscriptionsRouter);
   app.use('/api/documents', documentsRouter);
 
   // Must be last — Express only treats a 4-arg middleware as an error handler, and only

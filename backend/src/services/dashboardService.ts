@@ -3,6 +3,7 @@ import prisma from '../config/prisma';
 import { getFYRange, getCurrentFY, getPreviousFY, getMonthStart } from '../utils/financialYear';
 import { generateDueRecurringTransactions } from './recurringService';
 import { computeMonthlyPreEmi } from '../utils/loanMath';
+import { priceAsOf } from '../utils/subscriptionPricing';
 import {
   getNetExpenseByUserCategory,
   getNetExpenseTotal,
@@ -118,8 +119,14 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string, t
   const effectiveUserId = requesterRole === 'ADMIN' ? targetUserId : userId;
   const userFilter = effectiveUserId ? { userId: effectiveUserId } : {};
 
-  const [fdsMaturingSoon, sipdueThisMonth, insurancePremiumsDue, loansWithEmi, advanceTax, rdsMaturing] =
-    await Promise.all([
+  // Alerts look 7 days ahead; the maturity queries above use 30. Named so the two are
+  // not confused, and so the bound is stated once.
+  const sevenDaysOut = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+  const [
+    fdsMaturingSoon, sipdueThisMonth, insurancePremiumsDue, loansWithEmi, advanceTax,
+    subscriptions, rdsMaturing,
+  ] = await Promise.all([
       // FDs maturing in 30 days
       prisma.fixedDeposit.findMany({
         where: {
@@ -176,6 +183,28 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string, t
       prisma.advanceTaxEvent.findMany({
         where: { dueDate: { gte: now, lte: thirtyDaysOut } },
         orderBy: { dueDate: 'asc' },
+      }),
+      // Subscriptions: trials about to convert, and renewals about to bill.
+      // Bounded to the alert window rather than loading every active subscription and
+      // filtering in app code, matching the sibling queries. `...userFilter` is used
+      // rather than a bare `userId` so the family-wide (ADMIN, no target) case is
+      // explicit instead of relying on `userId: undefined` meaning "unfiltered".
+      prisma.subscription.findMany({
+        where: {
+          ...userFilter,
+          deletedAt: null,
+          status: { in: ['TRIALING', 'ACTIVE'] },
+          OR: [
+            { trialEndDate: { gte: now, lte: sevenDaysOut } },
+            { recurringRule: { is: { isActive: true, nextRunDate: { gte: now, lte: sevenDaysOut } } } },
+          ],
+        },
+        include: {
+          // Full history, not `take: 1` — the amount shown must be the price in effect on
+          // the date it will actually be charged, which a single newest row cannot give.
+          prices: true,
+          recurringRule: { select: { nextRunDate: true, isActive: true, frequency: true } },
+        },
       }),
       // RDs maturing in 30 days
       prisma.recurringDeposit.findMany({
@@ -279,6 +308,49 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string, t
         dueDate: new Date(now.getFullYear(), now.getMonth(), loan.emiDate).toISOString(),
         daysUntilDue: daysUntil,
         entityId: loan.id,
+      });
+    }
+  }
+
+  // Subscriptions: a converting trial and an upcoming renewal.
+  //
+  // The trial alert is the point of the feature — a trial costs you nothing until you
+  // forget it, so the warning has to arrive before the first charge, not with it.
+  for (const subscription of subscriptions) {
+    const priceHistory = subscription.prices.map((p) => ({
+      amount: Number(p.amount), effectiveFrom: p.effectiveFrom,
+    }));
+
+    if (subscription.status === 'TRIALING' && subscription.trialEndDate) {
+      const daysUntil = Math.ceil(
+        (subscription.trialEndDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
+      );
+      if (daysUntil >= 0 && daysUntil <= 7) {
+        alerts.push({
+          type: 'SUBSCRIPTION_TRIAL' as const,
+          title: `Trial ending: ${subscription.name}`,
+          // What the FIRST charge will be, resolved on the date it lands.
+          amount: priceAsOf(priceHistory, subscription.trialEndDate) ?? undefined,
+          dueDate: subscription.trialEndDate.toISOString(),
+          daysUntilDue: daysUntil,
+          entityId: subscription.id,
+        });
+      }
+      // A converting trial is the more urgent of the two; do not also alert the renewal.
+      continue;
+    }
+
+    const rule = subscription.recurringRule;
+    if (!rule?.isActive) continue;
+    const daysUntil = Math.ceil((rule.nextRunDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    if (daysUntil >= 0 && daysUntil <= 7) {
+      alerts.push({
+        type: 'SUBSCRIPTION_RENEWAL' as const,
+        title: `Renews: ${subscription.name}`,
+        amount: priceAsOf(priceHistory, rule.nextRunDate) ?? undefined,
+        dueDate: rule.nextRunDate.toISOString(),
+        daysUntilDue: daysUntil,
+        entityId: subscription.id,
       });
     }
   }

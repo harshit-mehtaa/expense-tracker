@@ -91,7 +91,9 @@ export interface AssetAllocation {
 }
 
 export interface UpcomingAlert {
-  type: 'EMI' | 'SIP' | 'INSURANCE_PREMIUM' | 'FD_MATURITY' | 'ADVANCE_TAX';
+  type:
+    | 'EMI' | 'SIP' | 'INSURANCE_PREMIUM' | 'FD_MATURITY' | 'RD_MATURITY'
+    | 'ADVANCE_TAX' | 'BUDGET_ALERT' | 'SUBSCRIPTION_TRIAL' | 'SUBSCRIPTION_RENEWAL';
   title: string;
   amount?: number;
   dueDate: string;

@@ -380,6 +380,7 @@ export async function createTransaction(
     transferToAccountId?: string; // Double-entry: destination account for TRANSFER type
     loanId?: string; // Linked loan — decrements outstandingBalance when type=EXPENSE
     insurancePolicyId?: string; // Linked policy premium payment; remains an EXPENSE
+    subscriptionId?: string; // Linked subscription charge; remains an EXPENSE
     refundForTransactionId?: string; // Linked refund income for a previous EXPENSE
   },
 ) {
@@ -457,6 +458,11 @@ export async function createTransaction(
     // Special linkages are only valid for EXPENSE transactions.
     const effectiveLoanId = data.loanId && data.type === 'EXPENSE' ? data.loanId : undefined;
     const effectiveInsurancePolicyId = data.insurancePolicyId && data.type === 'EXPENSE' ? data.insurancePolicyId : undefined;
+    // Attributing a real charge to a subscription is what makes the "charged more than
+    // expected" check meaningful: without it, the only rows carrying a subscriptionId are
+    // ones generation created at exactly the recorded price, so the check could never
+    // fire on the vendor reality it claims to detect.
+    const effectiveSubscriptionId = data.subscriptionId && data.type === 'EXPENSE' ? data.subscriptionId : undefined;
     const effectiveRefundForTransactionId = data.refundForTransactionId && data.type === 'INCOME'
       ? data.refundForTransactionId
       : undefined;
@@ -487,6 +493,16 @@ export async function createTransaction(
       const policy = await tx.insurancePolicy.findFirst({ where: { id: effectiveInsurancePolicyId, userId } });
       if (!policy) throw AppError.notFound('Insurance policy');
     }
+    if (effectiveSubscriptionId) {
+      // Same ownership rule as the loan and policy links above: attaching another
+      // member's subscription would leak its name and price back through any read that
+      // includes it.
+      const subscription = await tx.subscription.findFirst({
+        where: { id: effectiveSubscriptionId, userId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!subscription) throw AppError.notFound('Subscription');
+    }
     if (effectiveRefundForTransactionId) {
       const originalExpense = await tx.transaction.findFirst({
         where: { id: effectiveRefundForTransactionId, userId, deletedAt: null, type: 'EXPENSE' },
@@ -514,6 +530,7 @@ export async function createTransaction(
         gstAmount: data.gstAmount,
         loanId: effectiveLoanId,
         insurancePolicyId: effectiveInsurancePolicyId,
+        subscriptionId: effectiveSubscriptionId,
         refundForTransactionId: effectiveRefundForTransactionId,
         balanceImpactApplied: true,
         // importHash is null for manual transactions
@@ -1087,6 +1104,25 @@ export async function softDeleteTransaction(
     });
     if (activeRefundCount > 0) {
       throw AppError.badRequest('Remove refund links before deleting the original expense');
+    }
+
+    // A recurring rule's TEMPLATE is not an ordinary transaction — it is the record the
+    // generator copies from. `generateRuleCatchUp` returns 0 the moment the template has
+    // a `deletedAt`, so deleting it stops billing permanently and SILENTLY: the
+    // subscription still shows as ACTIVE with a next renewal date, and for a
+    // subscription-owned rule the ownership guard blocks every repair path through the
+    // recurring API. The template looks exactly like a duplicate of an imported bank
+    // line, which is what makes this easy to do by accident.
+    const owningRule = await ptx.recurringRule.findFirst({
+      where: { templateTransactionId: transactionId },
+      select: { id: true, subscriptionId: true },
+    });
+    if (owningRule) {
+      throw AppError.conflict(
+        owningRule.subscriptionId
+          ? 'This is the template for a subscription. Cancel or delete the subscription instead.'
+          : 'This is the template for a recurring rule. Delete the recurring rule instead.',
+      );
     }
 
     const deleted = await ptx.transaction.update({

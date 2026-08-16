@@ -38,6 +38,7 @@ vi.mock('../config/prisma', () => {
     sIP: { findMany: vi.fn() },
     insurancePolicy: { findMany: vi.fn() },
     advanceTaxEvent: { findMany: vi.fn() },
+    subscription: { findMany: vi.fn() },
     budget: { findMany: vi.fn() },
   };
   return { default: prismaObj, prisma: prismaObj };
@@ -77,6 +78,7 @@ const catMock = (prisma as any).category;
 const sipMock = (prisma as any).sIP;
 const insMock = (prisma as any).insurancePolicy;
 const taxEventMock = (prisma as any).advanceTaxEvent;
+const subscriptionMock = (prisma as any).subscription;
 const budgetMock = (prisma as any).budget;
 const queryRawMock = (prisma as any).$queryRaw as ReturnType<typeof vi.fn>;
 const generateRecurringMock = generateDueRecurringTransactions as ReturnType<typeof vi.fn>;
@@ -108,6 +110,7 @@ function resetAllMocks() {
   sipMock.findMany.mockResolvedValue([]);
   insMock.findMany.mockResolvedValue([]);
   taxEventMock.findMany.mockResolvedValue([]);
+  subscriptionMock.findMany.mockResolvedValue([]);
   budgetMock.findMany.mockResolvedValue([]);
 }
 
@@ -1530,5 +1533,149 @@ describe('EMI alerts during a pre-EMI period', () => {
     ]);
     const alerts = await getUpcomingAlerts('u2', 'MEMBER');
     expect(alerts.find((a: any) => a.type === 'EMI')!.amount).toBe(20_000);
+  });
+});
+
+// ─── Subscription alerts ─────────────────────────────────────────────────────
+
+describe('subscription alerts', () => {
+  const PINNED = new Date('2025-04-15T12:00:00.000Z');
+
+  beforeAll(() => { vi.useFakeTimers(); vi.setSystemTime(PINNED); });
+  afterAll(() => { vi.useRealTimers(); });
+  beforeEach(resetAllMocks);
+
+  const sub = (over: Record<string, unknown> = {}) => ({
+    id: 'sub-1',
+    name: 'Netflix',
+    status: 'ACTIVE',
+    trialEndDate: null,
+    // effectiveFrom matters now: the alert shows the price in effect on the date it will
+    // actually be charged, not merely the newest row.
+    prices: [{ amount: 649, effectiveFrom: new Date('2024-01-01') }],
+    recurringRule: { nextRunDate: new Date('2025-04-18'), isActive: true, frequency: 'MONTHLY' },
+    ...over,
+  });
+
+  it('warns before a trial converts — the point of tracking trials at all', async () => {
+    subscriptionMock.findMany.mockResolvedValue([
+      sub({ status: 'TRIALING', trialEndDate: new Date('2025-04-18') }),
+    ]);
+
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    const trial = alerts.find((a: any) => a.type === 'SUBSCRIPTION_TRIAL')!;
+
+    expect(trial.title).toMatch(/Trial ending: Netflix/);
+    expect(trial.daysUntilDue).toBe(3);
+    expect(trial.amount).toBe(649);
+  });
+
+  it('does not also raise a renewal alert for a converting trial', async () => {
+    subscriptionMock.findMany.mockResolvedValue([
+      sub({ status: 'TRIALING', trialEndDate: new Date('2025-04-18') }),
+    ]);
+
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    expect(alerts.filter((a: any) => a.type === 'SUBSCRIPTION_RENEWAL')).toHaveLength(0);
+  });
+
+  it('alerts an upcoming renewal', async () => {
+    subscriptionMock.findMany.mockResolvedValue([sub()]);
+
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    const renewal = alerts.find((a: any) => a.type === 'SUBSCRIPTION_RENEWAL')!;
+
+    expect(renewal.title).toMatch(/Renews: Netflix/);
+    expect(renewal.daysUntilDue).toBe(3);
+  });
+
+  it('ignores a renewal more than 7 days out', async () => {
+    subscriptionMock.findMany.mockResolvedValue([
+      sub({ recurringRule: { nextRunDate: new Date('2025-05-30'), isActive: true, frequency: 'MONTHLY' } }),
+    ]);
+
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    expect(alerts.filter((a: any) => a.type === 'SUBSCRIPTION_RENEWAL')).toHaveLength(0);
+  });
+
+  it('says nothing about a subscription whose rule is inactive', async () => {
+    // A cancelled subscription must not keep nagging about a renewal that will not happen.
+    subscriptionMock.findMany.mockResolvedValue([
+      sub({ recurringRule: { nextRunDate: new Date('2025-04-18'), isActive: false, frequency: 'MONTHLY' } }),
+    ]);
+
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    expect(alerts.filter((a: any) => a.type === 'SUBSCRIPTION_RENEWAL')).toHaveLength(0);
+  });
+
+  it('handles a subscription with no rule and no price without throwing', async () => {
+    subscriptionMock.findMany.mockResolvedValue([sub({ prices: [], recurringRule: null })]);
+
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    expect(alerts.filter((a: any) => String(a.type).startsWith('SUBSCRIPTION'))).toHaveLength(0);
+  });
+
+  it('treats TRIALING with no end date as an ordinary renewal', async () => {
+    // Nothing to warn about converting, so it should behave like any active
+    // subscription rather than falling silent.
+    subscriptionMock.findMany.mockResolvedValue([
+      sub({ status: 'TRIALING', trialEndDate: null }),
+    ]);
+
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    expect(alerts.filter((a: any) => a.type === 'SUBSCRIPTION_TRIAL')).toHaveLength(0);
+    expect(alerts.filter((a: any) => a.type === 'SUBSCRIPTION_RENEWAL')).toHaveLength(1);
+  });
+
+  it('omits the amount when no price is recorded', async () => {
+    subscriptionMock.findMany.mockResolvedValue([sub({ prices: [] })]);
+
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    const renewal = alerts.find((a: any) => a.type === 'SUBSCRIPTION_RENEWAL')!;
+    expect(renewal.amount).toBeUndefined();
+  });
+
+  it('omits the trial amount when no price covers the trial end date', async () => {
+    subscriptionMock.findMany.mockResolvedValue([sub({
+      status: 'TRIALING',
+      trialEndDate: new Date('2025-04-18'),
+      prices: [{ amount: 649, effectiveFrom: new Date('2030-01-01') }],
+    })]);
+
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    expect(alerts.find((a: any) => a.type === 'SUBSCRIPTION_TRIAL')!.amount).toBeUndefined();
+  });
+
+  it('shows the price in effect on the RENEWAL date, not a future-dated one', async () => {
+    // Recording "799 from 1 June" must not make the 18 April renewal claim 799.
+    subscriptionMock.findMany.mockResolvedValue([sub({
+      prices: [
+        { amount: 649, effectiveFrom: new Date('2024-01-01') },
+        { amount: 799, effectiveFrom: new Date('2025-06-01') },
+      ],
+    })]);
+
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    expect(alerts.find((a: any) => a.type === 'SUBSCRIPTION_RENEWAL')!.amount).toBe(649);
+  });
+
+  it('bounds the query to the alert window rather than loading everything', async () => {
+    subscriptionMock.findMany.mockResolvedValue([]);
+
+    await getUpcomingAlerts('u1', 'MEMBER');
+
+    const where = subscriptionMock.findMany.mock.calls[0][0].where;
+    expect(where.deletedAt).toBeNull();
+    expect(where.userId).toBe('u1');
+    expect(where.OR).toHaveLength(2);
+  });
+
+  it('ignores a trial that already ended', async () => {
+    subscriptionMock.findMany.mockResolvedValue([
+      sub({ status: 'TRIALING', trialEndDate: new Date('2025-04-01') }),
+    ]);
+
+    const alerts = await getUpcomingAlerts('u1', 'MEMBER');
+    expect(alerts.filter((a: any) => a.type === 'SUBSCRIPTION_TRIAL')).toHaveLength(0);
   });
 });

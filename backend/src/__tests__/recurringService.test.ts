@@ -32,6 +32,9 @@ vi.mock('../config/prisma', () => {
     user: {
       findMany: vi.fn(),
     },
+    subscription: {
+      update: vi.fn(),
+    },
     $transaction: vi.fn(),
   };
   return { default: mockPrisma, prisma: mockPrisma };
@@ -445,5 +448,173 @@ describe('generateDueRecurringTransactionsForAllUsers', () => {
 
     const result = await generateDueRecurringTransactionsForAllUsers();
     expect(result).toEqual({ generated: 1, usersProcessed: 2 });
+  });
+});
+
+
+// ─── Subscription-owned rules ────────────────────────────────────────────────
+
+/**
+ * A subscription is billed at the price in effect on each DUE DATE. Reading one fixed
+ * amount meant a price rise recorded today would retroactively reprice every backfilled
+ * month, so a container that had been down across a rise would post a ledger of charges
+ * that never happened.
+ */
+describe('generation for a subscription-owned rule', () => {
+  const SUBSCRIPTION_RULE = {
+    ...MOCK_RULE,
+    id: 'rule-sub',
+    subscriptionId: 'sub-1',
+    nextRunDate: new Date('2024-01-01'),
+    templateTransaction: { ...MOCK_RULE.templateTransaction, amount: 649, description: 'Netflix' },
+    subscription: {
+      id: 'sub-1',
+      status: 'ACTIVE',
+      prices: [
+        { amount: 499, effectiveFrom: new Date('2023-01-01') },
+        { amount: 649, effectiveFrom: new Date('2024-03-01') },
+      ],
+    },
+  };
+
+  beforeEach(() => {
+    ruleMock.updateMany.mockResolvedValue({ count: 1 });
+    txMock.create.mockResolvedValue({ id: 'gen-1' });
+    (prisma as any).bankAccount.update.mockResolvedValue({});
+    (prisma as any).subscription.update.mockResolvedValue({});
+  });
+
+  it('bills each backfilled month at the price in effect THEN, not today', async () => {
+    // Catching up Jan..May 2024 across a 1 Mar rise from 499 to 649.
+    ruleMock.findMany.mockResolvedValue([SUBSCRIPTION_RULE]);
+
+    await generateDueRecurringTransactions('u1');
+
+    const amounts = txMock.create.mock.calls.map((c: any) => Number(c[0].data.amount));
+    // Jan, Feb at 499; Mar onward at 649. The old code produced 649 for all of them.
+    expect(amounts.slice(0, 2)).toEqual([499, 499]);
+    expect(amounts[2]).toBe(649);
+    expect(new Set(amounts)).toEqual(new Set([499, 649]));
+  });
+
+  it('attributes every generated charge to its subscription', async () => {
+    ruleMock.findMany.mockResolvedValue([SUBSCRIPTION_RULE]);
+
+    await generateDueRecurringTransactions('u1');
+
+    for (const call of txMock.create.mock.calls) {
+      expect(call[0].data.subscriptionId).toBe('sub-1');
+    }
+  });
+
+  it('adjusts the account balance by the resolved price, not the template amount', async () => {
+    ruleMock.findMany.mockResolvedValue([SUBSCRIPTION_RULE]);
+
+    await generateDueRecurringTransactions('u1');
+
+    const firstDelta = (prisma as any).bankAccount.update.mock.calls[0][0].data.currentBalance.increment;
+    // EXPENSE at the Jan price of 499 -> -499, not -649.
+    expect(firstDelta).toBe(-499);
+  });
+
+  it('does not bill a cancelled subscription even if its rule reaches the generator', async () => {
+    // Pre-mortem #3 named exactly this failure: a cancelled subscription that keeps
+    // billing. cancelSubscription sets isActive:false, and there are TWO independent
+    // barriers — the due-rule query, and the atomic updateMany guard inside the
+    // transaction. This forces the rule past the first barrier to prove the second one
+    // is real, which a test that only checks the query filter would not.
+    ruleMock.findMany.mockResolvedValue([{ ...SUBSCRIPTION_RULE, isActive: false }]);
+    ruleMock.updateMany.mockResolvedValue({ count: 0 }); // guard rejects an inactive rule
+
+    const result = await generateDueRecurringTransactions('u1');
+
+    expect(result.generated).toBe(0);
+    expect(txMock.create).not.toHaveBeenCalled();
+    // The guard pins isActive, so a deactivated rule can never win the race.
+    expect(ruleMock.updateMany.mock.calls[0][0].where.isActive).toBe(true);
+  });
+
+  it('stops rather than inventing an amount when no price covers the date', async () => {
+    // Bad data: the rule is due before any recorded price exists.
+    ruleMock.findMany.mockResolvedValue([{
+      ...SUBSCRIPTION_RULE,
+      nextRunDate: new Date('2022-01-01'),
+      subscription: {
+        ...SUBSCRIPTION_RULE.subscription,
+        prices: [{ amount: 499, effectiveFrom: new Date('2023-01-01') }],
+      },
+    }]);
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const result = await generateDueRecurringTransactions('u1');
+
+    expect(result.generated).toBe(0);
+    expect(txMock.create).not.toHaveBeenCalled();
+    // Silence here is the real danger: a subscription that stops billing looks exactly
+    // like one that is not due, so the stop has to be announced.
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('no price covering its due date'),
+      expect.objectContaining({ subscriptionId: 'sub-1' }),
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('converts a trial to ACTIVE on the first real charge', async () => {
+    ruleMock.findMany.mockResolvedValue([{
+      ...SUBSCRIPTION_RULE,
+      nextRunDate: new Date('2024-03-01'),
+      subscription: { ...SUBSCRIPTION_RULE.subscription, status: 'TRIALING' },
+    }]);
+
+    await generateDueRecurringTransactions('u1');
+
+    expect((prisma as any).subscription.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'sub-1' }, data: { status: 'ACTIVE' } }),
+    );
+  });
+
+  it('leaves a plain recurring rule on its template amount', async () => {
+    // The regression guard for every non-subscription rule in the system.
+    ruleMock.findMany.mockResolvedValue([{ ...MOCK_RULE, subscriptionId: null, subscription: null }]);
+
+    await generateDueRecurringTransactions('u1');
+
+    const amounts = txMock.create.mock.calls.map((c: any) => Number(c[0].data.amount));
+    expect(new Set(amounts)).toEqual(new Set([5000]));
+    expect(txMock.create.mock.calls[0][0].data.subscriptionId).toBeNull();
+  });
+});
+
+/**
+ * The rule a subscription owns must only change through subscriptionService. Editing it
+ * directly would move money without touching the price history, so the recorded price
+ * and the amount actually charged would silently diverge.
+ */
+describe('subscription-owned rules are not directly editable', () => {
+  it('refuses to update a rule owned by a subscription', async () => {
+    ruleMock.findFirst.mockResolvedValue({ ...MOCK_RULE, subscriptionId: 'sub-1' });
+
+    await expect(updateRecurringRule('rule-1', 'u1', { isActive: false }))
+      .rejects.toThrow(/belongs to a subscription/i);
+
+    expect(ruleMock.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses to delete a rule owned by a subscription', async () => {
+    ruleMock.findFirst.mockResolvedValue({ ...MOCK_RULE, subscriptionId: 'sub-1' });
+
+    await expect(deleteRecurringRule('rule-1', 'u1'))
+      .rejects.toThrow(/belongs to a subscription/i);
+
+    expect(ruleMock.delete).not.toHaveBeenCalled();
+  });
+
+  it('still allows editing an ordinary rule', async () => {
+    ruleMock.findFirst.mockResolvedValue({ ...MOCK_RULE, subscriptionId: null });
+    ruleMock.update.mockResolvedValue(MOCK_RULE);
+
+    await updateRecurringRule('rule-1', 'u1', { isActive: false });
+
+    expect(ruleMock.update).toHaveBeenCalled();
   });
 });

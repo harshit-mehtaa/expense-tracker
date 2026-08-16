@@ -34,6 +34,13 @@ vi.mock('../config/prisma', () => {
     insurancePolicy: {
       findFirst: vi.fn(),
     },
+    // softDeleteTransaction refuses to delete a recurring rule's template.
+    recurringRule: {
+      findFirst: vi.fn(),
+    },
+    subscription: {
+      findFirst: vi.fn(),
+    },
     sIP: {
       findFirst: vi.fn(),
     },
@@ -107,6 +114,9 @@ beforeEach(() => {
   txMock.findMany.mockResolvedValue([]);
   txMock.findUnique.mockResolvedValue(MOCK_TX);
   txMock.findFirst.mockResolvedValue(null);
+  // Default: the transaction is NOT a recurring template. Tests that exercise the guard
+  // override this.
+  (prisma as any).recurringRule.findFirst.mockResolvedValue(null);
   txMock.create.mockResolvedValue(MOCK_TX);
   txMock.createMany.mockResolvedValue({ count: 1 });
   txMock.update.mockResolvedValue({ ...MOCK_TX, deletedAt: new Date() });
@@ -2485,5 +2495,79 @@ describe('buildCsv', () => {
   it('returns only header for empty rows array', () => {
     const csv = buildCsv([]);
     expect(csv).toBe('Date,Description,Remark,Type,Amount,Category,SIP,Policy,RefundFor,Account,PaymentMode,Tags');
+  });
+});
+
+/**
+ * A recurring rule's template is not an ordinary transaction — it is what the generator
+ * copies from. Deleting it stops billing permanently and silently, and for a
+ * subscription-owned rule the ownership guard blocks every repair path.
+ */
+describe('softDeleteTransaction — recurring templates', () => {
+  it('refuses to delete a subscription template, naming the right screen', async () => {
+    (prisma as any).recurringRule.findFirst.mockResolvedValue({
+      id: 'rule-1', subscriptionId: 'sub-1',
+    });
+
+    await expect(softDeleteTransaction('tx-1', 'u1', 'MEMBER'))
+      .rejects.toThrow(/template for a subscription/i);
+
+    expect(txMock.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses to delete a plain recurring template, naming the right screen', async () => {
+    (prisma as any).recurringRule.findFirst.mockResolvedValue({
+      id: 'rule-1', subscriptionId: null,
+    });
+
+    await expect(softDeleteTransaction('tx-1', 'u1', 'MEMBER'))
+      .rejects.toThrow(/template for a recurring rule/i);
+
+    expect(txMock.update).not.toHaveBeenCalled();
+  });
+
+  it('still deletes an ordinary transaction', async () => {
+    (prisma as any).recurringRule.findFirst.mockResolvedValue(null);
+
+    await softDeleteTransaction('tx-1', 'u1', 'MEMBER');
+
+    expect(txMock.update).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Attributing a REAL charge to a subscription is what makes "charged more than expected"
+ * mean anything: without it the only rows carrying a subscriptionId are ones generation
+ * created at exactly the recorded price, so the check could never fire on the vendor
+ * behaviour it claims to detect.
+ */
+describe('createTransaction — subscription attribution', () => {
+  const base = {
+    amount: 649, type: 'EXPENSE', description: 'Netflix', date: '2026-08-01',
+  };
+
+  it('links an expense to a subscription the user owns', async () => {
+    (prisma as any).subscription.findFirst.mockResolvedValue({ id: 'sub-1' });
+
+    await createTransaction('u1', { ...base, subscriptionId: 'sub-1' } as never);
+
+    expect(txMock.create.mock.calls[0][0].data.subscriptionId).toBe('sub-1');
+  });
+
+  it('refuses a subscription belonging to someone else', async () => {
+    (prisma as any).subscription.findFirst.mockResolvedValue(null);
+
+    await expect(createTransaction('u1', { ...base, subscriptionId: 'sub-of-u2' } as never))
+      .rejects.toThrow(/subscription/i);
+
+    expect(txMock.create).not.toHaveBeenCalled();
+  });
+
+  it('ignores the link on a non-EXPENSE transaction', async () => {
+    // A subscription charge is money going out; attributing income to one is meaningless.
+    await createTransaction('u1', { ...base, type: 'INCOME', subscriptionId: 'sub-1' } as never);
+
+    expect(txMock.create.mock.calls[0][0].data.subscriptionId).toBeUndefined();
+    expect((prisma as any).subscription.findFirst).not.toHaveBeenCalled();
   });
 });

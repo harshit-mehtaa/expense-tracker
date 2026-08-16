@@ -282,6 +282,7 @@ model User {
   houseProperties         HousePropertyDetail[]
   foreignAssetDisclosures ForeignAssetDisclosure[]
   recurringRules          RecurringRule[]
+  subscriptions           Subscription[]
   netWorthSnapshots       NetWorthSnapshot[]
 
   @@index([email])
@@ -646,6 +647,7 @@ model Transaction {
   loanId                 String? // Linked loan for EMI/payment tracking
   sipId                  String? // Linked SIP debit; excluded from expense reporting
   insurancePolicyId      String? // Linked insurance premium payment; remains an expense
+  subscriptionId         String? // Linked subscription charge; remains an expense
   refundForTransactionId String? // INCOME refund linked back to the original EXPENSE
   sipTransactionId       String?         @unique // Optional generated SIP unit-allocation transaction
   createdAt              DateTime        @default(now())
@@ -658,6 +660,7 @@ model Transaction {
   loan            Loan?            @relation(fields: [loanId], references: [id], onDelete: SetNull)
   sip             SIP?             @relation(fields: [sipId], references: [id], onDelete: SetNull)
   insurancePolicy InsurancePolicy? @relation(fields: [insurancePolicyId], references: [id], onDelete: SetNull)
+  subscription    Subscription?    @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
   refundFor       Transaction?     @relation("TransactionRefunds", fields: [refundForTransactionId], references: [id], onDelete: SetNull)
   refunds         Transaction[]    @relation("TransactionRefunds")
   sipTransaction  SIPTransaction?  @relation(fields: [sipTransactionId], references: [id], onDelete: SetNull)
@@ -675,6 +678,7 @@ model Transaction {
   @@index([loanId])
   @@index([sipId])
   @@index([insurancePolicyId])
+  @@index([subscriptionId])
   @@index([refundForTransactionId])
   @@index([sipTransactionId])
 }
@@ -686,11 +690,17 @@ model RecurringRule {
   frequency             RecurringFrequency
   nextRunDate           DateTime
   isActive              Boolean            @default(true)
+  /// Set when this rule is OWNED by a Subscription. The FK lives here, not on
+  /// Subscription, so deleting a subscription cascades to its rule — the reverse
+  /// direction cannot cascade. recurringService refuses to mutate or delete a rule
+  /// carrying this, so a subscription's money has exactly one source of truth.
+  subscriptionId        String?            @unique
   createdAt             DateTime           @default(now())
   updatedAt             DateTime           @updatedAt
 
-  templateTransaction Transaction @relation(fields: [templateTransactionId], references: [id])
-  user                User        @relation(fields: [userId], references: [id])
+  templateTransaction Transaction   @relation(fields: [templateTransactionId], references: [id])
+  user                User          @relation(fields: [userId], references: [id])
+  subscription        Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([nextRunDate])
@@ -1085,4 +1095,69 @@ model NetWorthSnapshot {
   @@unique([userId, snapshotDate])
   @@index([userId])
   @@index([snapshotDate])
+}
+
+/// No PAUSED: nothing writes it. Cancel/resume already covers "stop billing for a
+/// while", and a state that cannot be reached is a lie about what the system does.
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  CANCELLED
+}
+
+/// A recurring paid service (Netflix, Spotify, iCloud).
+///
+/// Owns a RecurringRule rather than sitting beside one: the rule is what actually moves
+/// money, so if both could be edited independently the same charge would have two
+/// sources of truth. Price lives in SubscriptionPrice, never on this row, because
+/// generation must be able to resolve what the price WAS on any past due date.
+model Subscription {
+  id              String             @id @default(cuid())
+  userId          String
+  name            String
+  vendor          String?
+  status          SubscriptionStatus @default(ACTIVE)
+  /// Where to go to cancel. The whole point of the feature for most people.
+  cancellationUrl String?
+  startDate       DateTime
+  /// Set while status is TRIALING. The owned rule's nextRunDate is set to this, so the
+  /// engine generates nothing until the trial converts — no special-casing required.
+  trialEndDate    DateTime?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  notes           String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  /// Soft delete. vision.md forbids NEW hard deletes on financial records: the price
+  /// history is the proof of what past charges were billed at, and cascading it away
+  /// would make historical spend unexplainable.
+  deletedAt       DateTime?
+
+  user          User                @relation(fields: [userId], references: [id])
+  recurringRule RecurringRule?
+  prices        SubscriptionPrice[]
+  transactions  Transaction[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([trialEndDate])
+  @@index([deletedAt])
+}
+
+/// Price history. The row with the greatest effectiveFrom <= a given date is the price
+/// in effect on that date, which is what catch-up generation must charge — otherwise a
+/// price rise recorded today would retroactively reprice every backfilled month.
+model SubscriptionPrice {
+  id             String   @id @default(cuid())
+  subscriptionId String
+  amount         Decimal  @db.Decimal(15, 2)
+  effectiveFrom  DateTime
+  note           String?
+  createdAt      DateTime @default(now())
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  // The @@unique index also serves lookups by these columns — a separate @@index would
+  // be a second identical btree.
+  @@unique([subscriptionId, effectiveFrom])
 }

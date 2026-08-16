@@ -10,6 +10,7 @@ import InvestmentsPage from '@/pages/investments/Investments';
 import InsurancePage from '@/pages/insurance/Insurance';
 import BudgetsPage from '@/pages/budgets/Budgets';
 import LoansPage from '@/pages/loans/Loans';
+import SubscriptionsPage from '@/pages/subscriptions/Subscriptions';
 import TaxCentrePage from '@/pages/tax/TaxCentre';
 import FamilyMembersPage from '@/pages/admin/FamilyMembers';
 import ReportsPage from '@/pages/admin/Reports';
@@ -62,6 +63,7 @@ export default function App() {
         <Route path="insurance" element={<InsurancePage />} />
         <Route path="budgets" element={<BudgetsPage />} />
         <Route path="loans/*" element={<LoansPage />} />
+        <Route path="subscriptions" element={<SubscriptionsPage />} />
         <Route path="tax/*" element={<TaxCentrePage />} />
         <Route path="profit-loss" element={<Navigate to="/reports" replace />} />
         <Route path="settings" element={<SettingsPage />} />

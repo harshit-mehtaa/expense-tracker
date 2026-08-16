@@ -3,9 +3,12 @@ import { PaymentMode, Prisma, RecurringFrequency, TransactionType } from '@prism
 import prisma from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import { ownerScopedWhere } from '../utils/resolveTargetUserId';
+import { priceAsOf } from '../utils/subscriptionPricing';
 
 const MAX_CATCH_UP_PER_RULE = 366;
-type DueRecurringRule = Prisma.RecurringRuleGetPayload<{ include: { templateTransaction: true } }>;
+type DueRecurringRule = Prisma.RecurringRuleGetPayload<{
+  include: { templateTransaction: true; subscription: { include: { prices: true } } };
+}>;
 
 function advanceDate(date: Date, frequency: RecurringFrequency): Date {
   const d = dayjs(date);
@@ -85,6 +88,23 @@ export async function listRecurringRules(userId: string) {
   });
 }
 
+/**
+ * A rule owned by a Subscription must only be changed through subscriptionService.
+ *
+ * This is what stops the same charge having two sources of truth. Editing the rule
+ * directly would move the money without touching the subscription's price history, so
+ * the recorded price and the amount actually charged would silently diverge — and
+ * deleting the rule would leave the subscription pointing at nothing while still
+ * displaying a renewal date.
+ */
+function assertNotSubscriptionOwned(rule: { subscriptionId: string | null }) {
+  if (rule.subscriptionId) {
+    throw AppError.conflict(
+      'This rule belongs to a subscription. Edit or cancel the subscription instead.',
+    );
+  }
+}
+
 export async function updateRecurringRule(
   ruleId: string,
   requesterId: string,
@@ -93,6 +113,7 @@ export async function updateRecurringRule(
 ) {
   const rule = await prisma.recurringRule.findFirst({ where: ownerScopedWhere(ruleId, requesterId, requesterRole) });
   if (!rule) throw AppError.notFound('Recurring rule');
+  assertNotSubscriptionOwned(rule);
 
   return prisma.recurringRule.update({
     where: { id: ruleId },
@@ -112,6 +133,7 @@ export async function updateRecurringRule(
 export async function deleteRecurringRule(ruleId: string, requesterId: string, requesterRole = 'MEMBER') {
   const rule = await prisma.recurringRule.findFirst({ where: ownerScopedWhere(ruleId, requesterId, requesterRole) });
   if (!rule) throw AppError.notFound('Recurring rule');
+  assertNotSubscriptionOwned(rule);
 
   await prisma.$transaction(async (tx) => {
     // Delete rule first (FK constraint: rule references template transaction)
@@ -133,12 +155,43 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
   const template = rule.templateTransaction;
   if (template.deletedAt) return 0;
 
+  const subscription = rule.subscription;
+  const prices = subscription
+    ? subscription.prices.map((p) => ({ amount: Number(p.amount), effectiveFrom: p.effectiveFrom }))
+    : [];
+
   let generated = 0;
   let runDate = rule.nextRunDate;
 
   while (runDate <= now && generated < MAX_CATCH_UP_PER_RULE) {
     const dueDate = runDate;
     const nextRunDate = advanceDate(dueDate, rule.frequency);
+
+    // A subscription is billed at the price in effect on the DUE DATE, not today's
+    // price. Without this, catching up across a price rise would repost months that
+    // already happened at an amount that was never charged.
+    //
+    // Resolution is a pure lookup over the already-loaded history, so nothing is added
+    // inside the atomic block below.
+    let amount = template.amount;
+    if (subscription) {
+      const resolved = priceAsOf(prices, dueDate);
+      // Stop rather than guess. A subscription with no price covering this date is bad
+      // data, and inventing an amount would write it silently into the ledger.
+      //
+      // Log rather than throw: throwing here would abort the whole run and stop every
+      // OTHER rule this user has from generating. But it must not be silent either — a
+      // subscription that quietly stops billing looks identical to one that is simply
+      // not due, and nobody would notice for months.
+      if (resolved === null) {
+        console.error(
+          '[recurring] subscription has no price covering its due date; billing stopped',
+          { subscriptionId: rule.subscriptionId, ruleId: rule.id, dueDate: dueDate.toISOString() },
+        );
+        break;
+      }
+      amount = new Prisma.Decimal(resolved);
+    }
 
     const created = await prisma.$transaction(async (tx) => {
       const { count } = await tx.recurringRule.updateMany({
@@ -156,7 +209,7 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
           userId: template.userId,
           bankAccountId: template.bankAccountId,
           categoryId: template.categoryId,
-          amount: template.amount,
+          amount,
           type: template.type,
           paymentMode: template.paymentMode,
           description: template.description,
@@ -164,13 +217,26 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
           tags: template.tags,
           isRecurring: false,
           gstAmount: template.gstAmount,
+          subscriptionId: rule.subscriptionId,
         },
       });
+
+      // The first real charge means the trial converted. Doing it here, inside the same
+      // transaction as the charge, keeps status and money from disagreeing.
+      if (subscription && subscription.status === 'TRIALING') {
+        await tx.subscription.update({
+          where: { id: subscription.id },
+          data: { status: 'ACTIVE' },
+        });
+        // Update the in-memory snapshot too, or a multi-month catch-up repeats this
+        // identical write once per occurrence.
+        subscription.status = 'ACTIVE';
+      }
 
       if (template.bankAccountId) {
         await tx.bankAccount.update({
           where: { id: template.bankAccountId },
-          data: { currentBalance: { increment: transactionBalanceDelta(template.type, template.amount) } },
+          data: { currentBalance: { increment: transactionBalanceDelta(template.type, amount) } },
         });
       }
 
@@ -196,7 +262,7 @@ export async function generateDueRecurringTransactions(userId: string): Promise<
   // Find all potentially due rules (pre-filter; final guard is in the atomic update below)
   const dueRules = await prisma.recurringRule.findMany({
     where: { userId, isActive: true, nextRunDate: { lte: now } },
-    include: { templateTransaction: true },
+    include: { templateTransaction: true, subscription: { include: { prices: true } } },
   });
 
   let generated = 0;

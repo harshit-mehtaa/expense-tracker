@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -344,6 +345,19 @@ export default function RecurringRulesPage() {
                 </div>
               </div>
               <div className="flex items-center gap-1 shrink-0">
+                {/* A subscription owns this rule, so pause/edit/delete would 409. The row
+                    still belongs here — it is real recurring money — but it is managed
+                    on its own page. */}
+                {rule.subscriptionId ? (
+                  <Link
+                    to="/subscriptions"
+                    className="text-xs text-primary underline px-2 py-1 whitespace-nowrap"
+                    title="Managed as a subscription"
+                  >
+                    Manage subscription
+                  </Link>
+                ) : (
+                <>
                 <button
                   onClick={() => rule.isActive && applyMutation.mutate(rule)}
                   disabled={!rule.isActive || applyMutation.isPending}
@@ -394,6 +408,8 @@ export default function RecurringRulesPage() {
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
+                )}
+                </>
                 )}
               </div>
             </div>

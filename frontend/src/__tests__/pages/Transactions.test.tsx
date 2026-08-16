@@ -103,6 +103,59 @@ describe('Transactions page — smoke', () => {
   });
 });
 
+const SUBSCRIPTION_RULE = {
+  id: 'rule-sub', userId: 'u-member', templateTransactionId: 'tmpl-1',
+  frequency: 'MONTHLY', nextRunDate: '2026-09-01T00:00:00.000Z', isActive: true,
+  subscriptionId: 'sub-1',
+  createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z',
+  templateTransaction: {
+    id: 'tmpl-1', amount: 649, type: 'EXPENSE', description: 'Netflix',
+    categoryId: null, category: null, bankAccountId: null, bankAccount: null,
+    paymentMode: null, tags: [], gstAmount: null,
+  },
+};
+
+/**
+ * A subscription owns its rule, and the backend rejects direct edits and deletes with a
+ * 409. The row still belongs in this list — it is real recurring money — but offering
+ * buttons that can only fail is worse than pointing at the page that works.
+ */
+describe('Recurring tab — subscription-owned rules', () => {
+  it('offers a link to the subscription instead of edit/delete controls', async () => {
+    renderPage(<TransactionsPage />, {
+      route: '/transactions?tab=recurring',
+      handlers: [
+        http.get(url('/recurring'), () => HttpResponse.json({ data: [SUBSCRIPTION_RULE] })),
+        ...txHandlers(),
+      ],
+    });
+
+    expect(await screen.findByText('Netflix')).toBeInTheDocument();
+
+    const link = screen.getByRole('link', { name: /manage subscription/i });
+    expect(link).toHaveAttribute('href', '/subscriptions');
+
+    expect(screen.queryByTitle('Edit')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Delete')).not.toBeInTheDocument();
+  });
+
+  it('still shows the normal controls for an ordinary rule', async () => {
+    renderPage(<TransactionsPage />, {
+      route: '/transactions?tab=recurring',
+      handlers: [
+        http.get(url('/recurring'), () =>
+          HttpResponse.json({ data: [{ ...SUBSCRIPTION_RULE, subscriptionId: null }] })),
+        ...txHandlers(),
+      ],
+    });
+
+    expect(await screen.findByText('Netflix')).toBeInTheDocument();
+    expect(screen.getByTitle('Edit')).toBeInTheDocument();
+    expect(screen.getByTitle('Delete')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /manage subscription/i })).not.toBeInTheDocument();
+  });
+});
+
 describe('Transactions page — URL-driven tabs', () => {
   it('?tab=recurring mounts the RecurringRules page (a second file)', async () => {
     renderPage(<TransactionsPage />, {
