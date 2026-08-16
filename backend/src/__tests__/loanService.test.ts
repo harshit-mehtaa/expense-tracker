@@ -26,6 +26,7 @@ import {
   deleteLoan,
   getLoanAmortization,
   simulatePrepayment,
+  getLoanForAudit,
 } from '../services/loanService';
 
 const loanMock = (prisma as any).loan;
@@ -198,6 +199,19 @@ describe('getLoans', () => {
       orderBy: { emiDate: 'asc' },
     });
   });
+
+  it('flattens the joined user name into userName and drops the nested user object', async () => {
+    loanMock.findMany.mockResolvedValue([{ ...MOCK_LOAN, user: { name: 'Harshit' } }]);
+    const [row] = await getLoans();
+    expect(row.userName).toBe('Harshit');
+    expect(row).not.toHaveProperty('user');
+  });
+
+  it('falls back to an empty userName when the join returns no user', async () => {
+    loanMock.findMany.mockResolvedValue([{ ...MOCK_LOAN, user: null }]);
+    const [row] = await getLoans();
+    expect(row.userName).toBe('');
+  });
 });
 
 describe('createLoan', () => {
@@ -245,6 +259,32 @@ describe('deleteLoan', () => {
   it('throws NotFound when loan does not exist', async () => {
     loanMock.findFirst.mockResolvedValue(null);
     await expect(deleteLoan('u1', 'nonexistent')).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('getLoanForAudit', () => {
+  it('scopes to the requester for MEMBER', async () => {
+    loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
+    const result = await getLoanForAudit('u1', 'loan-1', 'MEMBER');
+    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1', userId: 'u1' } });
+    expect(result).toBe(MOCK_LOAN);
+  });
+
+  it('drops the owner filter for ADMIN — can fetch another member\'s loan', async () => {
+    loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
+    await getLoanForAudit('admin-1', 'loan-1', 'ADMIN');
+    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1' } });
+  });
+
+  it('returns null when not found — does not throw (audit snapshot, not an authz check)', async () => {
+    loanMock.findFirst.mockResolvedValue(null);
+    const result = await getLoanForAudit('u1', 'nonexistent');
+    expect(result).toBeNull();
+  });
+
+  it('defaults requesterRole to MEMBER when omitted', async () => {
+    await getLoanForAudit('u1', 'loan-1');
+    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1', userId: 'u1' } });
   });
 });
 

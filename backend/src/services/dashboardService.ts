@@ -228,7 +228,8 @@ export async function getUpcomingAlerts(userId: string, requesterRole: string, t
     // Compute next occurrence of this day-of-month (if today's date is past it, use next month)
     const nextOccurrence = new Date(now.getFullYear(), now.getMonth(), dayOfMonth);
     if (nextOccurrence < now) nextOccurrence.setMonth(nextOccurrence.getMonth() + 1);
-    /* c8 ignore next -- dayOfMonth 1-31 can never produce nextOccurrence > thirtyDaysOut for the pinned test month */
+    // Reachable: on Jan 31 a dueDate of 31 rolls to "Feb 31", which Date normalizes to
+    // Mar 3 — past the Mar 2 cutoff. Short months push the next occurrence beyond 30 days.
     if (nextOccurrence > thirtyDaysOut) continue;
     if (isInsurancePremiumPaidForOccurrence(policy, nextOccurrence)) continue;
     const daysUntil = Math.ceil((nextOccurrence.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));

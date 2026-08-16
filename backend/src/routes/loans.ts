@@ -7,8 +7,7 @@ import { AppError } from '../utils/AppError';
 import { prisma } from '../config/prisma';
 import * as svc from '../services/loanService';
 import { recordAuditLog } from '../services/auditService';
-import { isTest } from '../config/env';
-import { ownerScopedWhere, resolveWriteUserId } from '../utils/resolveTargetUserId';
+import { resolveWriteUserId } from '../utils/resolveTargetUserId';
 
 const router = Router();
 router.use(requireAuth);
@@ -81,7 +80,7 @@ router.post('/', asyncHandler(async (req, res) => {
 
 router.put('/:id', asyncHandler(async (req, res) => {
   const data = loanSchema.partial().parse(req.body);
-  const oldLoan = isTest ? null : await prisma.loan.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const oldLoan = await svc.getLoanForAudit(req.user!.userId, req.params.id, req.user!.role);
   const loan = await svc.updateLoan(req.user!.userId, req.params.id, data as any, req.user!.role);
   await recordAuditLog({
     performedByUserId: req.user!.userId,
@@ -95,7 +94,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
-  const oldLoan = isTest ? null : await prisma.loan.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const oldLoan = await svc.getLoanForAudit(req.user!.userId, req.params.id, req.user!.role);
   const loan = await svc.deleteLoan(req.user!.userId, req.params.id, req.user!.role);
   await recordAuditLog({
     performedByUserId: req.user!.userId,

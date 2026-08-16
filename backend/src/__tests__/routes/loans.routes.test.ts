@@ -22,6 +22,11 @@ vi.mock('../../services/loanService', () => ({
   deleteLoan: vi.fn(),
   getLoanAmortization: vi.fn(),
   simulatePrepayment: vi.fn(),
+  getLoanForAudit: vi.fn(),
+}));
+
+vi.mock('../../services/auditService', () => ({
+  recordAuditLog: vi.fn(),
 }));
 
 vi.mock('../../config/prisma', () => {
@@ -31,6 +36,7 @@ vi.mock('../../config/prisma', () => {
 
 import loansRouter from '../../routes/loans';
 import * as svc from '../../services/loanService';
+import { recordAuditLog } from '../../services/auditService';
 import { prisma } from '../../config/prisma';
 import { makeApp } from '../helpers/makeApp';
 import express from 'express';
@@ -55,6 +61,8 @@ const updateMock = svc.updateLoan as ReturnType<typeof vi.fn>;
 const deleteMock = svc.deleteLoan as ReturnType<typeof vi.fn>;
 const getAmortizationMock = svc.getLoanAmortization as ReturnType<typeof vi.fn>;
 const simulateMock = svc.simulatePrepayment as ReturnType<typeof vi.fn>;
+const getForAuditMock = svc.getLoanForAudit as ReturnType<typeof vi.fn>;
+const auditMock = recordAuditLog as ReturnType<typeof vi.fn>;
 
 const MOCK_LOAN = {
   id: 'loan-1',
@@ -93,6 +101,7 @@ beforeEach(() => {
   deleteMock.mockResolvedValue(undefined);
   getAmortizationMock.mockResolvedValue({ loan: MOCK_LOAN, schedule: [], summary: { totalInterest: 0, remainingMonths: 0 } });
   simulateMock.mockResolvedValue({ savings: 0, newSchedule: [] });
+  getForAuditMock.mockResolvedValue(MOCK_LOAN);
 });
 
 describe('GET /api/loans', () => {
@@ -157,6 +166,30 @@ describe('PUT /api/loans/:id', () => {
     expect(res.status).toBe(200);
     expect(updateMock).toHaveBeenCalledWith('u1', 'loan-1', { emiAmount: 46000 }, 'MEMBER');
   });
+
+  it('records the audit log with the pre-mutation snapshot as oldValue', async () => {
+    await request(app).put('/api/loans/loan-1').send({ emiAmount: 46000 });
+    expect(getForAuditMock).toHaveBeenCalledWith('u1', 'loan-1', 'MEMBER');
+    expect(auditMock).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'UPDATE', entityType: 'Loan', entityId: MOCK_LOAN.id, oldValue: MOCK_LOAN, newValue: MOCK_LOAN }),
+    );
+  });
+
+  it('ADMIN editing another member\'s loan — oldValue is populated, not silently null', async () => {
+    // The regression this refactor exists to prevent: an admin-on-behalf-of edit must
+    // not silently lose the audit trail's before-state.
+    await request(makeAdminApp()).put('/api/loans/loan-1').send({ emiAmount: 46000 });
+    expect(getForAuditMock).toHaveBeenCalledWith('admin-1', 'loan-1', 'ADMIN');
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ oldValue: MOCK_LOAN }));
+  });
+
+  it('fetches the audit snapshot before performing the update', async () => {
+    await request(app).put('/api/loans/loan-1').send({ emiAmount: 46000 });
+    const fetchOrder = getForAuditMock.mock.invocationCallOrder[0];
+    const updateOrder = updateMock.mock.invocationCallOrder[0];
+    expect(fetchOrder).toBeLessThan(updateOrder);
+  });
+
 });
 
 describe('DELETE /api/loans/:id', () => {
@@ -164,6 +197,34 @@ describe('DELETE /api/loans/:id', () => {
     const res = await request(app).delete('/api/loans/loan-1');
     expect(res.status).toBe(204);
     expect(deleteMock).toHaveBeenCalledWith('u1', 'loan-1', 'MEMBER');
+  });
+
+  it('records the audit log with the pre-mutation snapshot as oldValue', async () => {
+    await request(app).delete('/api/loans/loan-1');
+    expect(getForAuditMock).toHaveBeenCalledWith('u1', 'loan-1', 'MEMBER');
+    expect(auditMock).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'DELETE', entityType: 'Loan', entityId: MOCK_LOAN.id, oldValue: MOCK_LOAN }),
+    );
+  });
+
+  it('fetches the audit snapshot before performing the delete', async () => {
+    await request(app).delete('/api/loans/loan-1');
+    const fetchOrder = getForAuditMock.mock.invocationCallOrder[0];
+    const deleteOrder = deleteMock.mock.invocationCallOrder[0];
+    expect(fetchOrder).toBeLessThan(deleteOrder);
+  });
+
+  it('falls back to the URL param for entityId when deleteLoan resolves falsy', async () => {
+    deleteMock.mockResolvedValue(undefined);
+    await request(app).delete('/api/loans/loan-1');
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'loan-1' }));
+  });
+
+  it('prefers the deleted row\'s own id for entityId when deleteLoan returns a record', async () => {
+    // id deliberately differs from the URL param so this proves the left arm ran.
+    deleteMock.mockResolvedValue({ id: 'deleted-loan-id' });
+    await request(app).delete('/api/loans/loan-1');
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'deleted-loan-id' }));
   });
 });
 

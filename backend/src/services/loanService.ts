@@ -28,6 +28,15 @@ export async function deleteLoan(requesterId: string, id: string, requesterRole 
   return prisma.loan.delete({ where: { id } });
 }
 
+/**
+ * Snapshot fetch for audit logging — not an authorization check. The caller (route)
+ * still relies on updateLoan/deleteLoan's own ownerScopedWhere lookup to enforce
+ * access; this just captures the pre-mutation state for `recordAuditLog`.
+ */
+export async function getLoanForAudit(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  return prisma.loan.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
+}
+
 // ─── Amortization Schedule ────────────────────────────────────────────────────
 
 export interface AmortizationRow {

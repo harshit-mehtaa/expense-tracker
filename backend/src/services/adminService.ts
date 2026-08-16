@@ -2,6 +2,22 @@ import bcrypt from 'bcryptjs';
 import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
 
+// PII/credential allow-list for the audit trail — excludes passwordHash so it never
+// lands in auditLog.oldValueJson, which getAuditLog() below serves back to any ADMIN.
+const safeUserSelect = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  isActive: true,
+  colorTag: true,
+  panNumberMasked: true,
+  mustChangePassword: true,
+  createdAt: true,
+  updatedAt: true,
+  deletedAt: true,
+} as const;
+
 export async function getAllUsers() {
   return prisma.user.findMany({
     where: { deletedAt: null },
@@ -87,6 +103,11 @@ export async function resetUserPassword(id: string, newPassword: string) {
   if (!user) throw AppError.notFound('User');
   const passwordHash = await bcrypt.hash(newPassword, 12);
   return prisma.user.update({ where: { id }, data: { passwordHash, mustChangePassword: true } });
+}
+
+/** Snapshot fetch for audit logging — see loanService.getLoanForAudit for the rationale. */
+export async function getUserForAudit(id: string) {
+  return prisma.user.findFirst({ where: { id, deletedAt: null }, select: safeUserSelect });
 }
 
 export async function getAuditLog(page = 1, limit = 50) {

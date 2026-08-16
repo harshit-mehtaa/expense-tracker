@@ -82,6 +82,11 @@ describe('getOtherIncome', () => {
     const result = await getOtherIncome('u1', 'oi-x');
     expect(result).toBeNull();
   });
+
+  it('drops the owner filter for ADMIN — can fetch another member\'s entry', async () => {
+    await getOtherIncome('admin-1', 'oi-1', 'ADMIN');
+    expect(oimMock.findFirst).toHaveBeenCalledWith({ where: { id: 'oi-1', deletedAt: null } });
+  });
 });
 
 describe('createOtherIncome', () => {

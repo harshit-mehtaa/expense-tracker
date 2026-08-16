@@ -5,25 +5,9 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendNoContent } from '../utils/response';
 import * as svc from '../services/adminService';
 import { recordAuditLog } from '../services/auditService';
-import { prisma } from '../config/prisma';
-import { isTest } from '../config/env';
 
 const router = Router();
 router.use(requireAuth, requireAdmin);
-
-const safeUserSelect = {
-  id: true,
-  name: true,
-  email: true,
-  role: true,
-  isActive: true,
-  colorTag: true,
-  panNumberMasked: true,
-  mustChangePassword: true,
-  createdAt: true,
-  updatedAt: true,
-  deletedAt: true,
-} as const;
 
 router.get('/users', asyncHandler(async (_req, res) => {
   const users = await svc.getAllUsers();
@@ -59,7 +43,7 @@ router.put('/users/:id', asyncHandler(async (req, res) => {
     colorTag: z.string().optional(),
     panNumberMasked: z.string().optional(),
   }).parse(req.body);
-  const oldUser = isTest ? null : await prisma.user.findFirst({ where: { id: req.params.id, deletedAt: null }, select: safeUserSelect });
+  const oldUser = await svc.getUserForAudit(req.params.id);
   const user = await svc.updateUser(req.params.id, req.user!.userId, data);
   await recordAuditLog({
     performedByUserId: req.user!.userId,
@@ -73,7 +57,7 @@ router.put('/users/:id', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/users/:id', asyncHandler(async (req, res) => {
-  const oldUser = isTest ? null : await prisma.user.findFirst({ where: { id: req.params.id, deletedAt: null }, select: safeUserSelect });
+  const oldUser = await svc.getUserForAudit(req.params.id);
   const deleted = await svc.deleteUser(req.params.id, req.user!.userId);
   await recordAuditLog({
     performedByUserId: req.user!.userId,

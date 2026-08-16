@@ -8,9 +8,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import request from 'supertest';
 
+const ADMIN_USER = { userId: 'u1', email: 'a@b.com', role: 'ADMIN' as const };
+const MEMBER_USER = { userId: 'm1', email: 'm@b.com', role: 'MEMBER' as const };
+
 vi.mock('../../middleware/auth', () => ({
   requireAuth: (req: any, _res: any, next: any) => {
-    req.user = { userId: 'u1', email: 'a@b.com', role: 'ADMIN' };
+    // Defaults to ADMIN so every existing case keeps its original identity;
+    // makeMemberApp() injects __testUser to exercise the member-scoped arms.
+    req.user = (req as any).__testUser ?? { userId: 'u1', email: 'a@b.com', role: 'ADMIN' };
     next();
   },
   requireAdmin: (_req: any, _res: any, next: any) => next(),
@@ -21,77 +26,121 @@ vi.mock('../../services/investmentService', () => ({
   get80CSummary: vi.fn(),
   getExchangeRates: vi.fn(),
   upsertExchangeRate: vi.fn(),
+  getExchangeRateForAudit: vi.fn(),
   getFDs: vi.fn(),
   getFDsMaturing: vi.fn(),
   createFD: vi.fn(),
   updateFD: vi.fn(),
   deleteFD: vi.fn(),
+  getFDForAudit: vi.fn(),
   getRDs: vi.fn(),
   createRD: vi.fn(),
   updateRD: vi.fn(),
   deleteRD: vi.fn(),
+  getRDForAudit: vi.fn(),
   getSIPs: vi.fn(),
   getSIPsUpcoming: vi.fn(),
   createSIP: vi.fn(),
   updateSIP: vi.fn(),
   deleteSIP: vi.fn(),
   addSIPTransaction: vi.fn(),
+  getSIPForAudit: vi.fn(),
   getInvestments: vi.fn(),
   createInvestment: vi.fn(),
   updateInvestment: vi.fn(),
   deleteInvestment: vi.fn(),
+  getInvestmentForAudit: vi.fn(),
   getGoldHoldings: vi.fn(),
   createGoldHolding: vi.fn(),
   updateGoldHolding: vi.fn(),
   deleteGoldHolding: vi.fn(),
+  getGoldHoldingForAudit: vi.fn(),
   getRealEstate: vi.fn(),
   createRealEstate: vi.fn(),
   updateRealEstate: vi.fn(),
   deleteRealEstate: vi.fn(),
+  getRealEstateForAudit: vi.fn(),
 }));
 
+vi.mock('../../services/auditService', () => ({
+  recordAuditLog: vi.fn(),
+}));
+
+// resolveTargetUserId looks the target member up directly via prisma; without this
+// mock the ADMIN + targetUserId paths would reach the real client and never resolve.
+vi.mock('../../config/prisma', () => {
+  const prisma = { user: { findFirst: vi.fn() } };
+  return { default: prisma, prisma };
+});
+
+import express from 'express';
 import investmentsRouter from '../../routes/investments';
 import * as svc from '../../services/investmentService';
+import { recordAuditLog } from '../../services/auditService';
+import { prisma } from '../../config/prisma';
+import { errorHandler } from '../../middleware/errorHandler';
 import { makeApp } from '../helpers/makeApp';
 
 const app = makeApp(investmentsRouter, '/api/investments');
+
+/** Member app — injects MEMBER_USER via __testUser */
+function makeMemberApp() {
+  const a = express();
+  a.use(express.json());
+  a.use((req: any, _res: any, next: any) => { req.__testUser = MEMBER_USER; next(); });
+  a.use('/api/investments', investmentsRouter);
+  a.use(errorHandler);
+  return a;
+}
+
+/** Valid CUID-format target user ID (20+ chars, alphanumeric lowercase) */
+const VALID_TARGET_ID = 'clm1234567890abcdefghij';
+const userFindFirstMock = (prisma as any).user.findFirst as ReturnType<typeof vi.fn>;
 
 // Helper: cast any svc export to vi.fn
 const m = (fn: unknown) => fn as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  userFindFirstMock.mockResolvedValue({ id: VALID_TARGET_ID });
   m(svc.getPortfolioSummary).mockResolvedValue({ totalInvested: 0, totalCurrentValue: 0, xirr: null });
   m(svc.get80CSummary).mockResolvedValue({ totalInvested: 0, limit: 150_000 });
   m(svc.getExchangeRates).mockResolvedValue([{ fromCurrency: 'USD', toCurrency: 'INR', rate: 83 }]);
   m(svc.upsertExchangeRate).mockResolvedValue({ fromCurrency: 'USD', toCurrency: 'INR', rate: 85 });
+  m(svc.getExchangeRateForAudit).mockResolvedValue({ fromCurrency: 'USD', toCurrency: 'INR', rate: 83 });
   m(svc.getFDs).mockResolvedValue([]);
   m(svc.getFDsMaturing).mockResolvedValue([]);
   m(svc.createFD).mockResolvedValue({ id: 'fd-1' });
   m(svc.updateFD).mockResolvedValue({ id: 'fd-1' });
   m(svc.deleteFD).mockResolvedValue(undefined);
+  m(svc.getFDForAudit).mockResolvedValue({ id: 'fd-1', principalAmount: 100_000 });
   m(svc.getRDs).mockResolvedValue([]);
   m(svc.createRD).mockResolvedValue({ id: 'rd-1' });
   m(svc.updateRD).mockResolvedValue({ id: 'rd-1' });
   m(svc.deleteRD).mockResolvedValue(undefined);
+  m(svc.getRDForAudit).mockResolvedValue({ id: 'rd-1', monthlyInstallment: 5_000 });
   m(svc.getSIPs).mockResolvedValue([]);
   m(svc.getSIPsUpcoming).mockResolvedValue([]);
   m(svc.createSIP).mockResolvedValue({ id: 'sip-1' });
   m(svc.updateSIP).mockResolvedValue({ id: 'sip-1' });
   m(svc.deleteSIP).mockResolvedValue(undefined);
   m(svc.addSIPTransaction).mockResolvedValue({ id: 'tx-1' });
+  m(svc.getSIPForAudit).mockResolvedValue({ id: 'sip-1', monthlyAmount: 5_000 });
   m(svc.getInvestments).mockResolvedValue({ items: [], pagination: { total: 0, page: 1, pageSize: 25 } });
   m(svc.createInvestment).mockResolvedValue({ id: 'inv-1' });
   m(svc.updateInvestment).mockResolvedValue({ id: 'inv-1' });
   m(svc.deleteInvestment).mockResolvedValue(undefined);
+  m(svc.getInvestmentForAudit).mockResolvedValue({ id: 'inv-1', currentPricePerUnit: 55 });
   m(svc.getGoldHoldings).mockResolvedValue([]);
   m(svc.createGoldHolding).mockResolvedValue({ id: 'gold-1' });
   m(svc.updateGoldHolding).mockResolvedValue({ id: 'gold-1' });
   m(svc.deleteGoldHolding).mockResolvedValue(undefined);
+  m(svc.getGoldHoldingForAudit).mockResolvedValue({ id: 'gold-1', quantityGrams: 10 });
   m(svc.getRealEstate).mockResolvedValue([]);
   m(svc.createRealEstate).mockResolvedValue({ id: 're-1' });
   m(svc.updateRealEstate).mockResolvedValue({ id: 're-1' });
   m(svc.deleteRealEstate).mockResolvedValue(undefined);
+  m(svc.getRealEstateForAudit).mockResolvedValue({ id: 're-1', currentValue: 6_000_000 });
 });
 
 // ─── Portfolio ────────────────────────────────────────────────────────────────
@@ -147,6 +196,35 @@ describe('PUT /api/investments/exchange-rates/:currency', () => {
   it('returns 422 when rate is not positive', async () => {
     const res = await request(app).put('/api/investments/exchange-rates/USD').send({ rate: -1 });
     expect(res.status).toBe(422);
+  });
+
+  it('records UPDATE when a prior rate exists', async () => {
+    const oldRate = { fromCurrency: 'USD', toCurrency: 'INR', rate: 83 };
+    const updated = { id: 'fx-1', fromCurrency: 'USD', toCurrency: 'INR', rate: 85 };
+    m(svc.getExchangeRateForAudit).mockResolvedValue(oldRate);
+    m(svc.upsertExchangeRate).mockResolvedValue(updated);
+    await request(app).put('/api/investments/exchange-rates/USD').send({ rate: 85 });
+    expect(m(svc.getExchangeRateForAudit)).toHaveBeenCalledWith('USD');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      performedByUserId: 'u1',
+      action: 'UPDATE',
+      entityType: 'ExchangeRate',
+      entityId: 'fx-1',
+      oldValue: oldRate,
+      newValue: updated,
+    }));
+  });
+
+  it('records CREATE when no prior rate exists', async () => {
+    const updated = { id: 'fx-2', fromCurrency: 'EUR', toCurrency: 'INR', rate: 90 };
+    m(svc.getExchangeRateForAudit).mockResolvedValue(null);
+    m(svc.upsertExchangeRate).mockResolvedValue(updated);
+    await request(app).put('/api/investments/exchange-rates/eur').send({ rate: 90 });
+    expect(m(svc.getExchangeRateForAudit)).toHaveBeenCalledWith('EUR');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'CREATE',
+      oldValue: null,
+    }));
   });
 });
 
@@ -211,12 +289,48 @@ describe('PUT /api/investments/fd/:id', () => {
     const res = await request(app).put('/api/investments/fd/fd-1').send({ interestRate: 8.0 });
     expect(res.status).toBe(200);
   });
+
+  it('fetches the pre-mutation snapshot and records an UPDATE audit entry', async () => {
+    const oldFd = { id: 'fd-1', interestRate: 7.5 };
+    const newFd = { id: 'fd-1', interestRate: 8.0 };
+    m(svc.getFDForAudit).mockResolvedValue(oldFd);
+    m(svc.updateFD).mockResolvedValue(newFd);
+    await request(app).put('/api/investments/fd/fd-1').send({ interestRate: 8.0 });
+    expect(m(svc.getFDForAudit)).toHaveBeenCalledWith('u1', 'fd-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      performedByUserId: 'u1',
+      action: 'UPDATE',
+      entityType: 'FixedDeposit',
+      entityId: 'fd-1',
+      oldValue: oldFd,
+      newValue: newFd,
+    }));
+  });
 });
 
 describe('DELETE /api/investments/fd/:id', () => {
   it('returns 204 on deletion', async () => {
     const res = await request(app).delete('/api/investments/fd/fd-1');
     expect(res.status).toBe(204);
+  });
+
+  it('fetches the pre-mutation snapshot and records a DELETE audit entry', async () => {
+    const oldFd = { id: 'fd-1', interestRate: 7.5 };
+    m(svc.getFDForAudit).mockResolvedValue(oldFd);
+    await request(app).delete('/api/investments/fd/fd-1');
+    expect(m(svc.getFDForAudit)).toHaveBeenCalledWith('u1', 'fd-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'DELETE',
+      entityType: 'FixedDeposit',
+      entityId: 'fd-1',
+      oldValue: oldFd,
+    }));
+  });
+
+  it('uses the deleted record\'s own id for entityId when the service returns one', async () => {
+    m(svc.deleteFD).mockResolvedValue({ id: 'fd-returned' });
+    await request(app).delete('/api/investments/fd/fd-1');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'fd-returned' }));
   });
 });
 
@@ -256,12 +370,48 @@ describe('PUT /api/investments/rd/:id', () => {
     const res = await request(app).put('/api/investments/rd/rd-1').send({ interestRate: 7.0 });
     expect(res.status).toBe(200);
   });
+
+  it('fetches the pre-mutation snapshot and records an UPDATE audit entry', async () => {
+    const oldRd = { id: 'rd-1', interestRate: 6.5 };
+    const newRd = { id: 'rd-1', interestRate: 7.0 };
+    m(svc.getRDForAudit).mockResolvedValue(oldRd);
+    m(svc.updateRD).mockResolvedValue(newRd);
+    await request(app).put('/api/investments/rd/rd-1').send({ interestRate: 7.0 });
+    expect(m(svc.getRDForAudit)).toHaveBeenCalledWith('u1', 'rd-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      performedByUserId: 'u1',
+      action: 'UPDATE',
+      entityType: 'RecurringDeposit',
+      entityId: 'rd-1',
+      oldValue: oldRd,
+      newValue: newRd,
+    }));
+  });
 });
 
 describe('DELETE /api/investments/rd/:id', () => {
   it('returns 204 on deletion', async () => {
     const res = await request(app).delete('/api/investments/rd/rd-1');
     expect(res.status).toBe(204);
+  });
+
+  it('fetches the pre-mutation snapshot and records a DELETE audit entry', async () => {
+    const oldRd = { id: 'rd-1', interestRate: 6.5 };
+    m(svc.getRDForAudit).mockResolvedValue(oldRd);
+    await request(app).delete('/api/investments/rd/rd-1');
+    expect(m(svc.getRDForAudit)).toHaveBeenCalledWith('u1', 'rd-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'DELETE',
+      entityType: 'RecurringDeposit',
+      entityId: 'rd-1',
+      oldValue: oldRd,
+    }));
+  });
+
+  it('uses the deleted record\'s own id for entityId when the service returns one', async () => {
+    m(svc.deleteRD).mockResolvedValue({ id: 'rd-returned' });
+    await request(app).delete('/api/investments/rd/rd-1');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'rd-returned' }));
   });
 });
 
@@ -281,6 +431,21 @@ describe('GET /api/investments/sip', () => {
     const res = await request(app).get('/api/investments/sip');
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
+  });
+
+  it('ADMIN with a userId param scopes the listing to that member', async () => {
+    await request(app).get(`/api/investments/sip?userId=${VALID_TARGET_ID}`);
+    expect(m(svc.getSIPs)).toHaveBeenCalledWith(VALID_TARGET_ID, undefined, 'ADMIN');
+  });
+
+  it('ADMIN without a userId param falls back to their own id', async () => {
+    await request(app).get('/api/investments/sip');
+    expect(m(svc.getSIPs)).toHaveBeenCalledWith('u1', undefined, 'ADMIN');
+  });
+
+  it('MEMBER is always scoped to themselves, even with a userId param', async () => {
+    await request(makeMemberApp()).get(`/api/investments/sip?userId=${VALID_TARGET_ID}`);
+    expect(m(svc.getSIPs)).toHaveBeenCalledWith('m1', undefined, 'MEMBER');
   });
 });
 
@@ -310,6 +475,14 @@ describe('POST /api/investments/sip', () => {
     expect(m(svc.createSIP)).toHaveBeenCalledWith('u1', expect.not.objectContaining({ investmentId: expect.any(String) }));
   });
 
+  it('treats a blank investmentId as absent rather than as an invalid id', async () => {
+    // sipSchema preprocesses a whitespace-only string to undefined so the optional
+    // field validates instead of being rejected as an empty id.
+    const res = await request(app).post('/api/investments/sip').send({ ...VALID_SIP, investmentId: '   ' });
+    expect(res.status).toBe(201);
+    expect(m(svc.createSIP)).toHaveBeenCalledWith('u1', expect.not.objectContaining({ investmentId: expect.any(String) }));
+  });
+
   it('returns 422 when sipDate is out of range (>28)', async () => {
     const res = await request(app).post('/api/investments/sip').send({ ...VALID_SIP, sipDate: 31 });
     expect(res.status).toBe(422);
@@ -326,12 +499,48 @@ describe('PUT /api/investments/sip/:id', () => {
     const res = await request(app).put('/api/investments/sip/sip-1').send({ monthlyAmount: 6_000 });
     expect(res.status).toBe(200);
   });
+
+  it('fetches the pre-mutation snapshot and records an UPDATE audit entry', async () => {
+    const oldSip = { id: 'sip-1', monthlyAmount: 5_000 };
+    const newSip = { id: 'sip-1', monthlyAmount: 6_000 };
+    m(svc.getSIPForAudit).mockResolvedValue(oldSip);
+    m(svc.updateSIP).mockResolvedValue(newSip);
+    await request(app).put('/api/investments/sip/sip-1').send({ monthlyAmount: 6_000 });
+    expect(m(svc.getSIPForAudit)).toHaveBeenCalledWith('u1', 'sip-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      performedByUserId: 'u1',
+      action: 'UPDATE',
+      entityType: 'SIP',
+      entityId: 'sip-1',
+      oldValue: oldSip,
+      newValue: newSip,
+    }));
+  });
 });
 
 describe('DELETE /api/investments/sip/:id', () => {
   it('returns 204 on deletion', async () => {
     const res = await request(app).delete('/api/investments/sip/sip-1');
     expect(res.status).toBe(204);
+  });
+
+  it('fetches the pre-mutation snapshot and records a DELETE audit entry', async () => {
+    const oldSip = { id: 'sip-1', monthlyAmount: 5_000 };
+    m(svc.getSIPForAudit).mockResolvedValue(oldSip);
+    await request(app).delete('/api/investments/sip/sip-1');
+    expect(m(svc.getSIPForAudit)).toHaveBeenCalledWith('u1', 'sip-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'DELETE',
+      entityType: 'SIP',
+      entityId: 'sip-1',
+      oldValue: oldSip,
+    }));
+  });
+
+  it('uses the deleted record\'s own id for entityId when the service returns one', async () => {
+    m(svc.deleteSIP).mockResolvedValue({ id: 'sip-returned' });
+    await request(app).delete('/api/investments/sip/sip-1');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'sip-returned' }));
   });
 });
 
@@ -374,6 +583,20 @@ describe('GET /api/investments', () => {
     });
     const res = await request(app).get('/api/investments');
     expect(res.status).toBe(200);
+  });
+
+  it('ADMIN with a userId param scopes the listing to that member', async () => {
+    await request(app).get(`/api/investments?userId=${VALID_TARGET_ID}`);
+    expect(m(svc.getInvestments)).toHaveBeenCalledWith(
+      VALID_TARGET_ID, undefined, expect.any(Number), expect.any(Number), 'ADMIN',
+    );
+  });
+
+  it('MEMBER is always scoped to themselves, even with a userId param', async () => {
+    await request(makeMemberApp()).get(`/api/investments?userId=${VALID_TARGET_ID}`);
+    expect(m(svc.getInvestments)).toHaveBeenCalledWith(
+      'm1', undefined, expect.any(Number), expect.any(Number), 'MEMBER',
+    );
   });
 
   it('passes valid page number through (truthy branch, line 213)', async () => {
@@ -420,12 +643,48 @@ describe('PUT /api/investments/:id', () => {
     const res = await request(app).put('/api/investments/inv-1').send({ currentPricePerUnit: 60 });
     expect(res.status).toBe(200);
   });
+
+  it('fetches the pre-mutation snapshot and records an UPDATE audit entry', async () => {
+    const oldInv = { id: 'inv-1', currentPricePerUnit: 55 };
+    const newInv = { id: 'inv-1', currentPricePerUnit: 60 };
+    m(svc.getInvestmentForAudit).mockResolvedValue(oldInv);
+    m(svc.updateInvestment).mockResolvedValue(newInv);
+    await request(app).put('/api/investments/inv-1').send({ currentPricePerUnit: 60 });
+    expect(m(svc.getInvestmentForAudit)).toHaveBeenCalledWith('u1', 'inv-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      performedByUserId: 'u1',
+      action: 'UPDATE',
+      entityType: 'Investment',
+      entityId: 'inv-1',
+      oldValue: oldInv,
+      newValue: newInv,
+    }));
+  });
 });
 
 describe('DELETE /api/investments/:id', () => {
   it('returns 204 on deletion', async () => {
     const res = await request(app).delete('/api/investments/inv-1');
     expect(res.status).toBe(204);
+  });
+
+  it('fetches the pre-mutation snapshot and records a DELETE audit entry', async () => {
+    const oldInv = { id: 'inv-1', currentPricePerUnit: 55 };
+    m(svc.getInvestmentForAudit).mockResolvedValue(oldInv);
+    await request(app).delete('/api/investments/inv-1');
+    expect(m(svc.getInvestmentForAudit)).toHaveBeenCalledWith('u1', 'inv-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'DELETE',
+      entityType: 'Investment',
+      entityId: 'inv-1',
+      oldValue: oldInv,
+    }));
+  });
+
+  it('uses the deleted record\'s own id for entityId when the service returns one', async () => {
+    m(svc.deleteInvestment).mockResolvedValue({ id: 'inv-returned' });
+    await request(app).delete('/api/investments/inv-1');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'inv-returned' }));
   });
 });
 
@@ -469,12 +728,48 @@ describe('PUT /api/investments/gold/:id', () => {
     const res = await request(app).put('/api/investments/gold/gold-1').send({ currentPricePerGram: 6500 });
     expect(res.status).toBe(200);
   });
+
+  it('fetches the pre-mutation snapshot and records an UPDATE audit entry', async () => {
+    const oldHolding = { id: 'gold-1', currentPricePerGram: 6000 };
+    const newHolding = { id: 'gold-1', currentPricePerGram: 6500 };
+    m(svc.getGoldHoldingForAudit).mockResolvedValue(oldHolding);
+    m(svc.updateGoldHolding).mockResolvedValue(newHolding);
+    await request(app).put('/api/investments/gold/gold-1').send({ currentPricePerGram: 6500 });
+    expect(m(svc.getGoldHoldingForAudit)).toHaveBeenCalledWith('u1', 'gold-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      performedByUserId: 'u1',
+      action: 'UPDATE',
+      entityType: 'GoldHolding',
+      entityId: 'gold-1',
+      oldValue: oldHolding,
+      newValue: newHolding,
+    }));
+  });
 });
 
 describe('DELETE /api/investments/gold/:id', () => {
   it('returns 204 on deletion', async () => {
     const res = await request(app).delete('/api/investments/gold/gold-1');
     expect(res.status).toBe(204);
+  });
+
+  it('fetches the pre-mutation snapshot and records a DELETE audit entry', async () => {
+    const oldHolding = { id: 'gold-1', currentPricePerGram: 6000 };
+    m(svc.getGoldHoldingForAudit).mockResolvedValue(oldHolding);
+    await request(app).delete('/api/investments/gold/gold-1');
+    expect(m(svc.getGoldHoldingForAudit)).toHaveBeenCalledWith('u1', 'gold-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'DELETE',
+      entityType: 'GoldHolding',
+      entityId: 'gold-1',
+      oldValue: oldHolding,
+    }));
+  });
+
+  it('uses the deleted record\'s own id for entityId when the service returns one', async () => {
+    m(svc.deleteGoldHolding).mockResolvedValue({ id: 'gold-returned' });
+    await request(app).delete('/api/investments/gold/gold-1');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'gold-returned' }));
   });
 });
 
@@ -519,11 +814,47 @@ describe('PUT /api/investments/real-estate/:id', () => {
     const res = await request(app).put('/api/investments/real-estate/re-1').send({ currentValue: 7_000_000 });
     expect(res.status).toBe(200);
   });
+
+  it('fetches the owner-scoped pre-mutation snapshot and records an UPDATE audit entry', async () => {
+    const oldProp = { id: 're-1', currentValue: 6_000_000 };
+    const newProp = { id: 're-1', currentValue: 7_000_000 };
+    m(svc.getRealEstateForAudit).mockResolvedValue(oldProp);
+    m(svc.updateRealEstate).mockResolvedValue(newProp);
+    await request(app).put('/api/investments/real-estate/re-1').send({ currentValue: 7_000_000 });
+    expect(m(svc.getRealEstateForAudit)).toHaveBeenCalledWith('u1', 're-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      performedByUserId: 'u1',
+      action: 'UPDATE',
+      entityType: 'RealEstate',
+      entityId: 're-1',
+      oldValue: oldProp,
+      newValue: newProp,
+    }));
+  });
 });
 
 describe('DELETE /api/investments/real-estate/:id', () => {
   it('returns 204 on deletion', async () => {
     const res = await request(app).delete('/api/investments/real-estate/re-1');
     expect(res.status).toBe(204);
+  });
+
+  it('fetches the owner-scoped pre-mutation snapshot and records a DELETE audit entry', async () => {
+    const oldProp = { id: 're-1', currentValue: 6_000_000 };
+    m(svc.getRealEstateForAudit).mockResolvedValue(oldProp);
+    await request(app).delete('/api/investments/real-estate/re-1');
+    expect(m(svc.getRealEstateForAudit)).toHaveBeenCalledWith('u1', 're-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'DELETE',
+      entityType: 'RealEstate',
+      entityId: 're-1',
+      oldValue: oldProp,
+    }));
+  });
+
+  it('uses the deleted record\'s own id for entityId when the service returns one', async () => {
+    m(svc.deleteRealEstate).mockResolvedValue({ id: 're-returned' });
+    await request(app).delete('/api/investments/real-estate/re-1');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({ entityId: 're-returned' }));
   });
 });

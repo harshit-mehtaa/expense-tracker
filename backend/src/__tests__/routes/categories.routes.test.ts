@@ -214,6 +214,70 @@ describe('PUT /api/categories/:id', () => {
     });
   });
 
+  it('detaches the parent when parentId is sent as an empty string', async () => {
+    // The zod schema coerces '' → null, which also makes validateParentCategory
+    // return early instead of looking up a parent.
+    const res = await request(app).put('/api/categories/cat-1').send({ parentId: '' });
+    expect(res.status).toBe(200);
+    expect(catMock.update).toHaveBeenCalledWith({
+      where: { id: 'cat-1' },
+      data: expect.objectContaining({ parentId: null }),
+    });
+  });
+
+  it('rejects a parentId that does not resolve to a family category', async () => {
+    catMock.findFirst
+      .mockResolvedValueOnce(MOCK_CAT)   // the category being updated
+      .mockResolvedValueOnce(null);      // the parent lookup misses
+    const res = await request(app)
+      .put('/api/categories/cat-1')
+      .send({ parentId: 'cmparentcategory0000000001' });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/parent category not found/i);
+  });
+
+  it('rejects moving a category underneath its own sub-category', async () => {
+    // Walking up from the proposed parent reaches cat-1 itself, which would create a cycle.
+    catMock.findFirst
+      .mockResolvedValueOnce(MOCK_CAT)                                                              // target
+      .mockResolvedValueOnce({ id: 'cmchildcategory00000000001', type: 'EXPENSE', parentId: 'cat-1' }); // proposed parent
+    const res = await request(app)
+      .put('/api/categories/cat-1')
+      .send({ parentId: 'cmchildcategory00000000001' });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/own sub-category/i);
+  });
+
+  it('walks the full ancestor chain before accepting a deep re-parent', async () => {
+    // grandchild -> child -> (null): no ancestor is cat-1, so the loop runs and exits cleanly.
+    catMock.findFirst
+      .mockResolvedValueOnce(MOCK_CAT)
+      .mockResolvedValueOnce({ id: 'cmgrandchild000000000001', type: 'EXPENSE', parentId: 'cmmid00000000000000000001' })
+      .mockResolvedValueOnce({ id: 'cmmid00000000000000000001', type: 'EXPENSE', parentId: null });
+    const res = await request(app)
+      .put('/api/categories/cat-1')
+      .send({ parentId: 'cmgrandchild000000000001' });
+    expect(res.status).toBe(200);
+    expect(catMock.findFirst).toHaveBeenCalledTimes(3);
+  });
+
+  it('rejects a type change while the category still has sub-categories', async () => {
+    catMock.count.mockResolvedValue(2);
+    const res = await request(app).put('/api/categories/cat-1').send({ type: 'INCOME' });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/while it has sub-categories/i);
+  });
+
+  it('allows a type change when the category has no sub-categories', async () => {
+    catMock.count.mockResolvedValue(0);
+    const res = await request(app).put('/api/categories/cat-1').send({ type: 'INCOME' });
+    expect(res.status).toBe(200);
+    expect(catMock.update).toHaveBeenCalledWith({
+      where: { id: 'cat-1' },
+      data: expect.objectContaining({ type: 'INCOME' }),
+    });
+  });
+
   it('rejects moving category under itself', async () => {
     const id = 'cmolduqjx003i9vmqbwslrvh7';
     catMock.findFirst.mockResolvedValueOnce({ ...MOCK_CAT, id });
@@ -297,5 +361,13 @@ describe('DELETE /api/categories/:id', () => {
     expect(res.status).toBe(409);
     expect(res.body.message).toContain('1 budget');
     expect(res.body.message).not.toContain('1 budgets');
+  });
+
+  it('returns 409 with singular "sub-category" when exactly one child exists', async () => {
+    catMock.count.mockResolvedValueOnce(1);
+    const res = await request(app).delete('/api/categories/cat-1');
+    expect(res.status).toBe(409);
+    expect(res.body.message).toContain('1 sub-category');
+    expect(res.body.message).not.toContain('sub-categories');
   });
 });

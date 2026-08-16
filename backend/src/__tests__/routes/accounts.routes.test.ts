@@ -12,6 +12,10 @@ vi.mock('../../middleware/auth', () => ({
   requireAdmin: (_req: any, _res: any, next: any) => next(),
 }));
 
+vi.mock('../../services/auditService', () => ({
+  recordAuditLog: vi.fn(),
+}));
+
 vi.mock('../../services/accountService', () => ({
   getAccounts: vi.fn(),
   getAccountById: vi.fn(),
@@ -23,6 +27,7 @@ vi.mock('../../services/accountService', () => ({
 
 import accountsRouter from '../../routes/accounts';
 import * as svc from '../../services/accountService';
+import { recordAuditLog } from '../../services/auditService';
 import { makeApp } from '../helpers/makeApp';
 
 const app = makeApp(accountsRouter, '/api/accounts');
@@ -33,6 +38,7 @@ const createMock = svc.createAccount as ReturnType<typeof vi.fn>;
 const updateMock = svc.updateAccount as ReturnType<typeof vi.fn>;
 const deleteMock = svc.deleteAccount as ReturnType<typeof vi.fn>;
 const reconcileMock = svc.reconcileAccount as ReturnType<typeof vi.fn>;
+const auditMock = recordAuditLog as ReturnType<typeof vi.fn>;
 
 const MOCK_ACCOUNT = { id: 'acc-1', bankName: 'HDFC', accountType: 'SAVINGS', currentBalance: 50000 };
 
@@ -200,6 +206,29 @@ describe('DELETE /api/accounts/:id', () => {
     const res = await request(app).delete('/api/accounts/acc-1');
     expect(res.status).toBe(204);
     expect(deleteMock).toHaveBeenCalledWith('acc-1', 'u1', 'ADMIN');
+  });
+
+  it('falls back to the URL param for entityId when deleteAccount resolves falsy', async () => {
+    deleteMock.mockResolvedValue(undefined);
+    await request(app).delete('/api/accounts/acc-1');
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'DELETE',
+      entityType: 'BankAccount',
+      entityId: 'acc-1',
+      oldValue: MOCK_ACCOUNT,
+    }));
+  });
+
+  it('prefers the deleted row\'s own id for entityId when deleteAccount returns a record', async () => {
+    // id deliberately differs from the URL param so this proves the left arm ran.
+    deleteMock.mockResolvedValue({ id: 'deleted-acc-id' });
+    await request(app).delete('/api/accounts/acc-1');
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'deleted-acc-id' }));
+  });
+
+  it('fetches the audit snapshot before performing the delete', async () => {
+    await request(app).delete('/api/accounts/acc-1');
+    expect(getByIdMock.mock.invocationCallOrder[0]).toBeLessThan(deleteMock.mock.invocationCallOrder[0]);
   });
 });
 

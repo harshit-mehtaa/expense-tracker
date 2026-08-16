@@ -101,6 +101,11 @@ function inferPaymentModeFromRemark(remark: string): PaymentMode | undefined {
 }
 
 function withInferredPaymentMode(transaction: ParsedTransaction): ParsedTransaction {
+  // Kept deliberately, not deleted: ParsedTransaction declares `paymentMode?: PaymentMode`,
+  // and the day a parser does set it, an explicitly parsed value must beat an inferred one.
+  // No parser populates it today, so the guard is unreachable through the public API and
+  // covering it would mean exporting this private helper purely for a test.
+  /* c8 ignore next -- defensive: no parser sets paymentMode yet, see comment above */
   if (transaction.paymentMode) return transaction;
 
   const text = [transaction.remark, transaction.description, transaction.reference]
@@ -590,6 +595,10 @@ export async function parsePDF(
   try {
     let PDFParseCtor: any;
     try {
+      // NOT dead code: under Vitest's ESM module mock the namespace is a Proxy that
+      // THROWS on access to an export the mock factory did not define, so probing for
+      // the v2-only `PDFParse` export must stay guarded. (Against the real package a
+      // missing property would merely be undefined.)
       PDFParseCtor = (pdfParseModule as any).PDFParse;
     } catch {
       PDFParseCtor = undefined;

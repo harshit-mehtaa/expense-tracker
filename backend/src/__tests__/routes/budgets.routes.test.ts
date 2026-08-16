@@ -80,6 +80,86 @@ describe('GET /api/budgets', () => {
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
   });
+
+  // The sort comparator only runs when there are >= 2 rows — Array.prototype.sort
+  // never invokes it for a 0- or 1-element array. Each case below overrides the
+  // mock per-test rather than in beforeEach, so the tests above keep their fixture.
+
+  it('sorts by category name, case-insensitively', async () => {
+    budgetMock.findMany.mockResolvedValue([
+      { ...MOCK_BUDGET, id: 'b-z', category: { id: 'c-z', name: 'zoo' }, user: { name: 'Alice' } },
+      { ...MOCK_BUDGET, id: 'b-a', category: { id: 'c-a', name: 'Apples' }, user: { name: 'Alice' } },
+    ]);
+    const res = await request(app).get('/api/budgets');
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((b: any) => b.id)).toEqual(['b-a', 'b-z']);
+  });
+
+  it('falls back to "Unknown" when a budget has no category', async () => {
+    // 'Unknown' sorts after 'Apples', so the categoryless row lands last.
+    budgetMock.findMany.mockResolvedValue([
+      { ...MOCK_BUDGET, id: 'b-null', category: null, user: { name: 'Alice' } },
+      { ...MOCK_BUDGET, id: 'b-a', category: { id: 'c-a', name: 'Apples' }, user: { name: 'Alice' } },
+    ]);
+    const res = await request(app).get('/api/budgets');
+    expect(res.body.data.map((b: any) => b.id)).toEqual(['b-a', 'b-null']);
+  });
+
+  it('applies the "Unknown" fallback on either side of the comparison', async () => {
+    // The comparator receives (a, b); with the previous fixture the categoryless row
+    // only ever arrived as `b`. Listing it last swaps the operands so the fallback is
+    // exercised on the `a` side too — otherwise one arm stays permanently unvisited.
+    budgetMock.findMany.mockResolvedValue([
+      { ...MOCK_BUDGET, id: 'b-a', category: { id: 'c-a', name: 'Apples' }, user: { name: 'Alice' } },
+      { ...MOCK_BUDGET, id: 'b-null', category: null, user: { name: 'Alice' } },
+    ]);
+    const res = await request(app).get('/api/budgets');
+    expect(res.body.data.map((b: any) => b.id)).toEqual(['b-a', 'b-null']);
+  });
+
+  it('treats a category with a null name the same as a missing category', async () => {
+    budgetMock.findMany.mockResolvedValue([
+      { ...MOCK_BUDGET, id: 'b-noname', category: { id: 'c-x', name: null }, user: { name: 'Alice' } },
+      { ...MOCK_BUDGET, id: 'b-a', category: { id: 'c-a', name: 'Apples' }, user: { name: 'Alice' } },
+    ]);
+    const res = await request(app).get('/api/budgets');
+    expect(res.body.data.map((b: any) => b.id)).toEqual(['b-a', 'b-noname']);
+  });
+
+  it('tie-breaks on userName when the category name is identical', async () => {
+    budgetMock.findMany.mockResolvedValue([
+      { ...MOCK_BUDGET, id: 'b-bob', category: { id: 'c-1', name: 'Food' }, user: { name: 'Bob' } },
+      { ...MOCK_BUDGET, id: 'b-amy', category: { id: 'c-1', name: 'Food' }, user: { name: 'Amy' } },
+    ]);
+    const res = await request(app).get('/api/budgets');
+    expect(res.body.data.map((b: any) => b.id)).toEqual(['b-amy', 'b-bob']);
+    expect(res.body.data.map((b: any) => b.userName)).toEqual(['Amy', 'Bob']);
+  });
+
+  it('maps a missing user relation to an empty userName', async () => {
+    budgetMock.findMany.mockResolvedValue([
+      { ...MOCK_BUDGET, id: 'b-named', category: { id: 'c-1', name: 'Food' }, user: { name: 'Amy' } },
+      { ...MOCK_BUDGET, id: 'b-anon', category: { id: 'c-1', name: 'Food' }, user: null },
+    ]);
+    const res = await request(app).get('/api/budgets');
+    // '' sorts before 'Amy', so the user-less row comes first
+    expect(res.body.data.map((b: any) => b.id)).toEqual(['b-anon', 'b-named']);
+    expect(res.body.data[0].userName).toBe('');
+  });
+
+  it('ADMIN with a valid targetUserId scopes the query to that member', async () => {
+    const res = await request(makeAdminApp()).get('/api/budgets?targetUserId=clm1234567890abcdefghij');
+    expect(res.status).toBe(200);
+    expect(budgetMock.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'clm1234567890abcdefghij' } }),
+    );
+  });
+
+  it('ADMIN with no targetUserId queries family-wide (no userId filter)', async () => {
+    const res = await request(makeAdminApp()).get('/api/budgets');
+    expect(res.status).toBe(200);
+    expect(budgetMock.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
+  });
 });
 
 describe('GET /api/budgets/vs-actuals', () => {
@@ -116,6 +196,13 @@ describe('GET /api/budgets/vs-actuals', () => {
     expect(res.status).toBe(200);
     // The budget for cat-1 should show 3000 actual
     expect(res.body.data[0].actual).toBe(3000);
+  });
+
+  it('carries the member name through as userName when the user relation is present', async () => {
+    budgetMock.findMany.mockResolvedValue([{ ...MOCK_BUDGET, user: { name: 'Amy' } }]);
+    const res = await request(app).get('/api/budgets/vs-actuals?fy=2025-26');
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].userName).toBe('Amy');
   });
 
   it('treats null _sum.amount as 0 via ?? operator (line 70 branch)', async () => {

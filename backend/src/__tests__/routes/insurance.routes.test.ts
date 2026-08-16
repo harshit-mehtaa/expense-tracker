@@ -3,10 +3,14 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
+import express from 'express';
+
+const ADMIN_USER = { userId: 'u1', email: 'a@b.com', role: 'ADMIN' as const };
+const MEMBER_USER = { userId: 'u1', email: 'a@b.com', role: 'MEMBER' as const };
 
 vi.mock('../../middleware/auth', () => ({
   requireAuth: (req: any, _res: any, next: any) => {
-    req.user = { userId: 'u1', email: 'a@b.com', role: 'ADMIN' };
+    req.user = (req as any).__testUser ?? ADMIN_USER;
     next();
   },
 }));
@@ -18,13 +22,29 @@ vi.mock('../../services/insuranceService', () => ({
   createInsurancePolicy: vi.fn(),
   updateInsurancePolicy: vi.fn(),
   deleteInsurancePolicy: vi.fn(),
+  getInsurancePolicyForAudit: vi.fn(),
+}));
+
+vi.mock('../../services/auditService', () => ({
+  recordAuditLog: vi.fn(),
 }));
 
 import insuranceRouter from '../../routes/insurance';
 import * as svc from '../../services/insuranceService';
+import { recordAuditLog } from '../../services/auditService';
 import { makeApp } from '../helpers/makeApp';
+import { errorHandler } from '../../middleware/errorHandler';
 
 const app = makeApp(insuranceRouter, '/api/insurance');
+
+function makeMemberApp() {
+  const a = express();
+  a.use(express.json());
+  a.use((req: any, _res: any, next: any) => { req.__testUser = MEMBER_USER; next(); });
+  a.use('/api/insurance', insuranceRouter);
+  a.use(errorHandler);
+  return a;
+}
 
 const getMock = svc.getInsurancePolicies as ReturnType<typeof vi.fn>;
 const calendarMock = svc.getPremiumCalendar as ReturnType<typeof vi.fn>;
@@ -32,6 +52,8 @@ const summary80dMock = svc.get80DSummary as ReturnType<typeof vi.fn>;
 const createMock = svc.createInsurancePolicy as ReturnType<typeof vi.fn>;
 const updateMock = svc.updateInsurancePolicy as ReturnType<typeof vi.fn>;
 const deleteMock = svc.deleteInsurancePolicy as ReturnType<typeof vi.fn>;
+const getForAuditMock = svc.getInsurancePolicyForAudit as ReturnType<typeof vi.fn>;
+const auditMock = recordAuditLog as ReturnType<typeof vi.fn>;
 
 const MOCK_POLICY = {
   id: 'pol-1',
@@ -64,6 +86,7 @@ beforeEach(() => {
   createMock.mockResolvedValue({ ...MOCK_POLICY, id: 'pol-new' });
   updateMock.mockResolvedValue(MOCK_POLICY);
   deleteMock.mockResolvedValue(undefined);
+  getForAuditMock.mockResolvedValue(MOCK_POLICY);
 });
 
 // ─── GET /api/insurance ───────────────────────────────────────────────────────
@@ -145,6 +168,25 @@ describe('PUT /api/insurance/:id', () => {
     const res = await request(app).put('/api/insurance/nonexistent').send({ providerName: 'X' });
     expect(res.status).toBe(404);
   });
+
+  it('records the audit log with the pre-mutation snapshot as oldValue', async () => {
+    await request(app).put('/api/insurance/pol-1').send({ providerName: 'HDFC Life' });
+    expect(getForAuditMock).toHaveBeenCalledWith('u1', 'pol-1', 'ADMIN');
+    expect(auditMock).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'UPDATE', entityType: 'InsurancePolicy', entityId: MOCK_POLICY.id, oldValue: MOCK_POLICY }),
+    );
+  });
+
+  it('MEMBER editing their own policy — oldValue is populated', async () => {
+    await request(makeMemberApp()).put('/api/insurance/pol-1').send({ providerName: 'HDFC Life' });
+    expect(getForAuditMock).toHaveBeenCalledWith('u1', 'pol-1', 'MEMBER');
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ oldValue: MOCK_POLICY }));
+  });
+
+  it('fetches the audit snapshot before performing the update', async () => {
+    await request(app).put('/api/insurance/pol-1').send({ providerName: 'HDFC Life' });
+    expect(getForAuditMock.mock.invocationCallOrder[0]).toBeLessThan(updateMock.mock.invocationCallOrder[0]);
+  });
 });
 
 // ─── DELETE /api/insurance/:id ────────────────────────────────────────────────
@@ -154,5 +196,31 @@ describe('DELETE /api/insurance/:id', () => {
     const res = await request(app).delete('/api/insurance/pol-1');
     expect(res.status).toBe(204);
     expect(deleteMock).toHaveBeenCalledWith('u1', 'pol-1', 'ADMIN');
+  });
+
+  it('records the audit log with the pre-mutation snapshot as oldValue', async () => {
+    await request(app).delete('/api/insurance/pol-1');
+    expect(getForAuditMock).toHaveBeenCalledWith('u1', 'pol-1', 'ADMIN');
+    expect(auditMock).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'DELETE', entityType: 'InsurancePolicy', entityId: MOCK_POLICY.id, oldValue: MOCK_POLICY }),
+    );
+  });
+
+  it('falls back to the URL param for entityId when deleteInsurancePolicy resolves falsy', async () => {
+    deleteMock.mockResolvedValue(undefined);
+    await request(app).delete('/api/insurance/pol-1');
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'pol-1' }));
+  });
+
+  it('prefers the deleted row\'s own id for entityId when the service returns a record', async () => {
+    // id deliberately differs from the URL param so this proves the left arm ran.
+    deleteMock.mockResolvedValue({ id: 'deleted-policy-id' });
+    await request(app).delete('/api/insurance/pol-1');
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'deleted-policy-id' }));
+  });
+
+  it('fetches the audit snapshot before performing the delete', async () => {
+    await request(app).delete('/api/insurance/pol-1');
+    expect(getForAuditMock.mock.invocationCallOrder[0]).toBeLessThan(deleteMock.mock.invocationCallOrder[0]);
   });
 });

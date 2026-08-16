@@ -11,9 +11,10 @@ export async function listForeignAssets(userId: string, fy: string) {
   });
 }
 
-export async function getForeignAsset(userId: string, id: string) {
+/** Also serves as the audit-snapshot fetch for the tax route's PUT/DELETE handlers. */
+export async function getForeignAsset(requesterId: string, id: string, requesterRole = 'MEMBER') {
   return prisma.foreignAssetDisclosure.findFirst({
-    where: { id, userId, deletedAt: null },
+    where: { ...ownerScopedWhere(id, requesterId, requesterRole), deletedAt: null },
   });
 }
 

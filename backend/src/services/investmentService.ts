@@ -259,6 +259,10 @@ export async function deleteInvestment(requesterId: string, id: string, requeste
   return prisma.investment.delete({ where: { id } });
 }
 
+export async function getInvestmentForAudit(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  return prisma.investment.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
+}
+
 // ─── CRUD: FDs ────────────────────────────────────────────────────────────────
 
 export async function getFDs(userId: string | undefined, requesterId: string, requesterRole: string, status?: FDStatus) {
@@ -338,6 +342,10 @@ export async function deleteFD(requesterId: string, id: string, requesterRole = 
   return prisma.fixedDeposit.delete({ where: { id } });
 }
 
+export async function getFDForAudit(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  return prisma.fixedDeposit.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
+}
+
 // ─── CRUD: RDs ────────────────────────────────────────────────────────────────
 
 export async function getRDs(userId: string | undefined, requesterId: string, requesterRole: string, status?: RDStatus) {
@@ -403,6 +411,10 @@ export async function deleteRD(requesterId: string, id: string, requesterRole = 
   const rd = await prisma.recurringDeposit.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!rd) throw AppError.notFound('Recurring deposit');
   return prisma.recurringDeposit.delete({ where: { id } });
+}
+
+export async function getRDForAudit(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  return prisma.recurringDeposit.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
 }
 
 // ─── CRUD: SIPs ───────────────────────────────────────────────────────────────
@@ -503,6 +515,10 @@ export async function deleteSIP(requesterId: string, id: string, requesterRole =
   return prisma.sIP.delete({ where: { id } });
 }
 
+export async function getSIPForAudit(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  return prisma.sIP.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
+}
+
 export async function addSIPTransaction(
   requesterId: string,
   sipId: string,
@@ -557,6 +573,10 @@ export async function deleteGoldHolding(requesterId: string, id: string, request
   const g = await prisma.goldHolding.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
   if (!g) throw AppError.notFound('Gold holding');
   return prisma.goldHolding.delete({ where: { id } });
+}
+
+export async function getGoldHoldingForAudit(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  return prisma.goldHolding.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
 }
 
 // ─── CRUD: Real Estate ────────────────────────────────────────────────────────
@@ -755,6 +775,17 @@ export async function deleteRealEstate(requesterId: string, id: string, requeste
   return prisma.realEstate.delete({ where: { id } });
 }
 
+/**
+ * Audit-snapshot fetch. Scoped with the same predicate updateRealEstate/deleteRealEstate
+ * evaluate one line later, so a non-owner's snapshot is never read into memory. Behaviour
+ * at both call sites is unchanged: those mutations throw notFound for a non-owner before
+ * recordAuditLog runs, so the snapshot was always discarded anyway — this just removes the
+ * trap for the next caller, and keeps it consistent with every other *ForAudit getter.
+ */
+export async function getRealEstateForAudit(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  return prisma.realEstate.findFirst({ where: userRealEstateWriteWhere(id, requesterId, requesterRole) });
+}
+
 // ─── Exchange Rates ───────────────────────────────────────────────────────────
 
 export async function getExchangeRates() {
@@ -767,4 +798,9 @@ export async function upsertExchangeRate(fromCurrency: string, rate: number, upd
     create: { fromCurrency, toCurrency: 'INR', rate, updatedBy },
     update: { rate, updatedBy },
   });
+}
+
+/** Exchange rates are global, not per-user — no requesterId/role param needed. */
+export async function getExchangeRateForAudit(fromCurrency: string) {
+  return prisma.exchangeRate.findUnique({ where: { fromCurrency_toCurrency: { fromCurrency, toCurrency: 'INR' } } });
 }

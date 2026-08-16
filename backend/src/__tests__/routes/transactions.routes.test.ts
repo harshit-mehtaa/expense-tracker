@@ -36,6 +36,11 @@ vi.mock('../../services/transactionService', () => ({
   updateTransactionRefundLink: vi.fn(),
   removeTransactionRefundLink: vi.fn(),
   softDeleteTransaction: vi.fn(),
+  getTransferCounterpartCandidates: vi.fn(),
+}));
+
+vi.mock('../../services/auditService', () => ({
+  recordAuditLog: vi.fn(),
 }));
 
 // ── Mock prisma (for targetUserId lookup in GET /) ────────────────────────────
@@ -46,6 +51,7 @@ vi.mock('../../config/prisma', () => {
 
 import transactionsRouter from '../../routes/transactions';
 import * as txSvc from '../../services/transactionService';
+import { recordAuditLog } from '../../services/auditService';
 import { prisma } from '../../config/prisma';
 import { errorHandler } from '../../middleware/errorHandler';
 
@@ -64,6 +70,8 @@ const removePolicyLinkMock = txSvc.removeTransactionInsurancePolicyLink as Retur
 const updateRefundLinkMock = txSvc.updateTransactionRefundLink as ReturnType<typeof vi.fn>;
 const removeRefundLinkMock = txSvc.removeTransactionRefundLink as ReturnType<typeof vi.fn>;
 const softDeleteMock = txSvc.softDeleteTransaction as ReturnType<typeof vi.fn>;
+const counterpartCandidatesMock = txSvc.getTransferCounterpartCandidates as ReturnType<typeof vi.fn>;
+const auditMock = recordAuditLog as ReturnType<typeof vi.fn>;
 const userFindFirstMock = (prisma as any).user.findFirst as ReturnType<typeof vi.fn>;
 
 function makeApp() {
@@ -104,6 +112,7 @@ beforeEach(() => {
   updateRefundLinkMock.mockResolvedValue({ ...MOCK_TX, refundForTransactionId: 'clm1234567890abcdefghij' });
   removeRefundLinkMock.mockResolvedValue({ ...MOCK_TX, refundForTransactionId: null });
   softDeleteMock.mockResolvedValue(undefined);
+  counterpartCandidatesMock.mockResolvedValue([]);
   userFindFirstMock.mockResolvedValue({ id: 'user-2' });
 });
 
@@ -206,6 +215,9 @@ describe('GET /api/transactions', () => {
 
 // ─── GET /api/transactions/export ─────────────────────────────────────────────
 
+/** Valid CUID-format id for the admin-on-behalf-of export cases below. */
+const EXPORT_TARGET_ID = 'clm1234567890abcdefghij';
+
 describe('GET /api/transactions/export', () => {
   it('returns CSV content-type', async () => {
     getAllForExportMock.mockResolvedValue([MOCK_TX]);
@@ -230,6 +242,26 @@ describe('GET /api/transactions/export', () => {
     const call = getAllForExportMock.mock.calls[0];
     // args: (userId, role, filters) — filters.fy should be undefined
     expect(call[2]).toEqual(expect.objectContaining({ fy: undefined }));
+  });
+
+  it('a MEMBER exports only their own rows, ignoring any targetUserId', async () => {
+    getAllForExportMock.mockResolvedValue([]);
+    buildCsvMock.mockReturnValue('');
+    await request(makeMemberApp()).get(`/api/transactions/export?targetUserId=${EXPORT_TARGET_ID}`);
+    // MEMBER arm of the role ternary: effectiveUserId is forced to the requester's own id,
+    // never the resolved targetUserId — a member must not be able to export another member.
+    expect(getAllForExportMock.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ userId: MEMBER_USER.userId }),
+    );
+  });
+
+  it('an ADMIN with targetUserId exports that member\'s rows', async () => {
+    getAllForExportMock.mockResolvedValue([]);
+    buildCsvMock.mockReturnValue('');
+    await request(makeApp()).get(`/api/transactions/export?targetUserId=${EXPORT_TARGET_ID}`);
+    expect(getAllForExportMock.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ userId: EXPORT_TARGET_ID }),
+    );
   });
 });
 
@@ -471,5 +503,61 @@ describe('DELETE /api/transactions/:id', () => {
     softDeleteMock.mockRejectedValue(AppError.forbidden());
     const res = await request(makeApp()).delete('/api/transactions/tx-99');
     expect(res.status).toBe(403);
+  });
+
+  it('audits with the URL param for entityId when the soft delete resolves falsy', async () => {
+    softDeleteMock.mockResolvedValue(undefined);
+    await request(makeApp()).delete('/api/transactions/tx-1');
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'DELETE',
+      entityType: 'Transaction',
+      entityId: 'tx-1',
+    }));
+  });
+
+  it('prefers the deleted row\'s own id for entityId when the service returns a record', async () => {
+    // id deliberately differs from the URL param so this proves the left arm ran.
+    softDeleteMock.mockResolvedValue({ id: 'deleted-tx-id' });
+    await request(makeApp()).delete('/api/transactions/tx-1');
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'deleted-tx-id' }));
+  });
+});
+
+// ─── GET /api/transactions/:id/transfer-counterpart-candidates ────────────────
+
+describe('GET /api/transactions/:id/transfer-counterpart-candidates', () => {
+  const VALID_ACCOUNT_ID = 'clm1234567890abcdefghij';
+
+  it('returns 200 with the candidate list', async () => {
+    counterpartCandidatesMock.mockResolvedValue([{ id: 'tx-2', amount: 1000 }]);
+    const res = await request(makeApp())
+      .get(`/api/transactions/tx-1/transfer-counterpart-candidates?bankAccountId=${VALID_ACCOUNT_ID}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+  });
+
+  it('forwards the transaction id, requester identity and account filter to the service', async () => {
+    await request(makeApp())
+      .get(`/api/transactions/tx-1/transfer-counterpart-candidates?bankAccountId=${VALID_ACCOUNT_ID}`);
+    expect(counterpartCandidatesMock).toHaveBeenCalledWith('tx-1', 'admin-id', 'ADMIN', VALID_ACCOUNT_ID);
+  });
+
+  it('scopes to the requesting MEMBER rather than trusting the URL', async () => {
+    await request(makeMemberApp())
+      .get(`/api/transactions/tx-1/transfer-counterpart-candidates?bankAccountId=${VALID_ACCOUNT_ID}`);
+    expect(counterpartCandidatesMock).toHaveBeenCalledWith('tx-1', 'member-id', 'MEMBER', VALID_ACCOUNT_ID);
+  });
+
+  it('returns 422 when bankAccountId is not a CUID', async () => {
+    const res = await request(makeApp())
+      .get('/api/transactions/tx-1/transfer-counterpart-candidates?bankAccountId=not-a-cuid');
+    expect(res.status).toBe(422);
+    expect(counterpartCandidatesMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 when bankAccountId is missing entirely', async () => {
+    const res = await request(makeApp())
+      .get('/api/transactions/tx-1/transfer-counterpart-candidates');
+    expect(res.status).toBe(422);
   });
 });

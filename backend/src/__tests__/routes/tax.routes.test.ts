@@ -45,6 +45,7 @@ vi.mock('../../services/capitalGainsService', () => ({
   listCapitalGains: vi.fn(),
   calcCapitalGainsSummary: vi.fn(),
   createCapitalGain: vi.fn(),
+  getCapitalGain: vi.fn(),
   updateCapitalGain: vi.fn(),
   deleteCapitalGain: vi.fn(),
 }));
@@ -53,6 +54,7 @@ vi.mock('../../services/otherIncomeService', () => ({
   listOtherIncome: vi.fn(),
   calcOtherIncomeSummary: vi.fn(),
   createOtherIncome: vi.fn(),
+  getOtherIncome: vi.fn(),
   updateOtherIncome: vi.fn(),
   deleteOtherIncome: vi.fn(),
 }));
@@ -61,6 +63,7 @@ vi.mock('../../services/housePropertyService', () => ({
   listHouseProperties: vi.fn(),
   calcHousePropertyIncome: vi.fn(),
   createHouseProperty: vi.fn(),
+  getHouseProperty: vi.fn(),
   updateHouseProperty: vi.fn(),
   deleteHouseProperty: vi.fn(),
 }));
@@ -69,8 +72,13 @@ vi.mock('../../services/foreignAssetService', () => ({
   listForeignAssets: vi.fn(),
   getForeignAssetSummary: vi.fn(),
   createForeignAsset: vi.fn(),
+  getForeignAsset: vi.fn(),
   updateForeignAsset: vi.fn(),
   deleteForeignAsset: vi.fn(),
+}));
+
+vi.mock('../../services/auditService', () => ({
+  recordAuditLog: vi.fn(),
 }));
 
 // ─── Imports (after mocks) ─────────────────────────────────────────────────────
@@ -82,6 +90,7 @@ import * as cgSvc from '../../services/capitalGainsService';
 import * as osSvc from '../../services/otherIncomeService';
 import * as hpSvc from '../../services/housePropertyService';
 import * as faSvc from '../../services/foreignAssetService';
+import { recordAuditLog } from '../../services/auditService';
 import { makeApp } from '../helpers/makeApp';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -127,6 +136,7 @@ beforeEach(() => {
   m(cgSvc.listCapitalGains).mockResolvedValue([]);
   m(cgSvc.calcCapitalGainsSummary).mockResolvedValue({ stcg: 0, ltcg: 0, totalTaxableGain: 0 });
   m(cgSvc.createCapitalGain).mockResolvedValue({ id: 'cg-1' });
+  m(cgSvc.getCapitalGain).mockResolvedValue({ id: 'cg-1', assetName: 'old-name' });
   m(cgSvc.updateCapitalGain).mockResolvedValue({ id: 'cg-1' });
   m(cgSvc.deleteCapitalGain).mockResolvedValue({ id: 'cg-1' });
 
@@ -134,6 +144,7 @@ beforeEach(() => {
   m(osSvc.listOtherIncome).mockResolvedValue([]);
   m(osSvc.calcOtherIncomeSummary).mockResolvedValue({ total: 0 });
   m(osSvc.createOtherIncome).mockResolvedValue({ id: 'os-1' });
+  m(osSvc.getOtherIncome).mockResolvedValue({ id: 'os-1', amount: 1 });
   m(osSvc.updateOtherIncome).mockResolvedValue({ id: 'os-1' });
   m(osSvc.deleteOtherIncome).mockResolvedValue({ id: 'os-1' });
 
@@ -141,6 +152,7 @@ beforeEach(() => {
   m(hpSvc.listHouseProperties).mockResolvedValue([]);
   m(hpSvc.calcHousePropertyIncome).mockResolvedValue({ income: 0, deduction: 0 });
   m(hpSvc.createHouseProperty).mockResolvedValue({ id: 'hp-1' });
+  m(hpSvc.getHouseProperty).mockResolvedValue({ id: 'hp-1', usage: 'SELF_OCCUPIED' });
   m(hpSvc.updateHouseProperty).mockResolvedValue({ id: 'hp-1' });
   m(hpSvc.deleteHouseProperty).mockResolvedValue({ id: 'hp-1' });
 
@@ -148,6 +160,7 @@ beforeEach(() => {
   m(faSvc.listForeignAssets).mockResolvedValue([]);
   m(faSvc.getForeignAssetSummary).mockResolvedValue({ total: 0 });
   m(faSvc.createForeignAsset).mockResolvedValue({ id: 'fa-1' });
+  m(faSvc.getForeignAsset).mockResolvedValue({ id: 'fa-1', closingValueINR: 1 });
   m(faSvc.updateForeignAsset).mockResolvedValue({ id: 'fa-1' });
   m(faSvc.deleteForeignAsset).mockResolvedValue({ id: 'fa-1' });
 });
@@ -186,6 +199,41 @@ describe('POST /api/tax/profile', () => {
   it('returns 422 when grossSalary is not a number', async () => {
     const res = await request(makeAdminApp()).post('/api/tax/profile').send({ grossSalary: 'abc' });
     expect(res.status).toBe(422);
+  });
+
+  it('records CREATE when no prior profile exists', async () => {
+    m(taxSvc.getTaxProfile).mockResolvedValue(null);
+    m(taxSvc.upsertTaxProfile).mockResolvedValue({ id: 'tp-1', regime: 'NEW' });
+    await request(makeAdminApp()).post('/api/tax/profile').send({ regime: 'NEW' });
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      performedByUserId: 'admin-id',
+      action: 'CREATE',
+      entityType: 'TaxProfile',
+      entityId: 'tp-1',
+      oldValue: null,
+      newValue: { id: 'tp-1', regime: 'NEW' },
+    }));
+  });
+
+  it('records UPDATE when a prior profile exists', async () => {
+    const existing = { id: 'tp-1', regime: 'OLD' };
+    m(taxSvc.getTaxProfile).mockResolvedValue(existing);
+    m(taxSvc.upsertTaxProfile).mockResolvedValue({ id: 'tp-1', regime: 'NEW' });
+    await request(makeAdminApp()).post('/api/tax/profile').send({ regime: 'NEW' });
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'UPDATE',
+      oldValue: existing,
+    }));
+  });
+
+  it('with targetUserId — fetches the pre-mutation snapshot for the TARGET member, not the admin', async () => {
+    await request(makeAdminApp())
+      .post(`/api/tax/profile?targetUserId=${VALID_TARGET_ID}`)
+      .send({ regime: 'NEW' });
+    // ownerUserId (resolveWriteUserId) must be used for BOTH the audit-snapshot fetch
+    // and the upsert — using req.user!.userId here would silently break admin-on-behalf-of edits.
+    expect(m(taxSvc.getTaxProfile)).toHaveBeenCalledWith(VALID_TARGET_ID, expect.any(String));
+    expect(m(taxSvc.upsertTaxProfile)).toHaveBeenCalledWith(VALID_TARGET_ID, expect.any(String), expect.any(Object));
   });
 });
 
@@ -298,6 +346,23 @@ describe('PUT /api/tax/capital-gains/:id', () => {
     const res = await request(makeAdminApp()).put('/api/tax/capital-gains/nonexistent').send({ salePrice: 1 });
     expect(res.status).toBe(404);
   });
+
+  it('fetches the pre-mutation snapshot and records an UPDATE audit entry', async () => {
+    const oldEntry = { id: 'cg-1', salePrice: 55_000 };
+    const newEntry = { id: 'cg-1', salePrice: 60_000 };
+    m(cgSvc.getCapitalGain).mockResolvedValue(oldEntry);
+    m(cgSvc.updateCapitalGain).mockResolvedValue(newEntry);
+    await request(makeAdminApp()).put('/api/tax/capital-gains/cg-1').send({ salePrice: 60_000 });
+    expect(m(cgSvc.getCapitalGain)).toHaveBeenCalledWith('admin-id', 'cg-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      performedByUserId: 'admin-id',
+      action: 'UPDATE',
+      entityType: 'CapitalGainEntry',
+      entityId: 'cg-1',
+      oldValue: oldEntry,
+      newValue: newEntry,
+    }));
+  });
 });
 
 describe('DELETE /api/tax/capital-gains/:id', () => {
@@ -310,6 +375,19 @@ describe('DELETE /api/tax/capital-gains/:id', () => {
     m(cgSvc.deleteCapitalGain).mockResolvedValue(null);
     const res = await request(makeAdminApp()).delete('/api/tax/capital-gains/nonexistent');
     expect(res.status).toBe(404);
+  });
+
+  it('fetches the pre-mutation snapshot and records a DELETE audit entry', async () => {
+    const oldEntry = { id: 'cg-1', salePrice: 55_000 };
+    m(cgSvc.getCapitalGain).mockResolvedValue(oldEntry);
+    await request(makeAdminApp()).delete('/api/tax/capital-gains/cg-1');
+    expect(m(cgSvc.getCapitalGain)).toHaveBeenCalledWith('admin-id', 'cg-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'DELETE',
+      entityType: 'CapitalGainEntry',
+      entityId: 'cg-1',
+      oldValue: oldEntry,
+    }));
   });
 });
 
@@ -374,6 +452,23 @@ describe('PUT /api/tax/other-income/:id', () => {
     const res = await request(makeAdminApp()).put('/api/tax/other-income/nonexistent').send({ amount: 1 });
     expect(res.status).toBe(404);
   });
+
+  it('fetches the pre-mutation snapshot and records an UPDATE audit entry', async () => {
+    const oldEntry = { id: 'os-1', amount: 5_000 };
+    const newEntry = { id: 'os-1', amount: 6_000 };
+    m(osSvc.getOtherIncome).mockResolvedValue(oldEntry);
+    m(osSvc.updateOtherIncome).mockResolvedValue(newEntry);
+    await request(makeAdminApp()).put('/api/tax/other-income/os-1').send({ amount: 6_000 });
+    expect(m(osSvc.getOtherIncome)).toHaveBeenCalledWith('admin-id', 'os-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      performedByUserId: 'admin-id',
+      action: 'UPDATE',
+      entityType: 'OtherSourceIncome',
+      entityId: 'os-1',
+      oldValue: oldEntry,
+      newValue: newEntry,
+    }));
+  });
 });
 
 describe('DELETE /api/tax/other-income/:id', () => {
@@ -386,6 +481,19 @@ describe('DELETE /api/tax/other-income/:id', () => {
     m(osSvc.deleteOtherIncome).mockResolvedValue(null);
     const res = await request(makeAdminApp()).delete('/api/tax/other-income/nonexistent');
     expect(res.status).toBe(404);
+  });
+
+  it('fetches the pre-mutation snapshot and records a DELETE audit entry', async () => {
+    const oldEntry = { id: 'os-1', amount: 5_000 };
+    m(osSvc.getOtherIncome).mockResolvedValue(oldEntry);
+    await request(makeAdminApp()).delete('/api/tax/other-income/os-1');
+    expect(m(osSvc.getOtherIncome)).toHaveBeenCalledWith('admin-id', 'os-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'DELETE',
+      entityType: 'OtherSourceIncome',
+      entityId: 'os-1',
+      oldValue: oldEntry,
+    }));
   });
 });
 
@@ -444,6 +552,23 @@ describe('PUT /api/tax/house-property/:id', () => {
     const res = await request(makeAdminApp()).put('/api/tax/house-property/nonexistent').send({ usage: 'LET_OUT' });
     expect(res.status).toBe(404);
   });
+
+  it('fetches the pre-mutation snapshot and records an UPDATE audit entry', async () => {
+    const oldEntry = { id: 'hp-1', usage: 'SELF_OCCUPIED' };
+    const newEntry = { id: 'hp-1', usage: 'LET_OUT' };
+    m(hpSvc.getHouseProperty).mockResolvedValue(oldEntry);
+    m(hpSvc.updateHouseProperty).mockResolvedValue(newEntry);
+    await request(makeAdminApp()).put('/api/tax/house-property/hp-1').send({ usage: 'LET_OUT' });
+    expect(m(hpSvc.getHouseProperty)).toHaveBeenCalledWith('admin-id', 'hp-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      performedByUserId: 'admin-id',
+      action: 'UPDATE',
+      entityType: 'HousePropertyDetail',
+      entityId: 'hp-1',
+      oldValue: oldEntry,
+      newValue: newEntry,
+    }));
+  });
 });
 
 describe('DELETE /api/tax/house-property/:id', () => {
@@ -456,6 +581,19 @@ describe('DELETE /api/tax/house-property/:id', () => {
     m(hpSvc.deleteHouseProperty).mockResolvedValue(null);
     const res = await request(makeAdminApp()).delete('/api/tax/house-property/nonexistent');
     expect(res.status).toBe(404);
+  });
+
+  it('fetches the pre-mutation snapshot and records a DELETE audit entry', async () => {
+    const oldEntry = { id: 'hp-1', usage: 'SELF_OCCUPIED' };
+    m(hpSvc.getHouseProperty).mockResolvedValue(oldEntry);
+    await request(makeAdminApp()).delete('/api/tax/house-property/hp-1');
+    expect(m(hpSvc.getHouseProperty)).toHaveBeenCalledWith('admin-id', 'hp-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'DELETE',
+      entityType: 'HousePropertyDetail',
+      entityId: 'hp-1',
+      oldValue: oldEntry,
+    }));
   });
 });
 
@@ -514,12 +652,42 @@ describe('PUT /api/tax/foreign-assets/:id', () => {
     const res = await request(makeAdminApp()).put('/api/tax/foreign-assets/nonexistent').send({ country: 'UK' });
     expect(res.status).toBe(404);
   });
+
+  it('fetches the pre-mutation snapshot and records an UPDATE audit entry', async () => {
+    const oldEntry = { id: 'fa-1', closingValueINR: 650_000 };
+    const newEntry = { id: 'fa-1', closingValueINR: 700_000 };
+    m(faSvc.getForeignAsset).mockResolvedValue(oldEntry);
+    m(faSvc.updateForeignAsset).mockResolvedValue(newEntry);
+    await request(makeAdminApp()).put('/api/tax/foreign-assets/fa-1').send({ closingValueINR: 700_000 });
+    expect(m(faSvc.getForeignAsset)).toHaveBeenCalledWith('admin-id', 'fa-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      performedByUserId: 'admin-id',
+      action: 'UPDATE',
+      entityType: 'ForeignAssetDisclosure',
+      entityId: 'fa-1',
+      oldValue: oldEntry,
+      newValue: newEntry,
+    }));
+  });
 });
 
 describe('DELETE /api/tax/foreign-assets/:id', () => {
   it('returns 200 on successful delete', async () => {
     const res = await request(makeAdminApp()).delete('/api/tax/foreign-assets/fa-1');
     expect(res.status).toBe(200);
+  });
+
+  it('records a DELETE audit entry with the pre-mutation snapshot', async () => {
+    const oldEntry = { id: 'fa-1', closingValueINR: 650_000 };
+    m(faSvc.getForeignAsset).mockResolvedValue(oldEntry);
+    await request(makeAdminApp()).delete('/api/tax/foreign-assets/fa-1');
+    expect(m(faSvc.getForeignAsset)).toHaveBeenCalledWith('admin-id', 'fa-1', 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'DELETE',
+      entityType: 'ForeignAssetDisclosure',
+      entityId: 'fa-1',
+      oldValue: oldEntry,
+    }));
   });
 
   it('returns 404 when service returns null', async () => {

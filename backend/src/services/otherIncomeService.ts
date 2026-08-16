@@ -11,9 +11,10 @@ export async function listOtherIncome(userId: string, fy: string) {
   });
 }
 
-export async function getOtherIncome(userId: string, id: string) {
+/** Also serves as the audit-snapshot fetch for the tax route's PUT/DELETE handlers. */
+export async function getOtherIncome(requesterId: string, id: string, requesterRole = 'MEMBER') {
   return prisma.otherSourceIncome.findFirst({
-    where: { id, userId, deletedAt: null },
+    where: { ...ownerScopedWhere(id, requesterId, requesterRole), deletedAt: null },
   });
 }
 

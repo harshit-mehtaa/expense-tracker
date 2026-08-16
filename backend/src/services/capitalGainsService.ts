@@ -12,9 +12,16 @@ export async function listCapitalGains(userId: string, fy: string) {
   });
 }
 
-export async function getCapitalGain(userId: string, id: string) {
+/**
+ * Doubles as the audit-snapshot fetch for the tax routes' PUT/DELETE handlers.
+ * Passing requesterRole lets an ADMIN's fetch drop the userId filter, matching
+ * updateCapitalGain/deleteCapitalGain's own ownerScopedWhere lookup below. The
+ * MEMBER default is the fail-closed choice, not a compatibility shim — every
+ * production caller passes all three arguments.
+ */
+export async function getCapitalGain(requesterId: string, id: string, requesterRole = 'MEMBER') {
   return prisma.capitalGainEntry.findFirst({
-    where: { id, userId, deletedAt: null },
+    where: { ...ownerScopedWhere(id, requesterId, requesterRole), deletedAt: null },
   });
 }
 

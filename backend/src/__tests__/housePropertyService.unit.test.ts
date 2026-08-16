@@ -91,6 +91,11 @@ describe('getHouseProperty', () => {
     const result = await getHouseProperty('u1', 'hp-x');
     expect(result).toBeNull();
   });
+
+  it('drops the owner filter for ADMIN — can fetch another member\'s entry', async () => {
+    await getHouseProperty('admin-1', 'hp-1', 'ADMIN');
+    expect(hpMock.findFirst).toHaveBeenCalledWith({ where: { id: 'hp-1', deletedAt: null } });
+  });
 });
 
 describe('createHouseProperty', () => {

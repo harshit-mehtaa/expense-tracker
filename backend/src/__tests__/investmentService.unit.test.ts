@@ -21,6 +21,7 @@ vi.mock('../config/prisma', () => {
     },
     exchangeRate: {
       findMany: vi.fn().mockResolvedValue([]),
+      findUnique: vi.fn(),
       upsert: vi.fn(),
     },
     fixedDeposit: {
@@ -86,26 +87,33 @@ import {
   createFD,
   updateFD,
   deleteFD,
+  getFDForAudit,
   getRDs,
   createRD,
   updateRD,
   deleteRD,
+  getRDForAudit,
   getSIPs,
   getSIPsUpcoming,
   createSIP,
   updateSIP,
   deleteSIP,
   addSIPTransaction,
+  getSIPForAudit,
   getGoldHoldings,
   createGoldHolding,
   updateGoldHolding,
   deleteGoldHolding,
+  getGoldHoldingForAudit,
   getRealEstate,
   createRealEstate,
   updateRealEstate,
   deleteRealEstate,
+  getRealEstateForAudit,
   getExchangeRates,
   upsertExchangeRate,
+  getExchangeRateForAudit,
+  getInvestmentForAudit,
 } from '../services/investmentService';
 
 const invMock = prisma.investment as any;
@@ -595,6 +603,27 @@ describe('deleteInvestment', () => {
   });
 });
 
+describe('getInvestmentForAudit', () => {
+  it('scopes to the requester for MEMBER', async () => {
+    invMock.findFirst.mockResolvedValue(MOCK_INV);
+    const result = await getInvestmentForAudit('u1', 'inv-1', 'MEMBER');
+    expect(invMock.findFirst).toHaveBeenCalledWith({ where: { id: 'inv-1', userId: 'u1' } });
+    expect(result).toBe(MOCK_INV);
+  });
+
+  it('drops the owner filter for ADMIN — can fetch another member\'s investment', async () => {
+    invMock.findFirst.mockResolvedValue(MOCK_INV);
+    await getInvestmentForAudit('admin-1', 'inv-1', 'ADMIN');
+    expect(invMock.findFirst).toHaveBeenCalledWith({ where: { id: 'inv-1' } });
+  });
+
+  it('returns null when not found', async () => {
+    invMock.findFirst.mockResolvedValue(null);
+    const result = await getInvestmentForAudit('u1', 'inv-x');
+    expect(result).toBeNull();
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // FD CRUD
 // ─────────────────────────────────────────────────────────────────────────────
@@ -758,6 +787,27 @@ describe('deleteFD', () => {
   });
 });
 
+describe('getFDForAudit', () => {
+  it('scopes to the requester for MEMBER', async () => {
+    fdMock.findFirst.mockResolvedValue({ id: 'fd-1' });
+    const result = await getFDForAudit('u1', 'fd-1', 'MEMBER');
+    expect(fdMock.findFirst).toHaveBeenCalledWith({ where: { id: 'fd-1', userId: 'u1' } });
+    expect(result).toEqual({ id: 'fd-1' });
+  });
+
+  it('drops the owner filter for ADMIN — can fetch another member\'s FD', async () => {
+    fdMock.findFirst.mockResolvedValue({ id: 'fd-1' });
+    await getFDForAudit('admin-1', 'fd-1', 'ADMIN');
+    expect(fdMock.findFirst).toHaveBeenCalledWith({ where: { id: 'fd-1' } });
+  });
+
+  it('returns null when not found', async () => {
+    fdMock.findFirst.mockResolvedValue(null);
+    const result = await getFDForAudit('u1', 'fd-x');
+    expect(result).toBeNull();
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // RD CRUD
 // ─────────────────────────────────────────────────────────────────────────────
@@ -872,6 +922,27 @@ describe('updateRD / deleteRD', () => {
     rdMock.delete.mockResolvedValue({ id: 'rd-1' });
     await deleteRD('u1', 'rd-1');
     expect(rdMock.delete).toHaveBeenCalledWith({ where: { id: 'rd-1' } });
+  });
+});
+
+describe('getRDForAudit', () => {
+  it('scopes to the requester for MEMBER', async () => {
+    rdMock.findFirst.mockResolvedValue({ id: 'rd-1' });
+    const result = await getRDForAudit('u1', 'rd-1', 'MEMBER');
+    expect(rdMock.findFirst).toHaveBeenCalledWith({ where: { id: 'rd-1', userId: 'u1' } });
+    expect(result).toEqual({ id: 'rd-1' });
+  });
+
+  it('drops the owner filter for ADMIN — can fetch another member\'s RD', async () => {
+    rdMock.findFirst.mockResolvedValue({ id: 'rd-1' });
+    await getRDForAudit('admin-1', 'rd-1', 'ADMIN');
+    expect(rdMock.findFirst).toHaveBeenCalledWith({ where: { id: 'rd-1' } });
+  });
+
+  it('returns null when not found', async () => {
+    rdMock.findFirst.mockResolvedValue(null);
+    const result = await getRDForAudit('u1', 'rd-x');
+    expect(result).toBeNull();
   });
 });
 
@@ -1120,6 +1191,27 @@ describe('updateSIP / deleteSIP / addSIPTransaction', () => {
   });
 });
 
+describe('getSIPForAudit', () => {
+  it('scopes to the requester for MEMBER', async () => {
+    sipMock.findFirst.mockResolvedValue({ id: 'sip-1' });
+    const result = await getSIPForAudit('u1', 'sip-1', 'MEMBER');
+    expect(sipMock.findFirst).toHaveBeenCalledWith({ where: { id: 'sip-1', userId: 'u1' } });
+    expect(result).toEqual({ id: 'sip-1' });
+  });
+
+  it('drops the owner filter for ADMIN — can fetch another member\'s SIP', async () => {
+    sipMock.findFirst.mockResolvedValue({ id: 'sip-1' });
+    await getSIPForAudit('admin-1', 'sip-1', 'ADMIN');
+    expect(sipMock.findFirst).toHaveBeenCalledWith({ where: { id: 'sip-1' } });
+  });
+
+  it('returns null when not found', async () => {
+    sipMock.findFirst.mockResolvedValue(null);
+    const result = await getSIPForAudit('u1', 'sip-x');
+    expect(result).toBeNull();
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Gold Holdings CRUD
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1200,6 +1292,27 @@ describe('updateGoldHolding / deleteGoldHolding', () => {
     const result = await updateGoldHolding('u1', 'gold-1', { quantityGrams: 20 });
     expect(goldMock.update).toHaveBeenCalledWith({ where: { id: 'gold-1' }, data: { quantityGrams: 20 } });
     expect(result).toEqual(updated);
+  });
+});
+
+describe('getGoldHoldingForAudit', () => {
+  it('scopes to the requester for MEMBER', async () => {
+    goldMock.findFirst.mockResolvedValue({ id: 'gold-1' });
+    const result = await getGoldHoldingForAudit('u1', 'gold-1', 'MEMBER');
+    expect(goldMock.findFirst).toHaveBeenCalledWith({ where: { id: 'gold-1', userId: 'u1' } });
+    expect(result).toEqual({ id: 'gold-1' });
+  });
+
+  it('drops the owner filter for ADMIN — can fetch another member\'s gold holding', async () => {
+    goldMock.findFirst.mockResolvedValue({ id: 'gold-1' });
+    await getGoldHoldingForAudit('admin-1', 'gold-1', 'ADMIN');
+    expect(goldMock.findFirst).toHaveBeenCalledWith({ where: { id: 'gold-1' } });
+  });
+
+  it('returns null when not found', async () => {
+    goldMock.findFirst.mockResolvedValue(null);
+    const result = await getGoldHoldingForAudit('u1', 'gold-x');
+    expect(result).toBeNull();
   });
 });
 
@@ -1348,6 +1461,35 @@ describe('createRealEstate / updateRealEstate / deleteRealEstate', () => {
   });
 });
 
+describe('getRealEstateForAudit', () => {
+  it('scopes a MEMBER to properties they own or co-own', async () => {
+    reMock.findFirst.mockResolvedValue({ id: 're-1' });
+    const result = await getRealEstateForAudit('u1', 're-1');
+    expect(reMock.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 're-1',
+        OR: [
+          { userId: 'u1' },
+          { owners: { some: { userId: 'u1' } } },
+        ],
+      },
+    });
+    expect(result).toEqual({ id: 're-1' });
+  });
+
+  it('drops the owner filter for ADMIN — can snapshot another member\'s property', async () => {
+    reMock.findFirst.mockResolvedValue({ id: 're-1' });
+    await getRealEstateForAudit('admin-1', 're-1', 'ADMIN');
+    expect(reMock.findFirst).toHaveBeenCalledWith({ where: { id: 're-1' } });
+  });
+
+  it('returns null when a MEMBER asks for a property they do not own', async () => {
+    reMock.findFirst.mockResolvedValue(null);
+    const result = await getRealEstateForAudit('u1', 're-x');
+    expect(result).toBeNull();
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Exchange Rates
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1371,5 +1513,379 @@ describe('upsertExchangeRate', () => {
       create: { fromCurrency: 'USD', toCurrency: 'INR', rate: 83, updatedBy: 'admin-1' },
       update: { rate: 83, updatedBy: 'admin-1' },
     });
+  });
+});
+
+describe('getExchangeRateForAudit', () => {
+  it('queries by the fromCurrency/toCurrency composite key — global, no requesterId/role', async () => {
+    fxMock.findUnique.mockResolvedValue({ fromCurrency: 'USD', rate: 83 });
+    const result = await getExchangeRateForAudit('USD');
+    expect(fxMock.findUnique).toHaveBeenCalledWith({
+      where: { fromCurrency_toCurrency: { fromCurrency: 'USD', toCurrency: 'INR' } },
+    });
+    expect(result).toEqual({ fromCurrency: 'USD', rate: 83 });
+  });
+
+  it('returns null when no rate exists yet', async () => {
+    fxMock.findUnique.mockResolvedValue(null);
+    const result = await getExchangeRateForAudit('EUR');
+    expect(result).toBeNull();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scoping branches: ADMIN family-wide vs member-scoped `where` construction
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('getPortfolioSummary — scoping', () => {
+  it('ADMIN with no target user queries every active family member', async () => {
+    await getPortfolioSummary(undefined, 'admin-1', 'ADMIN');
+    expect(invMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { user: { isActive: true, deletedAt: null } },
+    }));
+  });
+
+  it('ADMIN with an explicit target user scopes to that member', async () => {
+    await getPortfolioSummary('u2', 'admin-1', 'ADMIN');
+    expect(invMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: 'u2' },
+    }));
+  });
+
+  it('MEMBER with no userId falls back to the requester id', async () => {
+    await getPortfolioSummary(undefined, 'u1', 'MEMBER');
+    expect(invMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: 'u1' },
+    }));
+  });
+
+  it('defaults requesterId to the passed userId when omitted', async () => {
+    await getPortfolioSummary('u1');
+    expect(invMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: 'u1' },
+    }));
+  });
+
+  it('defaults requesterId to an empty string when both args are omitted', async () => {
+    await getPortfolioSummary(undefined);
+    expect(invMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: '' },
+    }));
+  });
+});
+
+describe('get80CSummary — scoping', () => {
+  it('ADMIN with no target user aggregates across active family members', async () => {
+    await get80CSummary(undefined, '2025-26', 'admin-1', 'ADMIN');
+    const where = invMock.findMany.mock.calls[0][0].where;
+    expect(where).toMatchObject({ user: { isActive: true, deletedAt: null } });
+  });
+
+  it('ADMIN with an explicit target user scopes to that member', async () => {
+    await get80CSummary('u2', '2025-26', 'admin-1', 'ADMIN');
+    expect(invMock.findMany.mock.calls[0][0].where).toMatchObject({ userId: 'u2' });
+  });
+
+  it('MEMBER with no userId falls back to the requester id', async () => {
+    await get80CSummary(undefined, '2025-26', 'u1', 'MEMBER');
+    expect(invMock.findMany.mock.calls[0][0].where).toMatchObject({ userId: 'u1' });
+  });
+
+  it('falls back to userId when no requesterId is supplied', async () => {
+    await get80CSummary('u1', '2025-26');
+    expect(invMock.findMany.mock.calls[0][0].where).toMatchObject({ userId: 'u1' });
+  });
+});
+
+describe('getInvestments — scoping and joined user name', () => {
+  it('ADMIN with no target user lists every active family member\'s investments', async () => {
+    await getInvestments(undefined as any, undefined, 1, 25, 'ADMIN');
+    expect(invMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ user: { isActive: true, deletedAt: null } }),
+    }));
+  });
+
+  it('flattens the joined user name onto each row', async () => {
+    invMock.findMany.mockResolvedValue([{ ...MOCK_INV, user: { name: 'Harshit' } }]);
+    invMock.count.mockResolvedValue(1);
+    const { items } = await getInvestments('u1', undefined, 1, 25);
+    expect(items[0].userName).toBe('Harshit');
+  });
+
+  it('falls back to an empty userName when the row has no joined user', async () => {
+    invMock.findMany.mockResolvedValue([{ ...MOCK_INV }]);
+    invMock.count.mockResolvedValue(1);
+    const { items } = await getInvestments('u1', undefined, 1, 25);
+    expect(items[0].userName).toBe('');
+  });
+});
+
+describe('getSIPs — scoping', () => {
+  it('ADMIN with no target user lists every active family member\'s SIPs', async () => {
+    await getSIPs(undefined, undefined, 'ADMIN');
+    expect(sipMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ user: { isActive: true, deletedAt: null } }),
+    }));
+  });
+
+  it('ADMIN with an explicit target user scopes to that member', async () => {
+    await getSIPs('u2', undefined, 'ADMIN');
+    expect(sipMock.findMany.mock.calls[0][0].where).toMatchObject({ userId: 'u2' });
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Maturity recalculation: each trigger field on its own, plus stored-value fallback
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('updateFD — maturity recalculation falls back to stored values', () => {
+  it('uses the stored principal when only the rate changes', async () => {
+    fdMock.findFirst.mockResolvedValue({
+      id: 'fd-1', userId: 'u1', principalAmount: 100_000, interestRate: 7,
+      tenureMonths: 12, interestPayoutType: 'CUMULATIVE',
+    });
+    fdMock.update.mockResolvedValue({});
+    await updateFD('u1', 'fd-1', { interestRate: 8 });
+    const { maturityAmount } = fdMock.update.mock.calls[0][0].data;
+    // 100000 * (1 + 0.08/4)^4 = 108243.216
+    expect(maturityAmount).toBeCloseTo(108_243.22, 2);
+  });
+
+  it('uses the stored payout type and tenure when only the principal changes', async () => {
+    fdMock.findFirst.mockResolvedValue({
+      id: 'fd-1', userId: 'u1', principalAmount: 100_000, interestRate: 8,
+      tenureMonths: 12, interestPayoutType: 'CUMULATIVE',
+    });
+    fdMock.update.mockResolvedValue({});
+    await updateFD('u1', 'fd-1', { principalAmount: 200_000 });
+    const { maturityAmount } = fdMock.update.mock.calls[0][0].data;
+    expect(maturityAmount).toBeCloseTo(216_486.43, 2);
+  });
+});
+
+describe('updateRD — maturity recalculation triggers', () => {
+  const STORED_RD = {
+    id: 'rd-1', userId: 'u1', monthlyInstallment: 5_000, interestRate: 7, tenureMonths: 12,
+  };
+
+  it('recalculates when only monthlyInstallment changes', async () => {
+    rdMock.findFirst.mockResolvedValue(STORED_RD);
+    rdMock.update.mockResolvedValue({});
+    await updateRD('u1', 'rd-1', { monthlyInstallment: 10_000 });
+    expect(rdMock.update.mock.calls[0][0].data.maturityAmount)
+      .toBeCloseTo(calcRDMaturity(10_000, 7, 12), 2);
+  });
+
+  it('recalculates when only interestRate changes', async () => {
+    rdMock.findFirst.mockResolvedValue(STORED_RD);
+    rdMock.update.mockResolvedValue({});
+    await updateRD('u1', 'rd-1', { interestRate: 9 });
+    expect(rdMock.update.mock.calls[0][0].data.maturityAmount)
+      .toBeCloseTo(calcRDMaturity(5_000, 9, 12), 2);
+  });
+
+  it('recalculates when only tenureMonths changes', async () => {
+    rdMock.findFirst.mockResolvedValue(STORED_RD);
+    rdMock.update.mockResolvedValue({});
+    await updateRD('u1', 'rd-1', { tenureMonths: 24 });
+    expect(rdMock.update.mock.calls[0][0].data.maturityAmount)
+      .toBeCloseTo(calcRDMaturity(5_000, 7, 24), 2);
+  });
+
+  it('does not recalculate when no maturity-affecting field changes', async () => {
+    rdMock.findFirst.mockResolvedValue(STORED_RD);
+    rdMock.update.mockResolvedValue({});
+    await updateRD('u1', 'rd-1', { notes: 'renamed' } as any);
+    expect(rdMock.update.mock.calls[0][0].data.maturityAmount).toBeUndefined();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SIP auto-created investment + investmentId re-link validation
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('createSIP — auto-created investment purchaseDate', () => {
+  it('reuses a Date startDate as the auto-created investment purchaseDate', async () => {
+    const startDate = new Date('2025-06-01');
+    invMock.create.mockResolvedValue({ id: 'inv-new' });
+    sipMock.create.mockResolvedValue({ id: 'sip-new' });
+    await createSIP('u1', { fundName: 'Axis Bluechip', startDate } as any);
+    expect(invMock.create.mock.calls[0][0].data.purchaseDate).toBe(startDate);
+  });
+
+  it('substitutes today when startDate is not a Date instance', async () => {
+    invMock.create.mockResolvedValue({ id: 'inv-new' });
+    sipMock.create.mockResolvedValue({ id: 'sip-new' });
+    await createSIP('u1', { fundName: 'Axis Bluechip', startDate: '2025-06-01' } as any);
+    expect(invMock.create.mock.calls[0][0].data.purchaseDate).toBeInstanceOf(Date);
+  });
+});
+
+describe('updateSIP — investmentId re-link validation', () => {
+  it('rejects re-linking to an investment the SIP owner does not hold', async () => {
+    sipMock.findFirst.mockResolvedValue({ id: 'sip-1', userId: 'u1', investmentId: 'inv-1' });
+    invMock.findFirst.mockResolvedValue(null); // target investment not owned by u1
+    await expect(updateSIP('u1', 'sip-1', { investmentId: 'inv-other' }))
+      .rejects.toThrow(/Investment not found/i);
+    expect(sipMock.update).not.toHaveBeenCalled();
+  });
+
+  it('scopes the investment ownership check to the SIP owner', async () => {
+    sipMock.findFirst.mockResolvedValue({ id: 'sip-1', userId: 'u1', investmentId: 'inv-1' });
+    invMock.findFirst.mockResolvedValue({ id: 'inv-2' });
+    sipMock.update.mockResolvedValue({});
+    await updateSIP('u1', 'sip-1', { investmentId: 'inv-2' });
+    expect(invMock.findFirst).toHaveBeenCalledWith({
+      where: { id: 'inv-2', userId: 'u1' },
+      select: { id: true },
+    });
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Real estate: owner normalization, active-owner assertion, decoration, ADMIN scope
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('createRealEstate — owner validation', () => {
+  const BASE = { propertyName: 'Flat 3B', purchasePrice: 100, currentValue: 120 };
+
+  it('rejects an owner row with a blank userId', async () => {
+    await expect(createRealEstate('u1', { ...BASE, owners: [{ userId: '', sharePercent: 50 }] } as any))
+      .rejects.toThrow(/Property owner is required/i);
+  });
+
+  it('rejects the same owner listed twice', async () => {
+    await expect(createRealEstate('u1', {
+      ...BASE,
+      owners: [{ userId: 'u1', sharePercent: 50 }, { userId: 'u1', sharePercent: 50 }],
+    } as any)).rejects.toThrow(/only be added once/i);
+  });
+
+  it.each([
+    ['zero', 0],
+    ['negative', -5],
+    ['above 100', 101],
+    ['non-numeric', Number.NaN],
+  ])('rejects a %s share percent', async (_label, sharePercent) => {
+    await expect(createRealEstate('u1', {
+      ...BASE,
+      owners: [{ userId: 'u1', sharePercent }],
+    } as any)).rejects.toThrow(/share must be greater than 0 and at most 100/i);
+  });
+
+  it('rejects owners who are not active family members', async () => {
+    userMock.findMany.mockResolvedValue([]); // none of the requested owners are active
+    await expect(createRealEstate('u1', {
+      ...BASE,
+      owners: [{ userId: 'ghost', sharePercent: 100 }],
+    } as any)).rejects.toThrow(/must be active family members/i);
+    expect(reMock.create).not.toHaveBeenCalled();
+  });
+
+  it('defaults to a single 100% owner when no owners are supplied', async () => {
+    userMock.findMany.mockResolvedValue([{ id: 'u1' }]);
+    reMock.create.mockResolvedValue({ id: 're-1', userId: 'u1', purchasePrice: 100, currentValue: 120, owners: [] });
+    await createRealEstate('u1', BASE as any);
+    const created = reMock.create.mock.calls[0][0].data;
+    expect(created.owners.create).toEqual([{ userId: 'u1', sharePercent: 100 }]);
+  });
+});
+
+describe('getRealEstate — property decoration', () => {
+  function propertyWith(owners: any[], extra: Record<string, unknown> = {}) {
+    return {
+      id: 're-1', userId: 'u1', purchasePrice: 1_000_000, currentValue: 1_500_000,
+      rentalIncomeMonthly: null, owners, ...extra,
+    };
+  }
+
+  it('maps joined owner user fields onto each owner row', async () => {
+    reMock.findMany.mockResolvedValue([propertyWith([
+      { id: 'o1', userId: 'u1', sharePercent: 60, user: { name: 'Harshit', email: 'h@x.com', colorTag: 'blue' } },
+    ])]);
+    const { properties } = await getRealEstate('u1', 'u1', 'MEMBER');
+    expect(properties[0].owners[0]).toMatchObject({
+      userId: 'u1', name: 'Harshit', email: 'h@x.com', colorTag: 'blue', sharePercent: 60,
+    });
+  });
+
+  it('falls back to empty strings and null when an owner has no joined user', async () => {
+    reMock.findMany.mockResolvedValue([propertyWith([
+      { id: 'o1', userId: 'u1', sharePercent: 100 },
+    ])]);
+    const { properties } = await getRealEstate('u1', 'u1', 'MEMBER');
+    expect(properties[0].owners[0]).toMatchObject({ name: '', email: '', colorTag: null });
+  });
+
+  it('treats a property with no owners array as having no owners', async () => {
+    reMock.findMany.mockResolvedValue([{
+      id: 're-1', userId: 'u1', purchasePrice: 1_000_000, currentValue: 1_500_000, rentalIncomeMonthly: null,
+    }]);
+    const { properties } = await getRealEstate('u1', 'u1', 'MEMBER');
+    expect(properties[0].owners).toEqual([]);
+  });
+
+  it('uses the scoped owner\'s share percent when they are on the owners list', async () => {
+    reMock.findMany.mockResolvedValue([propertyWith([
+      { id: 'o1', userId: 'u1', sharePercent: 40, user: { name: 'A' } },
+      { id: 'o2', userId: 'u2', sharePercent: 60, user: { name: 'B' } },
+    ])]);
+    const { properties } = await getRealEstate('u1', 'u1', 'MEMBER');
+    expect(properties[0].sharePercent).toBe(40);
+    expect(Number(properties[0].currentValueShare)).toBeCloseTo(600_000, 2);
+  });
+
+  it('gives the record owner 100% when they are not on the owners list', async () => {
+    reMock.findMany.mockResolvedValue([propertyWith([
+      { id: 'o2', userId: 'u2', sharePercent: 60, user: { name: 'B' } },
+    ], { userId: 'u1' })]);
+    const { properties } = await getRealEstate('u1', 'u1', 'MEMBER');
+    expect(properties[0].sharePercent).toBe(100);
+  });
+
+  it('gives a non-owner viewer a 0% share', async () => {
+    reMock.findMany.mockResolvedValue([propertyWith([
+      { id: 'o2', userId: 'u2', sharePercent: 60, user: { name: 'B' } },
+    ], { userId: 'u3' })]);
+    const { properties } = await getRealEstate('u1', 'u1', 'MEMBER');
+    expect(properties[0].sharePercent).toBe(0);
+    expect(Number(properties[0].currentValueShare)).toBe(0);
+  });
+
+  it('sorts owners by name', async () => {
+    reMock.findMany.mockResolvedValue([propertyWith([
+      { id: 'o1', userId: 'u1', sharePercent: 50, user: { name: 'Zara' } },
+      { id: 'o2', userId: 'u2', sharePercent: 50, user: { name: 'Amit' } },
+    ])]);
+    const { properties } = await getRealEstate('u1', 'u1', 'MEMBER');
+    expect(properties[0].owners.map((o: any) => o.name)).toEqual(['Amit', 'Zara']);
+  });
+});
+
+describe('real-estate write scoping', () => {
+  it('ADMIN updates match on id alone (no ownership filter)', async () => {
+    reMock.findFirst.mockResolvedValue({ id: 're-1', userId: 'u2' });
+    reMock.update.mockResolvedValue({ id: 're-1', userId: 'u2', purchasePrice: 1, currentValue: 2, owners: [] });
+    await updateRealEstate('admin-1', 're-1', { currentValue: 2 } as any, 'ADMIN');
+    expect(reMock.findFirst).toHaveBeenCalledWith({ where: { id: 're-1' } });
+  });
+
+  it('MEMBER updates require ownership or an owner-row match', async () => {
+    reMock.findFirst.mockResolvedValue({ id: 're-1', userId: 'u1' });
+    reMock.update.mockResolvedValue({ id: 're-1', userId: 'u1', purchasePrice: 1, currentValue: 2, owners: [] });
+    await updateRealEstate('u1', 're-1', { currentValue: 2 } as any, 'MEMBER');
+    expect(reMock.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 're-1',
+        OR: [{ userId: 'u1' }, { owners: { some: { userId: 'u1' } } }],
+      },
+    });
+  });
+
+  it('ADMIN deletes match on id alone', async () => {
+    reMock.findFirst.mockResolvedValue({ id: 're-1', userId: 'u2' });
+    reMock.delete.mockResolvedValue({ id: 're-1' });
+    await deleteRealEstate('admin-1', 're-1', 'ADMIN');
+    expect(reMock.findFirst).toHaveBeenCalledWith({ where: { id: 're-1' } });
   });
 });

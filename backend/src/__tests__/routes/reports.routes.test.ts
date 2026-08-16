@@ -125,6 +125,69 @@ describe('GET /api/reports/spending-by-category', () => {
     expect(res.status).toBe(404);
   });
 
+  it('merges the same category across members, then sorts the merged rows by name', async () => {
+    // Two members spending on cat-z produce two distinct map keys ("u1:cat-z", "u2:cat-z")
+    // that the reduce must fold into one row — and >= 2 resulting rows are what make
+    // Array.prototype.sort actually invoke the compareCategoryNames comparator.
+    txGroupByMock.mockResolvedValue([
+      { userId: 'u1', categoryId: 'cat-z', _sum: { amount: 100 } },
+      { userId: 'u2', categoryId: 'cat-z', _sum: { amount: 50 } },
+      { userId: 'u1', categoryId: 'cat-a', _sum: { amount: 30 } },
+    ]);
+    categoryFindManyMock.mockResolvedValue([
+      { id: 'cat-z', name: 'Zoo' },
+      { id: 'cat-a', name: 'Apples' },
+    ]);
+    const res = await request(makeAdminApp()).get('/api/reports/spending-by-category?fy=2025-26');
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((d: any) => d.categoryId)).toEqual(['cat-a', 'cat-z']);
+    expect(res.body.data.find((d: any) => d.categoryId === 'cat-z').total).toBe(150);
+  });
+
+  it('labels a null-category row "Uncategorized" and sorts it accordingly', async () => {
+    // A null categoryId yields the map key "u1:", whose split(':')[1] is '' → null.
+    txGroupByMock.mockResolvedValue([
+      { userId: 'u1', categoryId: null, _sum: { amount: 10 } },
+      { userId: 'u1', categoryId: 'cat-a', _sum: { amount: 30 } },
+    ]);
+    categoryFindManyMock.mockResolvedValue([{ id: 'cat-a', name: 'Apples' }]);
+    const res = await request(makeAdminApp()).get('/api/reports/spending-by-category?fy=2025-26');
+    expect(res.status).toBe(200);
+    // 'Apples' < 'Uncategorized', so the null row sorts last and carries a null category
+    expect(res.body.data.map((d: any) => d.categoryId)).toEqual(['cat-a', null]);
+    expect(res.body.data[1].category).toBeNull();
+  });
+
+  it('applies the "Uncategorized" fallback on the left side of the comparison', async () => {
+    // Rows are pre-sorted by total descending before the name sort, so giving the
+    // null-category row the LARGER total is what puts it in the comparator's `a`
+    // position. Ordering the mock differently is not enough — the total sort
+    // normalises that away, leaving this arm unvisited.
+    txGroupByMock.mockResolvedValue([
+      { userId: 'u1', categoryId: 'cat-a', _sum: { amount: 30 } },
+      { userId: 'u1', categoryId: null, _sum: { amount: 100 } },
+    ]);
+    categoryFindManyMock.mockResolvedValue([{ id: 'cat-a', name: 'Apples' }]);
+    const res = await request(makeAdminApp()).get('/api/reports/spending-by-category?fy=2025-26');
+    expect(res.status).toBe(200);
+    // 'Apples' still sorts before 'Uncategorized' despite the larger total
+    expect(res.body.data.map((d: any) => d.categoryId)).toEqual(['cat-a', null]);
+  });
+
+  it('falls back to "Uncategorized" when the joined category row has no name', async () => {
+    txGroupByMock.mockResolvedValue([
+      { userId: 'u1', categoryId: 'cat-a', _sum: { amount: 30 } },
+      { userId: 'u1', categoryId: 'cat-x', _sum: { amount: 10 } },
+    ]);
+    categoryFindManyMock.mockResolvedValue([
+      { id: 'cat-a', name: 'Apples' },
+      { id: 'cat-x', name: null },
+    ]);
+    const res = await request(makeAdminApp()).get('/api/reports/spending-by-category?fy=2025-26');
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((d: any) => d.categoryId)).toEqual(['cat-a', 'cat-x']);
+  });
+
   it('MEMBER cannot override with targetUserId — still gets own data', async () => {
     const res = await request(makeMemberApp()).get(
       '/api/reports/spending-by-category?fy=2025-26&targetUserId=clm1234567890abcdefghij',

@@ -1,97 +1,92 @@
 # Codebase Architecture
 
 <!-- Cap: 150 lines. Evict oldest sections when at capacity. -->
-<!-- Last scanned: 2026-08-10 -->
+<!-- Last scanned: 2026-08-16 -->
 
-Self-hosted family finance manager for Indian households. Tracks income, expenses,
-investments, taxes, insurance, loans, real estate, and foreign assets. Deployed via
-Docker Compose on a home server.
+Self-hosted family finance manager for Indian households. Express + Prisma + PostgreSQL
+backend, React + Vite frontend, TypeScript throughout, run via Docker Compose.
 
 ## Tech Stack
-- Language: TypeScript 5.3 (strict) — backend and frontend
-- Backend: Node.js + Express 4.18, Prisma ORM 5.10
-- Frontend: React 18.2 + Vite 5.1, React Router
-- Database: PostgreSQL 16 (alpine)
-- Test framework: Vitest 1.3 (both sides); Supertest for routes, React Testing Library + MSW for UI
-- Package manager: npm (no workspaces — backend/ and frontend/ install separately)
-- Auth: JWT access token (15m) + refresh token (7d) in HttpOnly cookie
+- Backend: TypeScript 5.3.3, Express 4.18.3, Prisma 5.10.0 (PostgreSQL), Zod 3.22.4
+- Auth: jsonwebtoken 9.0.2 + bcryptjs 2.4.3, cookie-parser (JWT via HttpOnly cookies)
+- Imports: multer + papaparse (CSV) + pdf-parse (PDF bank statements)
+- Frontend: React 18.2.0, Vite 5.1.0, react-router-dom 6.22.1
+- Data/forms: @tanstack/react-query 5.20.0, @tanstack/react-table 8.13.0,
+  react-hook-form 7.50.1 + zod resolvers
+- UI: Radix primitives, tailwindcss 3.4.1, lucide-react, recharts, cmdk
+- Package manager: npm (package-lock.json both sides; CI uses `npm ci`)
 
 ## Directory Structure
-- `backend/src/` — `index.ts` bootstrap, `routes/` (17), `services/` (18), `middleware/`,
-  `config/`, `utils/`, `types/`, `__tests__/` (27 files)
-- `backend/prisma/` — `schema.prisma`, `migrations/`, `seed.ts`
-- `frontend/src/` — `pages/` (16), `components/`, `api/`, `contexts/`, `hooks/`, `lib/`, `types/`
-- `shared/types/index.ts` — DTOs imported by both sides via `@shared/*` alias
-- `nginx/` — production reverse proxy
-- `.github/workflows/docker-publish.yml` — CI
+- `backend/src/index.ts` — Express bootstrap; exports `app` for supertest
+- `backend/src/routes/` — 17 thin route files (Zod validation, no Prisma calls)
+- `backend/src/services/` — business logic; all Prisma access lives here
+- `backend/src/middleware/` — auth.ts (requireAuth, role check), errorHandler.ts
+- `backend/src/utils/` — AppError, asyncHandler, response, financialYear, indianFormat
+- `backend/prisma/` — schema.prisma (1026 lines), 18 migrations, seed.ts
+- `frontend/src/pages/` — route-level views (accounts/, admin/, budgets/, insurance/,
+  investments/, loans/, tax/, transactions/, Dashboard.tsx, Login.tsx, Settings.tsx)
+- `frontend/src/components/` — layout/, shared/, ui/ (shadcn-style primitives)
+- `frontend/src/contexts/` — AuthContext, FYContext, ToastContext
+- `shared/types/index.ts` — DTOs shared frontend/backend via `@shared/*` alias
+- No `controllers/` layer — routes call services directly
 
 ## Build & Run
-Root `Makefile` drives Docker Compose: `start`, `stop`, `restart`, `build`, `migrate`,
-`seed`, `reset-db`, `backup-db`, `restore-db`, `logs`, `shell-backend`, `shell-db`,
-`start-prod`, `build-prod`.
-
-Per-package (run inside `backend/` or `frontend/`):
-- Backend build: `npm run build` (tsc → `dist/`) · dev: `npm run dev` (ts-node-dev)
-- Frontend build: `npm run build` (`tsc && vite build`) · dev: `npm run dev` (port 5173)
-- Test: `npm run test` (`vitest run`) — both sides
-- Coverage: `npm run test:coverage`
-- Lint: **BROKEN.** `frontend/package.json` defines `npm run lint` (`eslint src --max-warnings 0`)
-  and installs ESLint 8.57 + TS/react-hooks/react-refresh plugins, but **no ESLint config file
-  exists** (no `.eslintrc*`, no flat `eslint.config.js`, not in `frontend/`, root, or `$HOME`).
-  The script always fails with "couldn't find a configuration file". Backend has no lint at all.
-  Verified 2026-08-10 by execution, not inspection.
-- Format: none configured (no Prettier anywhere)
-- Type check: `npx tsc --noEmit` — works, exit 0. This is the only working static gate.
-
-## Key Modules
-Backend services carry the business logic; routes are thin and delegate.
-- `transactionService` (~46KB) — core income/expense/transfer engine
-- `dashboardService` (~34KB) — net worth, cashflow, asset allocation, alerts
-- `investmentService` (~32KB) — stocks (India + foreign), mutual funds, SIPs, XIRR
-- `importService` (~28KB) — CSV/PDF bank statement parsing, bank auto-detect, dedup by import hash
-- `taxService` — Indian income tax: 80C/80D, capital gains, ITR categories, advance tax
-- `capitalGainsService`, `housePropertyService`, `foreignAssetService`, `otherIncomeService` — tax inputs
-- `loanService` (amortization), `insuranceService`, `accountService`, `recurringService`
-- `categoryRuleService` (auto-categorization), `auditService`, `authService`, `adminService`
-
-Frontend pages mirror the domains: Dashboard, Transactions, Investments, Tax, Insurance,
-Loans, Accounts, Settings.
-
-## Data Model (prisma/schema.prisma)
-- `User` (role: ADMIN | MEMBER), `BankAccount` (savings, current, credit card, NRE, PPF, DEMAT)
-- `Transaction` — income/expense/transfer; links to loan, SIP, insurance policy, refund; `importHash` for dedup
-- `Investment`, `FixedDeposit`, `RecurringDeposit`, `GoldHolding`, `RealEstate`, `ForeignAssetDisclosure`
-- `InsurancePolicy` (11 types), `Loan`, `TaxEntry`, `Budget`, `RecurringRule`, `CategoryRule`
-- `Category` — family-shared, hierarchical (INCOME/EXPENSE/ASSET/LIABILITY)
-- `BankStatementImport`, `AuditLog`, `NetWorthSnapshot`
-- Money: `Decimal(15,2)` INR. Rates/NAV: `Decimal(15,4)`. Soft delete via `deletedAt`.
-
-## Dependencies
-- `@prisma/client` — DB access (all queries go through it; no raw SQL layer)
-- `zod` — request validation (backend) and form schemas (frontend)
-- `@tanstack/react-query` — server state · `@tanstack/react-table` — data tables
-- `react-hook-form` — forms · `radix-ui` + `tailwindcss` — UI · `recharts` — charts
-- `axios` — API client with refresh-on-401 interceptor (`frontend/src/lib/api.ts`)
-- `multer` + `papaparse` + `pdf-parse` — statement upload/parsing
-- `pino` (structured logs), `morgan` (HTTP logs), `helmet`, `express-rate-limit` (500/15min; tighter on auth)
+- Backend dev: `npm run dev` (ts-node-dev) · build: `npm run build` (tsc) · start: `npm start`
+- Frontend dev: `npm run dev` (vite, :5173) · build: `tsc && vite build`
+- Prisma: `npm run prisma:generate|migrate|deploy|seed|studio`
+- `make start` — full stack via docker compose, http://localhost:8080
+- `make generate` — regenerate Prisma client after a schema edit while running
+- Full command list: root `Makefile` (start/stop/restart/build/reset-db/seed/migrate/
+  backup-db/restore-db/logs/shell-backend/shell-db/start-prod/build-prod)
 
 ## Test Setup
-- Framework: Vitest 1.3, `globals: true`
-- Backend: `environment: node`, setup `src/__tests__/setup.ts` (sets NODE_ENV, DATABASE_URL, secrets); Prisma is mocked
-- Frontend: `environment: jsdom`, MSW 2.13 for API mocking
-- Location: `backend/src/__tests__/` (unit `*.test.ts` + `routes/*.routes.test.ts`), `frontend/src/__tests__/`
-- Command: `npm run test` in the respective package
-- **Backend coverage threshold is 100%** (statements/branches/functions/lines) — enforced in
-  `backend/vitest.config.ts`. Excluded: `src/index.ts`, `src/config/prisma.ts`, `prisma/`, `__tests__/`.
-  Frontend collects coverage but enforces no threshold.
+- Backend: Vitest, `environment: node`, tests in `backend/src/__tests__/` (unit +
+  `routes/*.routes.test.ts` via supertest against `makeApp.ts`, Prisma mocked).
+  **Verified live: 1720 tests / 48 files passing.**
+  **Coverage is 100% statements/branches/functions/lines, and CI enforces it** — the
+  backend test step runs `npm run test:coverage`, so any uncovered line fails the build.
+  New backend code must ship with tests; there is no slack in the threshold.
+- Frontend: Vitest, `environment: jsdom`, RTL + MSW (`mswServer.ts`). Coverage
+  thresholds in `vite.config.ts` are a near-zero floor (statements 3%, branches 50%,
+  functions 28%, lines 3%) — not a real gate, don't treat frontend coverage % as
+  meaningful.
 
-## CI/CD
-`.github/workflows/docker-publish.yml` on push to `main` or manual dispatch:
-mirrors base images to GHCR → builds backend + frontend multi-platform (amd64/arm64) →
-pushes to `ghcr.io/harshit-mehtaa/expense-tracker-{backend,frontend}` → sets packages public.
-**No test or lint job in CI** — quality gates are local only.
+## Linting
+- Frontend: `frontend/.eslintrc.cjs` — recommended + typescript-eslint + react-hooks.
+  **Verified live: `npm run lint` runs clean.** `no-explicit-any` deliberately off
+  (180 pre-existing sites). `react-hooks/rules-of-hooks` kept as `error` — it caught a
+  real conditional-hook bug in `Transactions.tsx` that `tsc` and a green test suite
+  both missed (component wasn't rendered by either check).
+- Backend: **no ESLint config or lint script at all.** Quality enforced only via
+  `tsc --noEmit` and tests.
+- No Prettier anywhere in the repo.
+
+## CI/CD (.github/workflows/docker-publish.yml)
+Triggers on push/PR to `main`. `quality` job (backend tsc + test:coverage @100%,
+frontend lint+tsc+test)
+gates every other job. On PRs, only `quality` runs. On push to `main`: additionally
+mirrors base images to GHCR, builds+pushes backend/frontend multi-arch images, then
+flips GHCR package visibility to public.
+
+## Coding Patterns
+- **Error handling**: `AppError` (`backend/src/utils/AppError.ts`) with static factories
+  (badRequest/unauthorized/forbidden/notFound/conflict/validationError/internal);
+  `isOperational = statusCode < 500`. Central `errorHandler` middleware: ZodError → 422
+  per-field, AppError → its own status, else generic 500 (stack hidden in prod). Async
+  routes wrapped in `asyncHandler()`.
+- **API envelope**: `{ success, data, message?, pagination? }` via `utils/response.ts`
+  helpers (sendSuccess, sendPaginated, sendCreated, sendNoContent).
+- **Validation**: Zod schemas inline per route file, reusable preprocess helpers for
+  empty-string coercion.
+- **Auth**: JWT + HttpOnly cookies, `requireAuth` middleware sets `req.user`, ADMIN role
+  check where needed. Routes mount `router.use(requireAuth)`.
+- **Naming**: route/service files share resource names (accounts.ts ↔ accountService.ts).
+  Route-level tests in `__tests__/routes/*.routes.test.ts`, separate from unit tests.
 
 ## Domain Rules
-- Indian financial year: Apr 1 – Mar 31 (encoded in tax/report logic)
-- Indian number formatting (lakhs/crores: ₹1,23,456)
-- Role-based scoping: ADMIN sees all family data, MEMBER sees only their own
+- Money is always `Decimal`, never float — `Decimal(15,2)` INR, `Decimal(15,4)`
+  rates/NAV/unit prices
+- Financial records are soft-deleted (`deletedAt`), never hard-deleted
+- Indian financial year (Apr 1 – Mar 31) throughout tax/reporting
+  (`utils/financialYear.ts`)
+- Bank statement imports are idempotent via `importHash`

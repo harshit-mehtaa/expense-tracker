@@ -1006,3 +1006,225 @@ describe('parsePDF — deduplication hash stability', () => {
     expect(h1).not.toBe(h2);
   });
 });
+
+// ─── parseBankDate format matrix (module-private, driven through parseICICI) ───
+
+describe('parseCSV — ICICI date-format matrix', () => {
+  /** Build a 1-row ICICI CSV whose transaction date is `dateStr`. */
+  function iciciWithDate(dateStr: string) {
+    return parseCSV(Buffer.from([
+      'Transaction Date,Value Date,Description,Ref,Debit,Credit,Balance',
+      `${dateStr},${dateStr},TEST ROW,REF001,,1000.00,5000.00`,
+    ].join('\n')), 'ICICI');
+  }
+
+  it('parses ISO YYYY-MM-DD', () => {
+    const r = iciciWithDate('2025-04-01');
+    expect(r.errors).toHaveLength(0);
+    expect(r.transactions[0].date.toISOString()).toBe('2025-04-01T00:00:00.000Z');
+  });
+
+  it('zero-pads a single-digit ISO month and day', () => {
+    const r = iciciWithDate('2025-4-1');
+    expect(r.errors).toHaveLength(0);
+    expect(r.transactions[0].date.toISOString()).toBe('2025-04-01T00:00:00.000Z');
+  });
+
+  it('rejects an ISO-shaped but impossible date', () => {
+    const r = iciciWithDate('2025-13-45');
+    expect(r.errors[0].message).toBe('Invalid date');
+    expect(r.transactions).toHaveLength(0);
+  });
+
+  it('parses DD/MM/YYYY as day-first (not US month-first)', () => {
+    const r = iciciWithDate('02/04/2026');
+    expect(r.transactions[0].date.toISOString()).toBe('2026-04-02T00:00:00.000Z');
+  });
+
+  it('expands a 2-digit year to 20YY', () => {
+    const r = iciciWithDate('02/04/26');
+    expect(r.errors).toHaveLength(0);
+    expect(r.transactions[0].date.toISOString()).toBe('2026-04-02T00:00:00.000Z');
+  });
+
+  it('rejects a DD/MM/YYYY-shaped but impossible date', () => {
+    const r = iciciWithDate('45/45/2026');
+    expect(r.errors[0].message).toBe('Invalid date');
+  });
+
+  it('parses DD-MMM-YYYY (e.g. 01-Apr-2025)', () => {
+    const r = iciciWithDate('01-Apr-2025');
+    expect(r.errors).toHaveLength(0);
+    const d = r.transactions[0].date;
+    // Constructed via `new Date("1 Apr 2025")` → local midnight, so compare parts.
+    expect([d.getFullYear(), d.getMonth(), d.getDate()]).toEqual([2025, 3, 1]);
+  });
+
+  it('parses DD MMM YYYY with spaces instead of dashes', () => {
+    const r = iciciWithDate('15 Aug 2025');
+    expect(r.errors).toHaveLength(0);
+    const d = r.transactions[0].date;
+    expect([d.getFullYear(), d.getMonth(), d.getDate()]).toEqual([2025, 7, 15]);
+  });
+
+  it('rejects a DD-MMM-YYYY-shaped date with a bogus month name', () => {
+    const r = iciciWithDate('01-Zzz-2025');
+    expect(r.errors[0].message).toBe('Invalid date');
+  });
+
+  it('falls back to Date parsing for other recognizable formats', () => {
+    const r = iciciWithDate('April 1 2025');
+    expect(r.errors).toHaveLength(0);
+    const d = r.transactions[0].date;
+    expect([d.getFullYear(), d.getMonth(), d.getDate()]).toEqual([2025, 3, 1]);
+  });
+});
+
+// ─── parseAmount + payment-mode inference edge cases ──────────────────────────
+
+describe('parseCSV — ICICI amount and payment-mode edge cases', () => {
+  it('treats a non-numeric amount as 0 (row contributes no transaction)', () => {
+    const r = parseCSV(Buffer.from([
+      'Transaction Date,Value Date,Description,Ref,Debit,Credit,Balance',
+      '2025-04-01,2025-04-01,GARBAGE AMOUNT,REF001,abc,,5000.00',
+    ].join('\n')), 'ICICI');
+    expect(r.errors).toHaveLength(0);
+    expect(r.transactions).toHaveLength(0);
+  });
+
+  it('strips thousands separators from amounts', () => {
+    const r = parseCSV(Buffer.from([
+      'Transaction Date,Value Date,Description,Ref,Debit,Credit,Balance',
+      '2025-04-01,2025-04-01,BIG CREDIT,REF001,,"1,23,456.78",5000.00',
+    ].join('\n')), 'ICICI');
+    expect(r.transactions[0].amount).toBe(123456.78);
+  });
+
+  it('leaves paymentMode unset when there is no text to infer from', () => {
+    const r = parseCSV(Buffer.from([
+      'Transaction Date,Value Date,Description,Ref,Debit,Credit,Balance',
+      '2025-04-01,2025-04-01,,,,1000.00,5000.00',
+    ].join('\n')), 'ICICI');
+    expect(r.transactions).toHaveLength(1);
+    expect(r.transactions[0].paymentMode).toBeUndefined();
+  });
+
+  it('infers a payment mode from the description text', () => {
+    const r = parseCSV(Buffer.from([
+      'Transaction Date,Value Date,Description,Ref,Debit,Credit,Balance',
+      '2025-04-01,2025-04-01,UPI/PAYTM/GROCERY,REF001,250.00,,5000.00',
+    ].join('\n')), 'ICICI');
+    expect(r.transactions[0].paymentMode).toBeDefined();
+  });
+
+  it('leaves paymentMode unset when the text matches no rule', () => {
+    const r = parseCSV(Buffer.from([
+      'Transaction Date,Value Date,Description,Ref,Debit,Credit,Balance',
+      '2025-04-01,2025-04-01,ZZZZZZ NOTHING MATCHES,REF001,250.00,,5000.00',
+    ].join('\n')), 'ICICI');
+    expect(r.transactions[0].paymentMode).toBeUndefined();
+  });
+});
+
+// ─── ICICI header-detection branches ──────────────────────────────────────────
+
+describe('parseCSV — ICICI header detection', () => {
+  it('falls back to the value-date column when no transaction-date column exists', () => {
+    const r = parseCSV(Buffer.from([
+      'Value Date,Description,Debit,Credit',
+      '2025-04-01,SALARY,,1000.00',
+    ].join('\n')), 'ICICI');
+    expect(r.errors).toHaveLength(0);
+    expect(r.transactions[0].date.toISOString()).toBe('2025-04-01T00:00:00.000Z');
+  });
+
+  it('errors when the header row is missing entirely', () => {
+    const r = parseCSV(Buffer.from([
+      'Some Bank Statement',
+      '2025-04-01,SALARY,,1000.00',
+    ].join('\n')), 'ICICI');
+    expect(r.errors[0].message).toMatch(/Missing required ICICI CSV headers/);
+    expect(r.transactions).toHaveLength(0);
+  });
+
+  it('errors when a date column exists but no description column does', () => {
+    const r = parseCSV(Buffer.from([
+      'Transaction Date,Debit,Credit',
+      '2025-04-01,,1000.00',
+    ].join('\n')), 'ICICI');
+    expect(r.errors[0].message).toMatch(/Missing required ICICI CSV headers/);
+  });
+
+  it('errors when neither a debit nor a credit column exists', () => {
+    const r = parseCSV(Buffer.from([
+      'Transaction Date,Description,Balance',
+      '2025-04-01,SALARY,1000.00',
+    ].join('\n')), 'ICICI');
+    expect(r.errors[0].message).toMatch(/Missing required ICICI CSV headers/);
+  });
+
+  it('parses a credit-only statement (no debit column present)', () => {
+    const r = parseCSV(Buffer.from([
+      'Transaction Date,Description,Credit',
+      '2025-04-01,SALARY,1000.00',
+    ].join('\n')), 'ICICI');
+    expect(r.errors).toHaveLength(0);
+    expect(r.transactions[0]).toMatchObject({ amount: 1000, type: 'INCOME' });
+  });
+
+  it('parses a debit-only statement (no credit column present)', () => {
+    const r = parseCSV(Buffer.from([
+      'Transaction Date,Description,Debit',
+      '2025-04-01,RENT,15000.00',
+    ].join('\n')), 'ICICI');
+    expect(r.errors).toHaveLength(0);
+    expect(r.transactions[0]).toMatchObject({ amount: 15000, type: 'EXPENSE' });
+  });
+
+  it('omits reference when no reference column is present', () => {
+    const r = parseCSV(Buffer.from([
+      'Transaction Date,Description,Credit',
+      '2025-04-01,SALARY,1000.00',
+    ].join('\n')), 'ICICI');
+    expect(r.transactions[0].reference).toBeUndefined();
+  });
+
+  it('skips rows whose first cell is blank', () => {
+    const r = parseCSV(Buffer.from([
+      'Transaction Date,Description,Debit,Credit',
+      '2025-04-01,SALARY,,1000.00',
+      ',,,',
+    ].join('\n')), 'ICICI');
+    expect(r.transactions).toHaveLength(1);
+  });
+});
+
+describe('parseCSV — ICICI blank date cell', () => {
+  it('reports an empty transaction-date cell as an invalid date rather than crashing', () => {
+    // Leading serial column keeps row[0] non-blank, so the row is NOT skipped and the
+    // empty date cell reaches parseBankDate.
+    const r = parseCSV(Buffer.from([
+      'S No,Transaction Date,Description,Debit,Credit',
+      '1,,SOME PAYMENT,500.00,',
+    ].join('\n')), 'ICICI');
+    expect(r.transactions).toHaveLength(0);
+    expect(r.errors[0].message).toBe('Invalid date');
+  });
+
+  it('reports a whitespace-only transaction-date cell as an invalid date', () => {
+    const r = parseCSV(Buffer.from([
+      'S No,Transaction Date,Description,Debit,Credit',
+      '1,   ,SOME PAYMENT,500.00,',
+    ].join('\n')), 'ICICI');
+    expect(r.errors[0].message).toBe('Invalid date');
+  });
+
+  it('reports a missing trailing date cell as an invalid date', () => {
+    // Short row: the date column index exists in the header but not in this data row.
+    const r = parseCSV(Buffer.from([
+      'S No,Description,Debit,Credit,Transaction Date',
+      '1,SOME PAYMENT,500.00,',
+    ].join('\n')), 'ICICI');
+    expect(r.errors[0].message).toBe('Invalid date');
+  });
+});

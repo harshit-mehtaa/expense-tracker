@@ -10,6 +10,7 @@ import {
   formatFYLabel,
   validateFY,
   getMonthStart,
+  getISTDateBoundary,
 } from '../utils/financialYear';
 
 describe('getCurrentFY', () => {
@@ -170,5 +171,40 @@ describe('getMonthStart', () => {
 
   it('returns a Date (not null/undefined)', () => {
     expect(getMonthStart()).toBeInstanceOf(Date);
+  });
+});
+
+describe('getISTDateBoundary', () => {
+  it('maps a date-only string to midnight IST for the "start" boundary', () => {
+    // Apr 1 2024 00:00:00.000 IST = Mar 31 2024 18:30 UTC
+    expect(getISTDateBoundary('2024-04-01', 'start').toISOString()).toBe('2024-03-31T18:30:00.000Z');
+  });
+
+  it('maps a date-only string to the last millisecond IST for the "end" boundary', () => {
+    // Mar 31 2025 23:59:59.999 IST = Mar 31 2025 18:29:59.999 UTC
+    expect(getISTDateBoundary('2025-03-31', 'end').toISOString()).toBe('2025-03-31T18:29:59.999Z');
+  });
+
+  it('produces a start boundary strictly earlier than the end boundary of the same day', () => {
+    const start = getISTDateBoundary('2024-06-15', 'start');
+    const end = getISTDateBoundary('2024-06-15', 'end');
+    expect(start.getTime()).toBeLessThan(end.getTime());
+    // A whole day minus 1ms
+    expect(end.getTime() - start.getTime()).toBe(86_400_000 - 1);
+  });
+
+  it('falls back to plain Date parsing for a full ISO timestamp (not date-only)', () => {
+    // Does not match /^\d{4}-\d{2}-\d{2}$/, so the IST shift is skipped entirely.
+    const input = '2024-04-01T12:34:56.000Z';
+    expect(getISTDateBoundary(input, 'start').toISOString()).toBe(input);
+  });
+
+  it('ignores the boundary argument on the non-date-only path', () => {
+    const input = '2024-04-01T12:34:56.000Z';
+    expect(getISTDateBoundary(input, 'end').toISOString()).toBe(getISTDateBoundary(input, 'start').toISOString());
+  });
+
+  it('returns an Invalid Date for unparseable input rather than throwing', () => {
+    expect(Number.isNaN(getISTDateBoundary('garbage', 'start').getTime())).toBe(true);
   });
 });

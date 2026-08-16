@@ -4,11 +4,9 @@ import { requireAuth, requireAdmin } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendNoContent, sendPaginated } from '../utils/response';
 import { getCurrentFY } from '../utils/financialYear';
-import { ownerScopedWhere, resolveTargetUserId, resolveWriteUserId } from '../utils/resolveTargetUserId';
+import { resolveTargetUserId, resolveWriteUserId } from '../utils/resolveTargetUserId';
 import * as svc from '../services/investmentService';
-import { prisma } from '../config/prisma';
 import { recordAuditLog } from '../services/auditService';
-import { isTest } from '../config/env';
 
 function parseFY(raw: unknown): string {
   const s = typeof raw === 'string' ? raw : '';
@@ -43,7 +41,7 @@ router.get('/exchange-rates', asyncHandler(async (_req, res) => {
 router.put('/exchange-rates/:currency', requireAdmin, asyncHandler(async (req, res) => {
   const { currency } = req.params;
   const { rate } = z.object({ rate: z.number().positive() }).parse(req.body);
-  const oldRate = isTest ? null : await prisma.exchangeRate.findUnique({ where: { fromCurrency_toCurrency: { fromCurrency: currency.toUpperCase(), toCurrency: 'INR' } } });
+  const oldRate = await svc.getExchangeRateForAudit(currency.toUpperCase());
   const updated = await svc.upsertExchangeRate(currency.toUpperCase(), rate, req.user!.userId);
   await recordAuditLog({
     performedByUserId: req.user!.userId,
@@ -96,14 +94,14 @@ router.post('/fd', asyncHandler(async (req, res) => {
 
 router.put('/fd/:id', asyncHandler(async (req, res) => {
   const data = fdSchema.partial().parse(req.body);
-  const oldFd = isTest ? null : await prisma.fixedDeposit.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const oldFd = await svc.getFDForAudit(req.user!.userId, req.params.id, req.user!.role);
   const fd = await svc.updateFD(req.user!.userId, req.params.id, data as any, req.user!.role);
   await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'FixedDeposit', entityId: fd.id, oldValue: oldFd, newValue: fd });
   sendSuccess(res, fd);
 }));
 
 router.delete('/fd/:id', asyncHandler(async (req, res) => {
-  const oldFd = isTest ? null : await prisma.fixedDeposit.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const oldFd = await svc.getFDForAudit(req.user!.userId, req.params.id, req.user!.role);
   const fd = await svc.deleteFD(req.user!.userId, req.params.id, req.user!.role);
   await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'FixedDeposit', entityId: fd?.id ?? req.params.id, oldValue: oldFd });
   sendNoContent(res);
@@ -140,14 +138,14 @@ router.post('/rd', asyncHandler(async (req, res) => {
 
 router.put('/rd/:id', asyncHandler(async (req, res) => {
   const data = rdSchema.partial().parse(req.body);
-  const oldRd = isTest ? null : await prisma.recurringDeposit.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const oldRd = await svc.getRDForAudit(req.user!.userId, req.params.id, req.user!.role);
   const rd = await svc.updateRD(req.user!.userId, req.params.id, data as any, req.user!.role);
   await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'RecurringDeposit', entityId: rd.id, oldValue: oldRd, newValue: rd });
   sendSuccess(res, rd);
 }));
 
 router.delete('/rd/:id', asyncHandler(async (req, res) => {
-  const oldRd = isTest ? null : await prisma.recurringDeposit.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const oldRd = await svc.getRDForAudit(req.user!.userId, req.params.id, req.user!.role);
   const rd = await svc.deleteRD(req.user!.userId, req.params.id, req.user!.role);
   await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'RecurringDeposit', entityId: rd?.id ?? req.params.id, oldValue: oldRd });
   sendNoContent(res);
@@ -194,14 +192,14 @@ router.post('/sip', asyncHandler(async (req, res) => {
 
 router.put('/sip/:id', asyncHandler(async (req, res) => {
   const data = sipSchema.partial().parse(req.body);
-  const oldSip = isTest ? null : await prisma.sIP.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const oldSip = await svc.getSIPForAudit(req.user!.userId, req.params.id, req.user!.role);
   const sip = await svc.updateSIP(req.user!.userId, req.params.id, data as any, req.user!.role);
   await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'SIP', entityId: sip.id, oldValue: oldSip, newValue: sip });
   sendSuccess(res, sip);
 }));
 
 router.delete('/sip/:id', asyncHandler(async (req, res) => {
-  const oldSip = isTest ? null : await prisma.sIP.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const oldSip = await svc.getSIPForAudit(req.user!.userId, req.params.id, req.user!.role);
   const sip = await svc.deleteSIP(req.user!.userId, req.params.id, req.user!.role);
   await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'SIP', entityId: sip?.id ?? req.params.id, oldValue: oldSip });
   sendNoContent(res);
@@ -266,14 +264,14 @@ router.post('/', asyncHandler(async (req, res) => {
 
 router.put('/:id', asyncHandler(async (req, res) => {
   const data = investmentSchema.partial().parse(req.body);
-  const oldInv = isTest ? null : await prisma.investment.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const oldInv = await svc.getInvestmentForAudit(req.user!.userId, req.params.id, req.user!.role);
   const inv = await svc.updateInvestment(req.user!.userId, req.params.id, data as any, req.user!.role);
   await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'Investment', entityId: inv.id, oldValue: oldInv, newValue: inv });
   sendSuccess(res, inv);
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
-  const oldInv = isTest ? null : await prisma.investment.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const oldInv = await svc.getInvestmentForAudit(req.user!.userId, req.params.id, req.user!.role);
   const inv = await svc.deleteInvestment(req.user!.userId, req.params.id, req.user!.role);
   await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'Investment', entityId: inv?.id ?? req.params.id, oldValue: oldInv });
   sendNoContent(res);
@@ -307,14 +305,14 @@ router.post('/gold', asyncHandler(async (req, res) => {
 
 router.put('/gold/:id', asyncHandler(async (req, res) => {
   const data = goldSchema.partial().parse(req.body);
-  const oldHolding = isTest ? null : await prisma.goldHolding.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const oldHolding = await svc.getGoldHoldingForAudit(req.user!.userId, req.params.id, req.user!.role);
   const holding = await svc.updateGoldHolding(req.user!.userId, req.params.id, data as any, req.user!.role);
   await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'GoldHolding', entityId: holding.id, oldValue: oldHolding, newValue: holding });
   sendSuccess(res, holding);
 }));
 
 router.delete('/gold/:id', asyncHandler(async (req, res) => {
-  const oldHolding = isTest ? null : await prisma.goldHolding.findFirst({ where: ownerScopedWhere(req.params.id, req.user!.userId, req.user!.role) });
+  const oldHolding = await svc.getGoldHoldingForAudit(req.user!.userId, req.params.id, req.user!.role);
   const holding = await svc.deleteGoldHolding(req.user!.userId, req.params.id, req.user!.role);
   await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'GoldHolding', entityId: holding?.id ?? req.params.id, oldValue: oldHolding });
   sendNoContent(res);
@@ -356,14 +354,14 @@ router.post('/real-estate', asyncHandler(async (req, res) => {
 
 router.put('/real-estate/:id', asyncHandler(async (req, res) => {
   const data = reSchema.partial().parse(req.body);
-  const oldProp = isTest ? null : await prisma.realEstate.findFirst({ where: { id: req.params.id } });
+  const oldProp = await svc.getRealEstateForAudit(req.user!.userId, req.params.id, req.user!.role);
   const prop = await svc.updateRealEstate(req.user!.userId, req.params.id, data as any, req.user!.role);
   await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'RealEstate', entityId: prop.id, oldValue: oldProp, newValue: prop });
   sendSuccess(res, prop);
 }));
 
 router.delete('/real-estate/:id', asyncHandler(async (req, res) => {
-  const oldProp = isTest ? null : await prisma.realEstate.findFirst({ where: { id: req.params.id } });
+  const oldProp = await svc.getRealEstateForAudit(req.user!.userId, req.params.id, req.user!.role);
   const prop = await svc.deleteRealEstate(req.user!.userId, req.params.id, req.user!.role);
   await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'RealEstate', entityId: prop?.id ?? req.params.id, oldValue: oldProp });
   sendNoContent(res);

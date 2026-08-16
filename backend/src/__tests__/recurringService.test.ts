@@ -29,6 +29,9 @@ vi.mock('../config/prisma', () => {
     bankAccount: {
       update: vi.fn(),
     },
+    user: {
+      findMany: vi.fn(),
+    },
     $transaction: vi.fn(),
   };
   return { default: mockPrisma, prisma: mockPrisma };
@@ -41,6 +44,7 @@ import {
   updateRecurringRule,
   deleteRecurringRule,
   generateDueRecurringTransactions,
+  generateDueRecurringTransactionsForAllUsers,
 } from '../services/recurringService';
 
 const ruleMock = (prisma as any).recurringRule;
@@ -242,11 +246,47 @@ describe('generateDueRecurringTransactions', () => {
   });
 
   it('race guard: skips when updateMany returns count=0 (another request ran first)', async () => {
+    // System time MUST be at/after nextRunDate or the catch-up `while` loop never
+    // runs and this test passes vacuously without ever reaching the race guard.
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
     ruleMock.findMany.mockResolvedValue([MOCK_RULE]);
     ruleMock.updateMany.mockResolvedValue({ count: 0 }); // another request already advanced
     const result = await generateDueRecurringTransactions('u1');
     expect(result).toEqual({ generated: 0 });
+    expect(ruleMock.updateMany).toHaveBeenCalledTimes(1); // guard was actually exercised
     expect(txMock.create).not.toHaveBeenCalled();
+  });
+
+  it('INCOME template credits the linked account (positive balance delta)', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    const incomeRule = {
+      ...MOCK_RULE,
+      templateTransaction: { ...MOCK_RULE.templateTransaction, type: 'INCOME', amount: 5000 },
+    };
+    ruleMock.findMany.mockResolvedValue([incomeRule]);
+    ruleMock.updateMany.mockResolvedValue({ count: 1 });
+    txMock.create.mockResolvedValue({});
+    (prisma as any).bankAccount.update.mockResolvedValue({});
+
+    await generateDueRecurringTransactions('u1');
+    expect((prisma as any).bankAccount.update).toHaveBeenCalledWith({
+      where: { id: 'acct-1' },
+      data: { currentBalance: { increment: 5000 } },
+    });
+  });
+
+  it('EXPENSE template debits the linked account (negative balance delta)', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    ruleMock.findMany.mockResolvedValue([MOCK_RULE]); // type: 'EXPENSE'
+    ruleMock.updateMany.mockResolvedValue({ count: 1 });
+    txMock.create.mockResolvedValue({});
+    (prisma as any).bankAccount.update.mockResolvedValue({});
+
+    await generateDueRecurringTransactions('u1');
+    expect((prisma as any).bankAccount.update).toHaveBeenCalledWith({
+      where: { id: 'acct-1' },
+      data: { currentBalance: { increment: -5000 } },
+    });
   });
 
   it('happy path: updateMany returns count=1 → creates transaction, returns generated: 1', async () => {
@@ -347,5 +387,63 @@ describe('generateDueRecurringTransactions', () => {
     const updateCall = ruleMock.updateMany.mock.calls[0][0];
     const advanced: Date = updateCall.data.nextRunDate;
     expect(dayjs(advanced).format('YYYY-MM-DD')).toBe('2025-03-01');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// generateDueRecurringTransactionsForAllUsers
+//
+// Cron entry point — invoked from src/index.ts, not from any route. Fans out
+// over every active, non-deleted user and sums their per-user generation counts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('generateDueRecurringTransactionsForAllUsers', () => {
+  const userMock = () => (prisma as any).user;
+
+  it('queries only active, non-soft-deleted users and selects just the id', async () => {
+    userMock().findMany.mockResolvedValue([]);
+    await generateDueRecurringTransactionsForAllUsers();
+    expect(userMock().findMany).toHaveBeenCalledWith({
+      where: { isActive: true, deletedAt: null },
+      select: { id: true },
+    });
+  });
+
+  it('returns zeros when there are no active users', async () => {
+    userMock().findMany.mockResolvedValue([]);
+    const result = await generateDueRecurringTransactionsForAllUsers();
+    expect(result).toEqual({ generated: 0, usersProcessed: 0 });
+    expect(ruleMock.findMany).not.toHaveBeenCalled();
+  });
+
+  it('counts users processed even when none of them have due rules', async () => {
+    userMock().findMany.mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]);
+    ruleMock.findMany.mockResolvedValue([]);
+    const result = await generateDueRecurringTransactionsForAllUsers();
+    expect(result).toEqual({ generated: 0, usersProcessed: 2 });
+    expect(ruleMock.findMany).toHaveBeenCalledTimes(2);
+  });
+
+  it('scopes the due-rule lookup to each user in turn', async () => {
+    userMock().findMany.mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]);
+    ruleMock.findMany.mockResolvedValue([]);
+    await generateDueRecurringTransactionsForAllUsers();
+    expect(ruleMock.findMany.mock.calls[0][0].where.userId).toBe('u1');
+    expect(ruleMock.findMany.mock.calls[1][0].where.userId).toBe('u2');
+  });
+
+  it('sums generated counts across users', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    userMock().findMany.mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]);
+    // u1 has one due rule, u2 has none
+    ruleMock.findMany
+      .mockResolvedValueOnce([MOCK_RULE])
+      .mockResolvedValueOnce([]);
+    ruleMock.updateMany.mockResolvedValue({ count: 1 });
+    txMock.create.mockResolvedValue({});
+    (prisma as any).bankAccount.update.mockResolvedValue({});
+
+    const result = await generateDueRecurringTransactionsForAllUsers();
+    expect(result).toEqual({ generated: 1, usersProcessed: 2 });
   });
 });

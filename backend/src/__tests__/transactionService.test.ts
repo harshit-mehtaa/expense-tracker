@@ -54,6 +54,7 @@ import {
   buildImportHash,
   getTransactions,
   getTransactionById,
+  getTransferCounterpartCandidates,
   createTransaction,
   convertTransactionToTransfer,
   convertTransactionToSIP,
@@ -274,6 +275,20 @@ describe('getTransactions — date filter', () => {
     expect((where.date as any).gte).toEqual(new Date('2024-12-31T18:30:00.000Z'));
     expect((where.date as any).lte).toEqual(new Date('2025-06-30T18:29:59.999Z'));
   });
+
+  it('keeps the FY lower bound when startDate falls before the FY start', async () => {
+    // The bounds intersect (never widen): FY 2025-26 starts 2025-04-01 IST, so a
+    // startDate of 2025-01-01 must NOT pull `gte` back outside the financial year.
+    const where = await getWhere('user-1', 'MEMBER', { fy: '2025-26', startDate: '2025-01-01' });
+    expect((where.date as any).gte).toEqual(new Date('2025-03-31T18:30:00.000Z'));
+  });
+
+  it('keeps the FY upper bound when endDate falls after the FY end', async () => {
+    // Mirror of the above for the upper bound: an endDate past 2026-03-31 IST must
+    // NOT push `lte` beyond the financial year.
+    const where = await getWhere('user-1', 'MEMBER', { fy: '2025-26', endDate: '2026-12-31' });
+    expect((where.date as any).lte).toEqual(new Date('2026-03-31T18:29:59.999Z'));
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -342,6 +357,86 @@ describe('getTransactions — transfer metadata', () => {
       isCreditCardBillPayment: true,
       creditCardAccount: { bankName: 'ICICI Bank', accountNumberLast4: '1234', accountType: 'CREDIT_CARD' },
       transferCounterpartyAccount: { bankName: 'ICICI Bank', accountNumberLast4: '1234', accountType: 'CREDIT_CARD' },
+    });
+  });
+
+  it('short-circuits without a second query when no item is part of a transfer pair', async () => {
+    txMock.count.mockResolvedValue(1);
+    txMock.findMany.mockResolvedValueOnce([{ ...MOCK_TX, id: 'tx-plain', transferPairId: null }]);
+
+    const result = await getTransactions('u1', 'MEMBER', {});
+
+    // Only the page query ran — the transfer-legs lookup is skipped entirely.
+    expect(txMock.findMany).toHaveBeenCalledTimes(1);
+    expect(result.items[0]).toMatchObject({
+      id: 'tx-plain',
+      isCreditCardBillPayment: false,
+      creditCardAccount: null,
+      transferCounterpartyAccount: null,
+    });
+  });
+
+  it('defaults to null metadata for unpaired items, orphaned pair ids, and legs with no pair id', async () => {
+    txMock.count.mockResolvedValue(2);
+    txMock.findMany
+      .mockResolvedValueOnce([
+        { ...MOCK_TX, id: 'tx-orphan', transferPairId: 'pair-missing' },
+        { ...MOCK_TX, id: 'tx-unpaired', transferPairId: null },
+      ])
+      // The legs query returns a row whose transferPairId is null, so it is skipped
+      // when building the pair map — leaving 'pair-missing' with no entry at all.
+      .mockResolvedValueOnce([{ id: 'leg-no-pair', type: 'EXPENSE', transferPairId: null, bankAccount: null }]);
+
+    const result = await getTransactions('u1', 'MEMBER', {});
+
+    expect(result.items[0]).toMatchObject({
+      id: 'tx-orphan',
+      isCreditCardBillPayment: false,
+      creditCardAccount: null,
+      transferCounterpartyAccount: null,
+    });
+    expect(result.items[1]).toMatchObject({
+      id: 'tx-unpaired',
+      isCreditCardBillPayment: false,
+      creditCardAccount: null,
+      transferCounterpartyAccount: null,
+    });
+  });
+
+  it('reports a transfer counterparty without flagging it as a credit-card bill payment', async () => {
+    txMock.count.mockResolvedValue(1);
+    txMock.findMany
+      .mockResolvedValueOnce([{ ...MOCK_TX, id: 'tx-a', type: 'EXPENSE', transferPairId: 'pair-b2b' }])
+      .mockResolvedValueOnce([
+        { id: 'tx-a', type: 'EXPENSE', transferPairId: 'pair-b2b', bankAccount: { bankName: 'HDFC Bank', accountNumberLast4: '1111', accountType: 'SAVINGS' } },
+        // Incoming leg is a SAVINGS account, not CREDIT_CARD → not a bill payment.
+        { id: 'tx-b', type: 'INCOME', transferPairId: 'pair-b2b', bankAccount: { bankName: 'SBI', accountNumberLast4: '2222', accountType: 'SAVINGS' } },
+      ]);
+
+    const result = await getTransactions('u1', 'MEMBER', {});
+
+    expect(result.items[0]).toMatchObject({
+      isCreditCardBillPayment: false,
+      creditCardAccount: null,
+      transferCounterpartyAccount: { bankName: 'SBI', accountNumberLast4: '2222', accountType: 'SAVINGS' },
+    });
+  });
+
+  it('falls back to a null counterparty when the paired leg has no bank account', async () => {
+    txMock.count.mockResolvedValue(1);
+    txMock.findMany
+      .mockResolvedValueOnce([{ ...MOCK_TX, id: 'tx-a', type: 'EXPENSE', transferPairId: 'pair-null-acct' }])
+      .mockResolvedValueOnce([
+        { id: 'tx-a', type: 'EXPENSE', transferPairId: 'pair-null-acct', bankAccount: null },
+        { id: 'tx-b', type: 'INCOME', transferPairId: 'pair-null-acct', bankAccount: null },
+      ]);
+
+    const result = await getTransactions('u1', 'MEMBER', {});
+
+    expect(result.items[0]).toMatchObject({
+      isCreditCardBillPayment: false,
+      creditCardAccount: null,
+      transferCounterpartyAccount: null,
     });
   });
 });
@@ -433,6 +528,124 @@ describe('getTransactionById', () => {
     txMock.findUnique.mockResolvedValue({ ...MOCK_TX, userId: 'u2' });
     const result = await getTransactionById('tx-1', 'admin-1', 'ADMIN');
     expect(result).toBeDefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// getTransferCounterpartCandidates
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('getTransferCounterpartCandidates', () => {
+  const CANDIDATE_SOURCE = {
+    ...MOCK_TX,
+    id: 'tx-debit',
+    userId: 'u1',
+    type: 'EXPENSE',
+    amount: 350000,
+    date: new Date('2026-04-15'),
+    bankAccountId: 'acct-src',
+    transferPairId: null,
+  };
+
+  it('queries for the opposite leg on the counterparty account, excluding already-linked rows', async () => {
+    txMock.findUnique.mockResolvedValue(CANDIDATE_SOURCE);
+    acctMock.findFirst.mockResolvedValue({ id: 'acct-dest', userId: 'u1' });
+    txMock.findMany.mockResolvedValue([{ id: 'tx-credit-1' }]);
+
+    const result = await getTransferCounterpartCandidates('tx-debit', 'u1', 'MEMBER', 'acct-dest');
+
+    expect(acctMock.findFirst).toHaveBeenCalledWith({ where: { id: 'acct-dest', userId: 'u1' } });
+    expect(txMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        id: { not: 'tx-debit' },
+        userId: 'u1',
+        deletedAt: null,
+        transferPairId: null,
+        bankAccountId: 'acct-dest',
+        type: 'INCOME', // opposite of the EXPENSE source
+        amount: 350000,
+        date: new Date('2026-04-15'),
+        sipId: null,
+        sipTransactionId: null,
+        insurancePolicyId: null,
+        refundForTransactionId: null,
+        loanId: null,
+      }),
+      orderBy: { createdAt: 'asc' },
+    }));
+    expect(result).toEqual([{ id: 'tx-credit-1' }]);
+  });
+
+  it('looks for an EXPENSE counterpart when the source transaction is INCOME', async () => {
+    txMock.findUnique.mockResolvedValue({ ...CANDIDATE_SOURCE, type: 'INCOME', bankAccountId: 'acct-card' });
+    acctMock.findFirst.mockResolvedValue({ id: 'acct-bank', userId: 'u1' });
+
+    await getTransferCounterpartCandidates('tx-debit', 'u1', 'MEMBER', 'acct-bank');
+
+    expect(txMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ type: 'EXPENSE', bankAccountId: 'acct-bank' }),
+    }));
+  });
+
+  it('rejects an unknown transaction', async () => {
+    txMock.findUnique.mockResolvedValue(null);
+    await expect(getTransferCounterpartCandidates('tx-x', 'u1', 'MEMBER', 'acct-dest'))
+      .rejects.toThrow(/Transaction not found/i);
+  });
+
+  it('rejects a soft-deleted transaction', async () => {
+    txMock.findUnique.mockResolvedValue({ ...CANDIDATE_SOURCE, deletedAt: new Date() });
+    await expect(getTransferCounterpartCandidates('tx-debit', 'u1', 'MEMBER', 'acct-dest'))
+      .rejects.toThrow(/Transaction not found/i);
+  });
+
+  it("forbids a MEMBER from reading another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...CANDIDATE_SOURCE, userId: 'other-user' });
+    await expect(getTransferCounterpartCandidates('tx-debit', 'u1', 'MEMBER', 'acct-dest'))
+      .rejects.toThrow(/Forbidden/i);
+  });
+
+  it("allows an ADMIN to read another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...CANDIDATE_SOURCE, userId: 'other-user' });
+    acctMock.findFirst.mockResolvedValue({ id: 'acct-dest', userId: 'other-user' });
+
+    await getTransferCounterpartCandidates('tx-debit', 'admin-1', 'ADMIN', 'acct-dest');
+
+    // Candidates are scoped to the transaction OWNER, not the requesting admin.
+    expect(txMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ userId: 'other-user' }),
+    }));
+  });
+
+  it('rejects a transaction that is already part of a transfer pair', async () => {
+    txMock.findUnique.mockResolvedValue({ ...CANDIDATE_SOURCE, transferPairId: 'pair-1' });
+    await expect(getTransferCounterpartCandidates('tx-debit', 'u1', 'MEMBER', 'acct-dest'))
+      .rejects.toThrow(/already marked as a transfer/i);
+  });
+
+  it('rejects a transaction that is neither INCOME nor EXPENSE', async () => {
+    txMock.findUnique.mockResolvedValue({ ...CANDIDATE_SOURCE, type: 'TRANSFER' });
+    await expect(getTransferCounterpartCandidates('tx-debit', 'u1', 'MEMBER', 'acct-dest'))
+      .rejects.toThrow(/Only income or expense/i);
+  });
+
+  it('rejects a transaction with no bank account', async () => {
+    txMock.findUnique.mockResolvedValue({ ...CANDIDATE_SOURCE, bankAccountId: null });
+    await expect(getTransferCounterpartCandidates('tx-debit', 'u1', 'MEMBER', 'acct-dest'))
+      .rejects.toThrow(/Bank account is required/i);
+  });
+
+  it('rejects a counterparty account identical to the source account', async () => {
+    txMock.findUnique.mockResolvedValue(CANDIDATE_SOURCE);
+    await expect(getTransferCounterpartCandidates('tx-debit', 'u1', 'MEMBER', 'acct-src'))
+      .rejects.toThrow(/must be different/i);
+  });
+
+  it('rejects a counterparty account that does not belong to the transaction owner', async () => {
+    txMock.findUnique.mockResolvedValue(CANDIDATE_SOURCE);
+    acctMock.findFirst.mockResolvedValue(null);
+    await expect(getTransferCounterpartCandidates('tx-debit', 'u1', 'MEMBER', 'acct-dest'))
+      .rejects.toThrow(/Counterparty bank account not found/i);
   });
 });
 
@@ -529,6 +742,41 @@ describe('createTransaction — INCOME/EXPENSE', () => {
     await expect(
       createTransaction('u1', { ...BASE_DATA, loanId: 'loan-1', insurancePolicyId: 'pol-1' }),
     ).rejects.toThrow(/either a loan or an insurance policy/i);
+  });
+
+  it('links an INCOME transaction to the expense it refunds', async () => {
+    txMock.findFirst.mockResolvedValue({ id: 'expense-1', transferPairId: null });
+
+    await createTransaction('u1', { ...BASE_DATA, type: 'INCOME', refundForTransactionId: 'expense-1' });
+
+    expect(txMock.findFirst).toHaveBeenCalledWith({
+      where: { id: 'expense-1', userId: 'u1', deletedAt: null, type: 'EXPENSE' },
+      select: { id: true, transferPairId: true },
+    });
+    expect(txMock.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ refundForTransactionId: 'expense-1' }),
+    }));
+  });
+
+  it('rejects a refund link on a non-INCOME transaction', async () => {
+    await expect(
+      createTransaction('u1', { ...BASE_DATA, type: 'EXPENSE', refundForTransactionId: 'expense-1' }),
+    ).rejects.toThrow(/Only incoming transactions can be linked as refunds/i);
+    expect(txMock.create).not.toHaveBeenCalled();
+  });
+
+  it('throws NotFound when the refunded expense does not exist', async () => {
+    txMock.findFirst.mockResolvedValue(null);
+    await expect(
+      createTransaction('u1', { ...BASE_DATA, type: 'INCOME', refundForTransactionId: 'expense-x' }),
+    ).rejects.toThrow(/Original expense transaction not found/i);
+  });
+
+  it('rejects refunding a transfer leg', async () => {
+    txMock.findFirst.mockResolvedValue({ id: 'expense-1', transferPairId: 'pair-1' });
+    await expect(
+      createTransaction('u1', { ...BASE_DATA, type: 'INCOME', refundForTransactionId: 'expense-1' }),
+    ).rejects.toThrow(/Transfer transactions cannot be refunded/i);
   });
 });
 
@@ -824,6 +1072,221 @@ describe('convertTransactionToTransfer', () => {
       adjustDestinationBalance: false,
     })).rejects.toThrow(/already.*transfer/i);
   });
+
+  // ── Eligibility guards ──────────────────────────────────────────────────────
+
+  const TO_DEST = { transferToAccountId: 'acct-dest', adjustDestinationBalance: false };
+
+  it('rejects an unknown transaction', async () => {
+    txMock.findUnique.mockResolvedValue(null);
+    await expect(convertTransactionToTransfer('tx-x', 'u1', 'MEMBER', TO_DEST))
+      .rejects.toThrow(/Transaction not found/i);
+  });
+
+  it('rejects a soft-deleted transaction', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, deletedAt: new Date() });
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', TO_DEST))
+      .rejects.toThrow(/Transaction not found/i);
+  });
+
+  it("forbids a MEMBER from converting another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, userId: 'other-user' });
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', TO_DEST))
+      .rejects.toThrow(/Forbidden/i);
+  });
+
+  it("allows an ADMIN to convert another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, userId: 'other-user', type: 'EXPENSE', bankAccountId: 'acct-src', transferPairId: null });
+    acctMock.findFirst.mockResolvedValue({ id: 'acct-dest', userId: 'other-user' });
+
+    await convertTransactionToTransfer('tx-1', 'admin-1', 'ADMIN', TO_DEST);
+
+    // The generated counter-leg belongs to the transaction OWNER, not the admin.
+    expect(txMock.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ userId: 'other-user' }),
+    }));
+  });
+
+  it('rejects SIP-linked transactions', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, sipId: 'sip-1' });
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', TO_DEST))
+      .rejects.toThrow(/SIP transactions cannot be converted/i);
+  });
+
+  it('rejects policy-linked transactions', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, insurancePolicyId: 'pol-1' });
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', TO_DEST))
+      .rejects.toThrow(/Policy-linked transactions cannot be converted/i);
+  });
+
+  it('rejects refund transactions', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, refundForTransactionId: 'expense-1' });
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', TO_DEST))
+      .rejects.toThrow(/Refund transactions cannot be converted/i);
+  });
+
+  it('rejects a transaction that is neither INCOME nor EXPENSE', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'TRANSFER' });
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', TO_DEST))
+      .rejects.toThrow(/Only income or expense/i);
+  });
+
+  it('rejects a transaction that has refunds attached to it', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'EXPENSE', transferPairId: null });
+    txMock.count.mockResolvedValue(1);
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', TO_DEST))
+      .rejects.toThrow(/Transactions with refunds cannot be converted/i);
+  });
+
+  it('rejects an explicit counterpart id that is not among the valid matches', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'EXPENSE', bankAccountId: 'acct-src', transferPairId: null });
+    acctMock.findFirst.mockResolvedValue({ id: 'acct-dest', userId: 'u1' });
+    txMock.findMany.mockResolvedValueOnce([{ id: 'tx-credit-1', balanceImpactApplied: true }]);
+
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', {
+      ...TO_DEST,
+      counterpartTransactionId: 'tx-not-a-match',
+    })).rejects.toThrow(/not a valid match/i);
+  });
+
+  // ── EXPENSE → destination-leg branch ────────────────────────────────────────
+
+  it('requires a destination account for an EXPENSE conversion', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'EXPENSE', transferPairId: null });
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', { adjustDestinationBalance: false }))
+      .rejects.toThrow(/Destination account is required/i);
+  });
+
+  it('requires the source transaction to have a bank account', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'EXPENSE', bankAccountId: null, transferPairId: null });
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', TO_DEST))
+      .rejects.toThrow(/Source bank account is required/i);
+  });
+
+  it('rejects a destination account that does not belong to the owner', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'EXPENSE', bankAccountId: 'acct-src', transferPairId: null });
+    acctMock.findFirst.mockResolvedValue(null);
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', TO_DEST))
+      .rejects.toThrow(/Destination bank account not found/i);
+  });
+
+  it('defaults the generated destination leg to no balance impact when the flag is omitted', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'EXPENSE', amount: 900, bankAccountId: 'acct-src', transferPairId: null });
+    acctMock.findFirst.mockResolvedValue({ id: 'acct-dest', userId: 'u1' });
+
+    await convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', { transferToAccountId: 'acct-dest' });
+
+    expect(txMock.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ balanceImpactApplied: false }),
+    }));
+    expect(acctMock.update).not.toHaveBeenCalled();
+  });
+
+  it('marks an existing destination leg as balance-applied and credits the account when requested', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'EXPENSE', amount: 4200, bankAccountId: 'acct-src', transferPairId: null });
+    acctMock.findFirst.mockResolvedValue({ id: 'acct-dest', userId: 'u1' });
+    txMock.findMany.mockResolvedValueOnce([{ id: 'tx-existing-credit', balanceImpactApplied: false }]);
+
+    await convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', {
+      transferToAccountId: 'acct-dest',
+      adjustDestinationBalance: true,
+    });
+
+    expect(txMock.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'tx-existing-credit' },
+      data: expect.objectContaining({ balanceImpactApplied: true }),
+    }));
+    expect(acctMock.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'acct-dest' },
+      data: { currentBalance: { increment: 4200 } },
+    }));
+  });
+
+  it('does not double-credit a destination leg whose balance impact was already applied', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'EXPENSE', amount: 4200, bankAccountId: 'acct-src', transferPairId: null });
+    acctMock.findFirst.mockResolvedValue({ id: 'acct-dest', userId: 'u1' });
+    txMock.findMany.mockResolvedValueOnce([{ id: 'tx-existing-credit', balanceImpactApplied: true }]);
+
+    await convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', {
+      transferToAccountId: 'acct-dest',
+      adjustDestinationBalance: true,
+    });
+
+    expect(acctMock.update).not.toHaveBeenCalled();
+  });
+
+  // ── INCOME → source-leg branch ──────────────────────────────────────────────
+
+  it('requires a source account for an INCOME conversion', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'INCOME', transferPairId: null });
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', { adjustSourceBalance: false }))
+      .rejects.toThrow(/Source account is required/i);
+  });
+
+  it('requires the incoming transaction to have a bank account', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'INCOME', bankAccountId: null, transferPairId: null });
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', { transferFromAccountId: 'acct-bank' }))
+      .rejects.toThrow(/Destination bank account is required/i);
+  });
+
+  it('rejects a source account identical to the destination account', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'INCOME', bankAccountId: 'acct-card', transferPairId: null });
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', { transferFromAccountId: 'acct-card' }))
+      .rejects.toThrow(/Source account must be different/i);
+  });
+
+  it('rejects a source account that does not belong to the owner', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'INCOME', bankAccountId: 'acct-card', transferPairId: null });
+    acctMock.findFirst.mockResolvedValue(null);
+    await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', { transferFromAccountId: 'acct-bank' }))
+      .rejects.toThrow(/Source bank account not found/i);
+  });
+
+  it('defaults the generated source leg to no balance impact when the flag is omitted', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'INCOME', amount: 800, bankAccountId: 'acct-card', transferPairId: null });
+    acctMock.findFirst.mockResolvedValue({ id: 'acct-bank', userId: 'u1' });
+
+    await convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', { transferFromAccountId: 'acct-bank' });
+
+    expect(txMock.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ type: 'EXPENSE', balanceImpactApplied: false }),
+    }));
+    expect(acctMock.update).not.toHaveBeenCalled();
+  });
+
+  it('links an existing source leg, marks it balance-applied, and debits the account when requested', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'INCOME', amount: 6100, bankAccountId: 'acct-card', transferPairId: null });
+    acctMock.findFirst.mockResolvedValue({ id: 'acct-bank', userId: 'u1' });
+    txMock.findMany.mockResolvedValueOnce([{ id: 'tx-existing-debit', balanceImpactApplied: false }]);
+
+    await convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', {
+      transferFromAccountId: 'acct-bank',
+      adjustSourceBalance: true,
+    });
+
+    expect(txMock.create).not.toHaveBeenCalled();
+    expect(txMock.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'tx-existing-debit' },
+      data: expect.objectContaining({ balanceImpactApplied: true, refundForTransactionId: null }),
+    }));
+    expect(acctMock.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'acct-bank' },
+      data: { currentBalance: { decrement: 6100 } },
+    }));
+  });
+
+  it('does not double-debit a source leg whose balance impact was already applied', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'INCOME', amount: 6100, bankAccountId: 'acct-card', transferPairId: null });
+    acctMock.findFirst.mockResolvedValue({ id: 'acct-bank', userId: 'u1' });
+    txMock.findMany.mockResolvedValueOnce([{ id: 'tx-existing-debit', balanceImpactApplied: true }]);
+
+    await convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', {
+      transferFromAccountId: 'acct-bank',
+      adjustSourceBalance: true,
+    });
+
+    expect(acctMock.update).not.toHaveBeenCalled();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -917,6 +1380,64 @@ describe('convertTransactionToSIP', () => {
 
     await expect(convertTransactionToSIP('tx-1', 'u1', 'MEMBER', { sipId: 'sip-1' })).rejects.toThrow(/different bank account/i);
   });
+
+  const ELIGIBLE_EXPENSE = { ...MOCK_TX, type: 'EXPENSE', transferPairId: null, sipId: null, sipTransactionId: null };
+
+  it('rejects an unknown transaction', async () => {
+    txMock.findUnique.mockResolvedValue(null);
+    await expect(convertTransactionToSIP('tx-x', 'u1', 'MEMBER', { sipId: 'sip-1' }))
+      .rejects.toThrow(/Transaction not found/i);
+  });
+
+  it('rejects a soft-deleted transaction', async () => {
+    txMock.findUnique.mockResolvedValue({ ...ELIGIBLE_EXPENSE, deletedAt: new Date() });
+    await expect(convertTransactionToSIP('tx-1', 'u1', 'MEMBER', { sipId: 'sip-1' }))
+      .rejects.toThrow(/Transaction not found/i);
+  });
+
+  it("forbids a MEMBER from marking another member's transaction as SIP", async () => {
+    txMock.findUnique.mockResolvedValue({ ...ELIGIBLE_EXPENSE, userId: 'other-user' });
+    await expect(convertTransactionToSIP('tx-1', 'u1', 'MEMBER', { sipId: 'sip-1' }))
+      .rejects.toThrow(/Forbidden/i);
+  });
+
+  it("allows an ADMIN to mark another member's transaction as SIP", async () => {
+    txMock.findUnique.mockResolvedValue({ ...ELIGIBLE_EXPENSE, userId: 'other-user' });
+    sipMock.findFirst.mockResolvedValue({ ...MOCK_SIP, userId: 'other-user' });
+
+    await convertTransactionToSIP('tx-1', 'admin-1', 'ADMIN', { sipId: 'sip-1' });
+
+    // The SIP is looked up against the transaction OWNER, not the admin.
+    expect(sipMock.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'sip-1', userId: 'other-user' },
+    }));
+  });
+
+  it('rejects policy-linked transactions', async () => {
+    txMock.findUnique.mockResolvedValue({ ...ELIGIBLE_EXPENSE, insurancePolicyId: 'pol-1' });
+    await expect(convertTransactionToSIP('tx-1', 'u1', 'MEMBER', { sipId: 'sip-1' }))
+      .rejects.toThrow(/Policy-linked transactions cannot be marked as SIP/i);
+  });
+
+  it('rejects refund transactions', async () => {
+    txMock.findUnique.mockResolvedValue({ ...ELIGIBLE_EXPENSE, refundForTransactionId: 'expense-1' });
+    await expect(convertTransactionToSIP('tx-1', 'u1', 'MEMBER', { sipId: 'sip-1' }))
+      .rejects.toThrow(/Refund transactions cannot be marked as SIP/i);
+  });
+
+  it('rejects a transaction that has refunds attached to it', async () => {
+    txMock.findUnique.mockResolvedValue(ELIGIBLE_EXPENSE);
+    txMock.count.mockResolvedValue(1);
+    await expect(convertTransactionToSIP('tx-1', 'u1', 'MEMBER', { sipId: 'sip-1' }))
+      .rejects.toThrow(/Transactions with refunds cannot be marked as SIP/i);
+  });
+
+  it('rejects an unknown SIP', async () => {
+    txMock.findUnique.mockResolvedValue(ELIGIBLE_EXPENSE);
+    sipMock.findFirst.mockResolvedValue(null);
+    await expect(convertTransactionToSIP('tx-1', 'u1', 'MEMBER', { sipId: 'sip-x' }))
+      .rejects.toThrow(/SIP not found/i);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -997,6 +1518,69 @@ describe('updateTransactionSIPLink', () => {
 
     await expect(updateTransactionSIPLink('tx-1', 'u1', 'MEMBER', { sipId: 'sip-1' })).rejects.toThrow(/not marked as SIP/i);
   });
+
+  const SIP_LINKED = { ...MOCK_TX, type: 'EXPENSE', transferPairId: null, sipId: 'sip-old', sipTransactionId: null };
+
+  it('rejects an unknown transaction', async () => {
+    txMock.findUnique.mockResolvedValue(null);
+    await expect(updateTransactionSIPLink('tx-x', 'u1', 'MEMBER', { sipId: 'sip-1' }))
+      .rejects.toThrow(/Transaction not found/i);
+  });
+
+  it('rejects a soft-deleted transaction', async () => {
+    txMock.findUnique.mockResolvedValue({ ...SIP_LINKED, deletedAt: new Date() });
+    await expect(updateTransactionSIPLink('tx-1', 'u1', 'MEMBER', { sipId: 'sip-1' }))
+      .rejects.toThrow(/Transaction not found/i);
+  });
+
+  it("forbids a MEMBER from relinking another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...SIP_LINKED, userId: 'other-user' });
+    await expect(updateTransactionSIPLink('tx-1', 'u1', 'MEMBER', { sipId: 'sip-1' }))
+      .rejects.toThrow(/Forbidden/i);
+  });
+
+  it("allows an ADMIN to relink another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...SIP_LINKED, userId: 'other-user' });
+    sipMock.findFirst.mockResolvedValue({ ...MOCK_SIP, userId: 'other-user' });
+
+    await updateTransactionSIPLink('tx-1', 'admin-1', 'ADMIN', { sipId: 'sip-1' });
+
+    expect(sipMock.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'sip-1', userId: 'other-user' },
+    }));
+  });
+
+  it('rejects transfer transactions', async () => {
+    txMock.findUnique.mockResolvedValue({ ...SIP_LINKED, transferPairId: 'pair-1' });
+    await expect(updateTransactionSIPLink('tx-1', 'u1', 'MEMBER', { sipId: 'sip-1' }))
+      .rejects.toThrow(/Transfer transactions cannot be linked to SIP/i);
+  });
+
+  it('rejects refund transactions', async () => {
+    txMock.findUnique.mockResolvedValue({ ...SIP_LINKED, refundForTransactionId: 'expense-1' });
+    await expect(updateTransactionSIPLink('tx-1', 'u1', 'MEMBER', { sipId: 'sip-1' }))
+      .rejects.toThrow(/Refund transactions cannot be linked to SIP/i);
+  });
+
+  it('rejects non-expense transactions', async () => {
+    txMock.findUnique.mockResolvedValue({ ...SIP_LINKED, type: 'INCOME' });
+    await expect(updateTransactionSIPLink('tx-1', 'u1', 'MEMBER', { sipId: 'sip-1' }))
+      .rejects.toThrow(/outgoing expense/i);
+  });
+
+  it('rejects an unknown SIP', async () => {
+    txMock.findUnique.mockResolvedValue(SIP_LINKED);
+    sipMock.findFirst.mockResolvedValue(null);
+    await expect(updateTransactionSIPLink('tx-1', 'u1', 'MEMBER', { sipId: 'sip-x' }))
+      .rejects.toThrow(/SIP not found/i);
+  });
+
+  it('rejects a SIP bound to a different bank account', async () => {
+    txMock.findUnique.mockResolvedValue({ ...SIP_LINKED, bankAccountId: 'acct-1' });
+    sipMock.findFirst.mockResolvedValue({ ...MOCK_SIP, bankAccountId: 'acct-other' });
+    await expect(updateTransactionSIPLink('tx-1', 'u1', 'MEMBER', { sipId: 'sip-1' }))
+      .rejects.toThrow(/different bank account/i);
+  });
 });
 
 describe('removeTransactionSIPLink', () => {
@@ -1019,6 +1603,32 @@ describe('removeTransactionSIPLink', () => {
   it('rejects transactions without a SIP link', async () => {
     txMock.findUnique.mockResolvedValue({ ...MOCK_TX, sipId: null, sipTransactionId: null });
     await expect(removeTransactionSIPLink('tx-1', 'u1', 'MEMBER')).rejects.toThrow(/not marked as SIP/i);
+  });
+
+  it('rejects an unknown transaction', async () => {
+    txMock.findUnique.mockResolvedValue(null);
+    await expect(removeTransactionSIPLink('tx-x', 'u1', 'MEMBER')).rejects.toThrow(/Transaction not found/i);
+  });
+
+  it('rejects a soft-deleted transaction', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, sipId: 'sip-1', deletedAt: new Date() });
+    await expect(removeTransactionSIPLink('tx-1', 'u1', 'MEMBER')).rejects.toThrow(/Transaction not found/i);
+  });
+
+  it("forbids a MEMBER from unlinking another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, userId: 'other-user', sipId: 'sip-1' });
+    await expect(removeTransactionSIPLink('tx-1', 'u1', 'MEMBER')).rejects.toThrow(/Forbidden/i);
+  });
+
+  it("allows an ADMIN to unlink another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, id: 'tx-1', userId: 'other-user', sipId: 'sip-1', sipTransactionId: null });
+
+    await removeTransactionSIPLink('tx-1', 'admin-1', 'ADMIN');
+
+    expect(txMock.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'tx-1' },
+      data: expect.objectContaining({ sipId: null, sipTransactionId: null }),
+    }));
   });
 });
 
@@ -1063,6 +1673,65 @@ describe('updateTransactionInsurancePolicyLink', () => {
       updateTransactionInsurancePolicyLink('tx-1', 'u1', 'MEMBER', { insurancePolicyId: 'pol-1' }),
     ).rejects.toThrow(/outgoing expense/i);
   });
+
+  const POLICY_ELIGIBLE = { ...MOCK_TX, type: 'EXPENSE', transferPairId: null, sipId: null, sipTransactionId: null };
+
+  it('rejects an unknown transaction', async () => {
+    txMock.findUnique.mockResolvedValue(null);
+    await expect(updateTransactionInsurancePolicyLink('tx-x', 'u1', 'MEMBER', { insurancePolicyId: 'pol-1' }))
+      .rejects.toThrow(/Transaction not found/i);
+  });
+
+  it('rejects a soft-deleted transaction', async () => {
+    txMock.findUnique.mockResolvedValue({ ...POLICY_ELIGIBLE, deletedAt: new Date() });
+    await expect(updateTransactionInsurancePolicyLink('tx-1', 'u1', 'MEMBER', { insurancePolicyId: 'pol-1' }))
+      .rejects.toThrow(/Transaction not found/i);
+  });
+
+  it("forbids a MEMBER from linking another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...POLICY_ELIGIBLE, userId: 'other-user' });
+    await expect(updateTransactionInsurancePolicyLink('tx-1', 'u1', 'MEMBER', { insurancePolicyId: 'pol-1' }))
+      .rejects.toThrow(/Forbidden/i);
+  });
+
+  it("allows an ADMIN to link another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...POLICY_ELIGIBLE, userId: 'other-user' });
+    policyMock.findFirst.mockResolvedValue({ id: 'pol-1' });
+
+    await updateTransactionInsurancePolicyLink('tx-1', 'admin-1', 'ADMIN', { insurancePolicyId: 'pol-1' });
+
+    // The policy is looked up against the transaction OWNER, not the admin.
+    expect(policyMock.findFirst).toHaveBeenCalledWith({
+      where: { id: 'pol-1', userId: 'other-user' },
+      select: { id: true },
+    });
+  });
+
+  it('rejects transfer transactions', async () => {
+    txMock.findUnique.mockResolvedValue({ ...POLICY_ELIGIBLE, transferPairId: 'pair-1' });
+    await expect(updateTransactionInsurancePolicyLink('tx-1', 'u1', 'MEMBER', { insurancePolicyId: 'pol-1' }))
+      .rejects.toThrow(/Transfer transactions cannot be linked to an insurance policy/i);
+  });
+
+  it('rejects refund transactions', async () => {
+    txMock.findUnique.mockResolvedValue({ ...POLICY_ELIGIBLE, refundForTransactionId: 'expense-1' });
+    await expect(updateTransactionInsurancePolicyLink('tx-1', 'u1', 'MEMBER', { insurancePolicyId: 'pol-1' }))
+      .rejects.toThrow(/Refund transactions cannot be linked to an insurance policy/i);
+  });
+
+  it('rejects a transaction that has refunds attached to it', async () => {
+    txMock.findUnique.mockResolvedValue(POLICY_ELIGIBLE);
+    txMock.count.mockResolvedValue(1);
+    await expect(updateTransactionInsurancePolicyLink('tx-1', 'u1', 'MEMBER', { insurancePolicyId: 'pol-1' }))
+      .rejects.toThrow(/Transactions with refunds cannot be linked to an insurance policy/i);
+  });
+
+  it('rejects an unknown policy', async () => {
+    txMock.findUnique.mockResolvedValue(POLICY_ELIGIBLE);
+    policyMock.findFirst.mockResolvedValue(null);
+    await expect(updateTransactionInsurancePolicyLink('tx-1', 'u1', 'MEMBER', { insurancePolicyId: 'pol-x' }))
+      .rejects.toThrow(/Insurance policy not found/i);
+  });
 });
 
 describe('removeTransactionInsurancePolicyLink', () => {
@@ -1080,6 +1749,32 @@ describe('removeTransactionInsurancePolicyLink', () => {
   it('rejects transactions without a policy link', async () => {
     txMock.findUnique.mockResolvedValue({ ...MOCK_TX, insurancePolicyId: null });
     await expect(removeTransactionInsurancePolicyLink('tx-1', 'u1', 'MEMBER')).rejects.toThrow(/not linked/i);
+  });
+
+  it('rejects an unknown transaction', async () => {
+    txMock.findUnique.mockResolvedValue(null);
+    await expect(removeTransactionInsurancePolicyLink('tx-x', 'u1', 'MEMBER')).rejects.toThrow(/Transaction not found/i);
+  });
+
+  it('rejects a soft-deleted transaction', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, insurancePolicyId: 'pol-1', deletedAt: new Date() });
+    await expect(removeTransactionInsurancePolicyLink('tx-1', 'u1', 'MEMBER')).rejects.toThrow(/Transaction not found/i);
+  });
+
+  it("forbids a MEMBER from unlinking another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, userId: 'other-user', insurancePolicyId: 'pol-1' });
+    await expect(removeTransactionInsurancePolicyLink('tx-1', 'u1', 'MEMBER')).rejects.toThrow(/Forbidden/i);
+  });
+
+  it("allows an ADMIN to unlink another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, id: 'tx-1', userId: 'other-user', insurancePolicyId: 'pol-1' });
+
+    await removeTransactionInsurancePolicyLink('tx-1', 'admin-1', 'ADMIN');
+
+    expect(txMock.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'tx-1' },
+      data: expect.objectContaining({ insurancePolicyId: null }),
+    }));
   });
 });
 
@@ -1118,6 +1813,72 @@ describe('updateTransactionRefundLink', () => {
       updateTransactionRefundLink('tx-1', 'u1', 'MEMBER', { refundForTransactionId: 'expense-x' }),
     ).rejects.toThrow(/original expense/i);
   });
+
+  const REFUND_ELIGIBLE = {
+    ...MOCK_TX, id: 'refund-1', type: 'INCOME', transferPairId: null,
+    sipId: null, sipTransactionId: null, insurancePolicyId: null,
+  };
+
+  it('rejects an unknown transaction', async () => {
+    txMock.findUnique.mockResolvedValue(null);
+    await expect(updateTransactionRefundLink('tx-x', 'u1', 'MEMBER', { refundForTransactionId: 'expense-1' }))
+      .rejects.toThrow(/Transaction not found/i);
+  });
+
+  it('rejects a soft-deleted transaction', async () => {
+    txMock.findUnique.mockResolvedValue({ ...REFUND_ELIGIBLE, deletedAt: new Date() });
+    await expect(updateTransactionRefundLink('refund-1', 'u1', 'MEMBER', { refundForTransactionId: 'expense-1' }))
+      .rejects.toThrow(/Transaction not found/i);
+  });
+
+  it("forbids a MEMBER from linking another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...REFUND_ELIGIBLE, userId: 'other-user' });
+    await expect(updateTransactionRefundLink('refund-1', 'u1', 'MEMBER', { refundForTransactionId: 'expense-1' }))
+      .rejects.toThrow(/Forbidden/i);
+  });
+
+  it("allows an ADMIN to link another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...REFUND_ELIGIBLE, userId: 'other-user' });
+    txMock.findFirst.mockResolvedValue({ id: 'expense-1', transferPairId: null });
+
+    await updateTransactionRefundLink('refund-1', 'admin-1', 'ADMIN', { refundForTransactionId: 'expense-1' });
+
+    // The refunded expense is looked up against the transaction OWNER, not the admin.
+    expect(txMock.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ userId: 'other-user' }),
+    }));
+  });
+
+  it('rejects transfer transactions', async () => {
+    txMock.findUnique.mockResolvedValue({ ...REFUND_ELIGIBLE, transferPairId: 'pair-1' });
+    await expect(updateTransactionRefundLink('refund-1', 'u1', 'MEMBER', { refundForTransactionId: 'expense-1' }))
+      .rejects.toThrow(/Transfer transactions cannot be linked as refunds/i);
+  });
+
+  it('rejects SIP transactions', async () => {
+    txMock.findUnique.mockResolvedValue({ ...REFUND_ELIGIBLE, sipId: 'sip-1' });
+    await expect(updateTransactionRefundLink('refund-1', 'u1', 'MEMBER', { refundForTransactionId: 'expense-1' }))
+      .rejects.toThrow(/SIP transactions cannot be linked as refunds/i);
+  });
+
+  it('rejects policy-linked transactions', async () => {
+    txMock.findUnique.mockResolvedValue({ ...REFUND_ELIGIBLE, insurancePolicyId: 'pol-1' });
+    await expect(updateTransactionRefundLink('refund-1', 'u1', 'MEMBER', { refundForTransactionId: 'expense-1' }))
+      .rejects.toThrow(/Policy-linked transactions cannot be linked as refunds/i);
+  });
+
+  it('rejects a transaction refunding itself', async () => {
+    txMock.findUnique.mockResolvedValue(REFUND_ELIGIBLE);
+    await expect(updateTransactionRefundLink('refund-1', 'u1', 'MEMBER', { refundForTransactionId: 'refund-1' }))
+      .rejects.toThrow(/cannot refund itself/i);
+  });
+
+  it('rejects refunding a transfer leg', async () => {
+    txMock.findUnique.mockResolvedValue(REFUND_ELIGIBLE);
+    txMock.findFirst.mockResolvedValue({ id: 'expense-1', transferPairId: 'pair-1' });
+    await expect(updateTransactionRefundLink('refund-1', 'u1', 'MEMBER', { refundForTransactionId: 'expense-1' }))
+      .rejects.toThrow(/Transfer transactions cannot be refunded/i);
+  });
 });
 
 describe('removeTransactionRefundLink', () => {
@@ -1135,6 +1896,32 @@ describe('removeTransactionRefundLink', () => {
   it('rejects transactions without a refund link', async () => {
     txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'INCOME', refundForTransactionId: null });
     await expect(removeTransactionRefundLink('tx-1', 'u1', 'MEMBER')).rejects.toThrow(/not linked as a refund/i);
+  });
+
+  it('rejects an unknown transaction', async () => {
+    txMock.findUnique.mockResolvedValue(null);
+    await expect(removeTransactionRefundLink('tx-x', 'u1', 'MEMBER')).rejects.toThrow(/Transaction not found/i);
+  });
+
+  it('rejects a soft-deleted transaction', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, refundForTransactionId: 'expense-1', deletedAt: new Date() });
+    await expect(removeTransactionRefundLink('tx-1', 'u1', 'MEMBER')).rejects.toThrow(/Transaction not found/i);
+  });
+
+  it("forbids a MEMBER from unlinking another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, userId: 'other-user', refundForTransactionId: 'expense-1' });
+    await expect(removeTransactionRefundLink('tx-1', 'u1', 'MEMBER')).rejects.toThrow(/Forbidden/i);
+  });
+
+  it("allows an ADMIN to unlink another member's transaction", async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, id: 'tx-1', userId: 'other-user', refundForTransactionId: 'expense-1' });
+
+    await removeTransactionRefundLink('tx-1', 'admin-1', 'ADMIN');
+
+    expect(txMock.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'tx-1' },
+      data: expect.objectContaining({ refundForTransactionId: null }),
+    }));
   });
 });
 
@@ -1161,6 +1948,20 @@ describe('updateTransaction', () => {
   it('throws Forbidden when MEMBER tries to edit another user\'s transaction', async () => {
     txMock.findUnique.mockResolvedValue({ ...MOCK_TX, userId: 'u2' });
     await expect(updateTransaction('tx-1', 'u1', 'MEMBER', {})).rejects.toThrow(/forbidden|access denied/i);
+  });
+
+  it('rejects a type change on a transaction that has active refunds', async () => {
+    // Changing EXPENSE → INCOME would orphan the refund rows pointing at it.
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'EXPENSE' });
+    txMock.count.mockResolvedValue(2);
+
+    await expect(updateTransaction('tx-1', 'u1', 'MEMBER', { type: 'INCOME' }))
+      .rejects.toThrow(/Transactions with refunds cannot change type/i);
+
+    expect(txMock.count).toHaveBeenCalledWith({
+      where: { refundForTransactionId: 'tx-1', deletedAt: null },
+    });
+    expect(acctMock.update).not.toHaveBeenCalled();
   });
 
   it('recalculates account balance when amount changes', async () => {
@@ -1310,6 +2111,21 @@ describe('softDeleteTransaction', () => {
   it('throws Forbidden when MEMBER tries to delete another user\'s transaction', async () => {
     txMock.findUnique.mockResolvedValue({ ...MOCK_TX, userId: 'u2' });
     await expect(softDeleteTransaction('tx-1', 'u1', 'MEMBER')).rejects.toThrow(/forbidden|access denied/i);
+  });
+
+  it('refuses to delete an expense that still has refunds linked to it', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'EXPENSE' });
+    txMock.count.mockResolvedValue(1);
+
+    await expect(softDeleteTransaction('tx-1', 'u1', 'MEMBER'))
+      .rejects.toThrow(/Remove refund links before deleting the original expense/i);
+
+    expect(txMock.count).toHaveBeenCalledWith({
+      where: { refundForTransactionId: 'tx-1', deletedAt: null },
+    });
+    // Nothing is mutated — neither the soft-delete nor the balance reversal.
+    expect(txMock.update).not.toHaveBeenCalled();
+    expect(acctMock.update).not.toHaveBeenCalled();
   });
 
   it('sets deletedAt and reverses account balance for EXPENSE', async () => {
@@ -1593,6 +2409,13 @@ describe('buildCsv', () => {
   it('escapes double-quotes in remark', () => {
     const csv = buildCsv([makeRow({ remark: 'Bank "remark"' })]);
     expect(csv).toContain('"Bank ""remark"""');
+  });
+
+  it('renders an empty quoted field for a null remark', () => {
+    const csv = buildCsv([makeRow({ remark: null })]);
+    const cols = csv.split('\r\n')[1].split(',');
+    expect(cols[2]).toBe('""'); // Remark is the 3rd column
+    expect(csv).not.toContain('null');
   });
 
   it('formats amount with 2 decimal places', () => {

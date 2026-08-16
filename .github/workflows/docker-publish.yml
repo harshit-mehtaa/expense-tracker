@@ -48,15 +48,11 @@ jobs:
         working-directory: ./backend
         run: npx tsc --noEmit
 
-      # Deliberately `test`, not `test:coverage`. vitest.config.ts still asks for 100%,
-      # but actual coverage is ~93% statements / 89% branches — routes/documents.ts,
-      # routes/categoryRules.ts and services/categoryRuleService.ts are at 0%, having
-      # been added while untracked and so never covered. Gating on coverage today would
-      # fail every build. The 100% target stays in vitest.config.ts as the goal; switch
-      # this step to test:coverage once the gap is backfilled.
+      # Gates on coverage: vitest.config.ts requires 100% statements/branches/functions/
+      # lines and the suite meets it. A drop below 100% fails the build by design.
       - name: Test backend
         working-directory: ./backend
-        run: npm run test
+        run: npm run test:coverage
 
       # ── Frontend ───────────────────────────────────────────────────────────
       - name: Install frontend deps

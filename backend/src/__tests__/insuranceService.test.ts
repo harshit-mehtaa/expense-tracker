@@ -35,6 +35,7 @@ import {
   updateInsurancePolicy,
   deleteInsurancePolicy,
   get80DSummary,
+  getInsurancePolicyForAudit,
 } from '../services/insuranceService';
 
 const policyMock = (prisma as any).insurancePolicy;
@@ -171,6 +172,26 @@ describe('deleteInsurancePolicy', () => {
   it('throws NotFound when policy does not exist', async () => {
     policyMock.findFirst.mockResolvedValue(null);
     await expect(deleteInsurancePolicy('u1', 'pol-x')).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('getInsurancePolicyForAudit', () => {
+  it('scopes to the requester for MEMBER', async () => {
+    policyMock.findFirst.mockResolvedValue(MOCK_POLICY);
+    const result = await getInsurancePolicyForAudit('u1', 'pol-1', 'MEMBER');
+    expect(policyMock.findFirst).toHaveBeenCalledWith({ where: { id: 'pol-1', userId: 'u1' } });
+    expect(result).toBe(MOCK_POLICY);
+  });
+
+  it('drops the owner filter for ADMIN', async () => {
+    await getInsurancePolicyForAudit('admin-1', 'pol-1', 'ADMIN');
+    expect(policyMock.findFirst).toHaveBeenCalledWith({ where: { id: 'pol-1' } });
+  });
+
+  it('returns null when not found', async () => {
+    policyMock.findFirst.mockResolvedValue(null);
+    const result = await getInsurancePolicyForAudit('u1', 'nonexistent');
+    expect(result).toBeNull();
   });
 });
 

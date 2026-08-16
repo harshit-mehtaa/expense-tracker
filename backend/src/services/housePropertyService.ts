@@ -11,9 +11,10 @@ export async function listHouseProperties(userId: string, fy: string) {
   });
 }
 
-export async function getHouseProperty(userId: string, id: string) {
+/** Also serves as the audit-snapshot fetch for the tax route's PUT/DELETE handlers. */
+export async function getHouseProperty(requesterId: string, id: string, requesterRole = 'MEMBER') {
   return prisma.housePropertyDetail.findFirst({
-    where: { id, userId, deletedAt: null },
+    where: { ...ownerScopedWhere(id, requesterId, requesterRole), deletedAt: null },
   });
 }
 

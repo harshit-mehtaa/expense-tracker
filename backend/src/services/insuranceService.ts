@@ -99,6 +99,11 @@ export async function deleteInsurancePolicy(requesterId: string, id: string, req
   return prisma.insurancePolicy.delete({ where: { id } });
 }
 
+/** Snapshot fetch for audit logging — see loanService.getLoanForAudit for the rationale. */
+export async function getInsurancePolicyForAudit(requesterId: string, id: string, requesterRole = 'MEMBER') {
+  return prisma.insurancePolicy.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
+}
+
 export async function get80DSummary(userId: string, requesterId: string, requesterRole: string) {
   const effectiveUserId = requesterRole === 'ADMIN' && userId ? userId : requesterId;
   const policies = await prisma.insurancePolicy.findMany({ where: { userId: effectiveUserId, is80dEligible: true } });

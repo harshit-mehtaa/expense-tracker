@@ -47,6 +47,7 @@ import {
   deleteUser,
   resetUserPassword,
   getAuditLog,
+  getUserForAudit,
 } from '../services/adminService';
 
 const userMock = (prisma as any).user;
@@ -192,6 +193,32 @@ describe('deleteUser', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // resetUserPassword
 // ─────────────────────────────────────────────────────────────────────────────
+
+describe('getUserForAudit', () => {
+  it('queries by id + deletedAt:null with the PII-safe select', async () => {
+    await getUserForAudit('u1');
+    expect(userMock.findFirst).toHaveBeenCalledWith({
+      where: { id: 'u1', deletedAt: null },
+      select: expect.objectContaining({
+        id: true, name: true, email: true, role: true, isActive: true,
+        colorTag: true, panNumberMasked: true, mustChangePassword: true,
+        createdAt: true, updatedAt: true, deletedAt: true,
+      }),
+    });
+  });
+
+  it('the select never includes passwordHash', async () => {
+    await getUserForAudit('u1');
+    const call = userMock.findFirst.mock.calls[0][0];
+    expect(call.select).not.toHaveProperty('passwordHash');
+  });
+
+  it('returns null when the user does not exist or is soft-deleted', async () => {
+    userMock.findFirst.mockResolvedValue(null);
+    const result = await getUserForAudit('u-x');
+    expect(result).toBeNull();
+  });
+});
 
 describe('resetUserPassword', () => {
   it('throws NotFound when user does not exist', async () => {

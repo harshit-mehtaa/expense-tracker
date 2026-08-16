@@ -13,15 +13,18 @@ import { getNetExpenseByUserCategory } from '../utils/refundReporting';
 const router = Router();
 router.use(requireAuth);
 
+// userName is non-optional: both callers below build it as `user?.name ?? ''` after the
+// spread, so it is always a string by the time it reaches here. Typing it as optional
+// would invite a `?? ''` fallback that can never run.
 function compareBudgetCategoryNames(
-  a: { category?: { name?: string | null } | null; userName?: string | null },
-  b: { category?: { name?: string | null } | null; userName?: string | null },
+  a: { category?: { name?: string | null } | null; userName: string },
+  b: { category?: { name?: string | null } | null; userName: string },
 ) {
   const categoryCompare = (a.category?.name ?? 'Unknown').localeCompare(b.category?.name ?? 'Unknown', undefined, {
     sensitivity: 'base',
   });
   if (categoryCompare !== 0) return categoryCompare;
-  return (a.userName ?? '').localeCompare(b.userName ?? '', undefined, { sensitivity: 'base' });
+  return a.userName.localeCompare(b.userName, undefined, { sensitivity: 'base' });
 }
 
 const budgetSchema = z.object({

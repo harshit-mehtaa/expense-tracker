@@ -15,7 +15,12 @@ export default defineConfig({
         'dist/',
         'prisma/',
         'src/__tests__/',
-        'src/index.ts',       // Express bootstrap — no testable business logic
+        // NOT just bootstrap: also holds sanitizeFilename (stored-XSS mitigation), the
+        // multer fileFilter upload boundary, and the ~130-line POST /api/transactions/import
+        // handler — all at 0%. Untestable only because app.listen() runs at module scope,
+        // so nothing can import it. Fix is to extract createApp() + routes/import.ts, then
+        // drop this exclusion. Until then "100% coverage" excludes real business logic.
+        'src/index.ts',
         'src/config/prisma.ts', // Prisma singleton — infrastructure, not business logic
       ],
       thresholds: {

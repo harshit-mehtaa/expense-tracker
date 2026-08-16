@@ -1,75 +1,57 @@
 # Task Progress
 
-## Status: idle
-## Last Task: Make the orchestrator portable; add pi/Qwen support
-## Last Completed: 2026-08-13
-## Steps Completed: all
-## Commits pushed to origin/main: b738193, dab4c40, aad140d, e6a7488, c8f1658
+## Status: review_complete (awaiting user COMMIT approval)
+## Task: 100% backend test coverage (frontend deferred to its own future pipeline)
+## Started: 2026-08-16
+## Steps Completed: analyze, plan, approve, implement, review
 
-## pi harness — verified facts (from pi.dev docs, 2026-08-13)
-- NO sub-agent primitive. Workaround: `pi -p --no-session --no-context-files
-  --model <id> "<prompt>"` via .claude/bin/aco-agent. Better than the tmux the docs suggest.
-- NO hook config. Extensions are TypeScript, auto-discovered from `.pi/extensions/*.ts`
-  (project-local, travels in git) or `~/.pi/agent/extensions/`. Events used:
-  session_start, tool_result, turn_end, agent_end. Full list also has tool_call,
-  before_agent_start, session_shutdown, before_provider_request, model_select, etc.
-- READS BOTH AGENTS.md AND CLAUDE.md (`--no-context-files` disables exactly those two).
-  The pi.dev landing page claiming no CLAUDE.md support is wrong.
-- Models: `~/.pi/agent/models.json` (NOT in-repo). Ollama via baseUrl
-  http://localhost:11434/v1, api "openai-completions". Qwen thinking needs
-  thinkingFormat "qwen-chat-template".
-- Flags: -p/--print, --model, --provider, --thinking, --no-session,
-  --no-context-files/-nc, --tools/-t, --exclude-tools/-xt, --no-builtin-tools/-nbt,
-  --no-tools/-nt, --mode json|rpc.
-- No documented session env vars -> ACO_PLATFORM override is the reliable detection path.
-  The PI_* sniffing in portable.sh is a labelled guess behind that override.
+## OUTCOME — all 13 steps done, all gates green
+- `npm run test:coverage` **exits 0**; 100% statements/branches/functions/lines
+- 48 test files / 1720 tests passing (baseline was 39 files / 1226 tests, 93.66/89.41)
+- `tsc --noEmit` clean; `vitest.config.ts` untouched (thresholds 100, exclude list unchanged)
+- CI now gates on coverage (`docker-publish.yml` "Test backend" → `npm run test:coverage`)
 
-## UNTESTED — first thing to check on the pi machine
-.claude/bin/aco-agent and .pi/extensions/aco.ts were written from docs with no live pi.
-Most likely break: event payload field names in aco.ts (file path / tool name extraction).
-Debug by logging JSON.stringify(event) in the handler. Both fail silently by design.
+## Production changes made (everything else was tests)
+- **Step 3 refactor, 28 sites**: `isTest ? null : await prisma.X.findFirst(...)` in route
+  handlers → service-owned `*ForAudit` getters, in `routes/{loans,insurance,admin,tax,
+  investments}.ts`. `safeUserSelect` (PII allow-list, excludes passwordHash) moved into
+  `adminService.ts`. `getRealEstateForAudit` left intentionally UNSCOPED to match prior
+  behavior; `getExchangeRateForAudit` is 1-arg (rates are global).
+- **`routes/budgets.ts`** (unplanned, from a review finding): narrowed
+  `compareBudgetCategoryNames`'s `userName` to `string`, deleting two provably-dead
+  `?? ''` fallbacks.
+- **`services/importService.ts`**: added a documented `/* c8 ignore next */` on the
+  `if (transaction.paymentMode)` guard. Takes repo count 27 → 28.
 
-## Key learning — validation gap that mattered
-The member-avatar change passed `tsc`, 156 unit tests, and a grep of the served module,
-yet contained a conditional `useMemo` (placed after `if (isLoading) return`) that would
-have crashed the transactions page the moment loading finished. NONE of those checks
-render the component, so none could catch it. `react-hooks/rules-of-hooks` caught it
-within minutes of ESLint first having a config.
-Lesson: for React changes, static hook rules are load-bearing; unit tests that never
-mount the component prove very little about render-time correctness.
-No headless browser is installed (no playwright/puppeteer), so visual confirmation
-still depends on the user.
+## !! Step 11 LANDMINE — do NOT re-attempt !!
+The plan claimed the catch block in `importService.ts` (~:592) was provably dead and must
+be DELETED. **That premise is false.** It was deleted once and **21 tests failed**: under
+Vitest's ESM mock a namespace object is a Proxy that THROWS on undefined exports, so the
+guard is load-bearing in tests even though it looks dead against the real package. It was
+reverted; only an explanatory comment was added. Do not delete it again.
 
-## CI gate (new, .github/workflows/docker-publish.yml)
-`quality` job: backend tsc + tests, frontend lint + tsc + tests. All publish jobs now
-`needs: [quality]`. Workflow also runs on pull_request, where publish jobs are skipped
-via `if: github.event_name != 'pull_request'`. All 5 steps verified passing locally
-before push, so the first CI run should be green.
+## Review outcome (quality + compliance + adversarial, all 3 run)
+Fixes applied from findings:
+- **HIGH (adversarial)**: `vision.md` had disclosed "excludes src/index.ts"; my rewrite
+  dropped it while asserting a bare "100%". Caveat RESTORED + the false
+  "no testable business logic" comment in `vitest.config.ts` corrected. `index.ts` (287
+  lines) holds `sanitizeFilename`, the multer `fileFilter`, and the ~130-line import
+  handler at 0%. Untestable only because `app.listen()` runs at module scope.
+- **HIGH (quality)**: 9 new test files were UNTRACKED — would have shipped the CI coverage
+  gate on a tree missing them. Must be `git add`ed.
+- **MED (adversarial)**: `dashboardService.ts`'s `c8 ignore` was provably FALSE (reachable
+  Jan-31 + dueDate-31, verified numerically). Removed, replaced with a real test.
+- **MED (adversarial)**: `getRealEstateForAudit` now owner-scoped like its 9 siblings.
+- **MED (compliance)**: `architecture.md`/`progress.md`/`vision.md` reconciled.
+- **LOW**: false "2-arg callers" rationale fixed; `vision.md`'s "never hard-deleted"
+  invariant corrected (8 financial entities ARE hard-deleted).
+**`c8 ignore` net 27 → 27** — added 1 justified, removed 1 false. Gate HONOURED.
+Verified on Node 20 (CI pin) + Node 25, TZ=UTC: exit 0, 100%, 1722 tests.
 
-## Backend coverage is NOT 100% (verified by running test:coverage)
-Actual: 93.66% stmts / 89.41% branches / 96.91% funcs / 93.66% lines. 1226 tests pass.
-Zero-coverage files, all added while untracked so never covered:
-  routes/documents.ts (0%, 1-257), routes/categoryRules.ts (0%, 1-51),
-  services/categoryRuleService.ts (0%, 1-95), services/auditService.ts (53%)
-User's decision: keep the 100% target in vitest.config.ts, gate CI on `npm run test`
-only. Switch the CI step to `test:coverage` once the gap is backfilled.
+## Follow-ups logged as debt (see vision.md)
+43 raw prisma calls still in route handlers; 3 hand-rolled `resolveTargetUserId` dupes;
+declined `auditService.ts:20` guard removal; the 10 `*ForAudit` getters duplicate their
+mutation's `where` clause and could collapse into `updateX` returning `{before, after}`.
 
-## ESLint config (new, frontend/.eslintrc.cjs)
-no-explicit-any deferred OFF (180 sites, report/chart mapping).
-react-refresh/only-export-components OFF (contexts export hooks by design).
-react-hooks/rules-of-hooks ERROR, exhaustive-deps WARN — these are the value.
-no-unused-vars honours the `^_` prefix convention.
-Backend still has NO lint config at all.
-
-## Remaining backlog (verified, unfixed)
-- [medium] FamilyMembers.tsx:164 `user.name[0]` throws on empty name; admin.ts:54 PUT
-  has `name: z.string().optional()` with no .min(1) (POST at :35 has it). Reachable.
-- [medium] backend/.dockerignore absent -> Dockerfile:14 `COPY . .` copies the host's
-  346MB node_modules (incl. libquery_engine-darwin-arm64.dylib.node) into the Linux image.
-- [medium] admin.ts:40,59 colorTag unvalidated (guarded in UI only).
-- [medium] Five different colorTag-less fallback colours: Header.tsx:143 '#7c3aed',
-  FamilyMembers.tsx:162 '#666', dashboardService.ts:665 '#6366f1', lib/memberAvatar.ts.
-- [medium] Backfill tests for the 4 zero/low-coverage files to restore real 100%.
-- [low] `make build` overdue — dev image dated 2026-05-02 07:51, stale in src/ and prisma/.
-- [low] vision.md "What We Will NOT Do" still holds my guesses, not the user's intent.
-- [note] Docker Desktop had quit; `open -a Docker` restarts it.
+## Frontend coverage: OUT OF SCOPE. Separate future ANALYZE→...→COMMIT pipeline.
+## Standing instruction: every commit includes pending .claude/ + AGENTS.md changes, pushed.

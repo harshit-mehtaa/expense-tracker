@@ -93,6 +93,11 @@ describe('getCapitalGain', () => {
     const result = await getCapitalGain('u1', 'cg-x');
     expect(result).toBeNull();
   });
+
+  it('drops the owner filter for ADMIN — can fetch another member\'s entry', async () => {
+    await getCapitalGain('admin-1', 'cg-1', 'ADMIN');
+    expect(cgMock.findFirst).toHaveBeenCalledWith({ where: { id: 'cg-1', deletedAt: null } });
+  });
 });
 
 describe('createCapitalGain', () => {

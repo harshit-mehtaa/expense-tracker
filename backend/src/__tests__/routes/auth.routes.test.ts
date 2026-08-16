@@ -3,7 +3,7 @@
  * All external dependencies are mocked — no DB, no real tokens.
  * express-rate-limit is mocked to bypass the 20-req/15min in-memory store.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import cookieParser from 'cookie-parser';
@@ -39,6 +39,7 @@ vi.mock('../../config/prisma', () => {
 import authRouter from '../../routes/auth';
 import * as authService from '../../services/authService';
 import prisma from '../../config/prisma';
+import { env } from '../../config/env';
 import { errorHandler } from '../../middleware/errorHandler';
 
 const findUniqueMock = (prisma as any).user.findUnique as ReturnType<typeof vi.fn>;
@@ -209,5 +210,73 @@ describe('POST /api/auth/change-password', () => {
     changePasswordMock.mockResolvedValue(undefined);
     await request(makeApp()).post('/api/auth/change-password').send(VALID_BODY);
     expect(changePasswordMock).toHaveBeenCalledWith('test-user-id', 'NewPass1', 'OldPass1');
+  });
+});
+
+// ─── Refresh-cookie domain scoping ────────────────────────────────────────────
+
+/**
+ * getCookieOptions reads env.COOKIE_DOMAIN at CALL time (not module-load time), so
+ * these cases mutate the live env object and restore it afterwards rather than
+ * needing a separate file with its own hoisted vi.mock.
+ *
+ * The Host header matters too: the domain is only attached when BOTH the configured
+ * domain and the request host are non-local, so a cookie issued over localhost is
+ * never scoped to a parent domain.
+ */
+describe('refresh cookie Domain attribute', () => {
+  const ORIGINAL_COOKIE_DOMAIN = env.COOKIE_DOMAIN;
+  const MOCK_RESPONSE = {
+    tokens: { accessToken: 'access-tok', refreshToken: 'refresh-tok' },
+    user: { id: 'u1', name: 'Alice', email: 'user@example.com', role: 'MEMBER', avatarUrl: null, colorTag: '#aaa', mustChangePassword: false },
+  };
+
+  beforeEach(() => {
+    loginMock.mockResolvedValue(MOCK_RESPONSE);
+  });
+
+  afterEach(() => {
+    env.COOKIE_DOMAIN = ORIGINAL_COOKIE_DOMAIN;
+  });
+
+  async function loginFrom(host: string) {
+    const res = await request(makeApp())
+      .post('/api/auth/login')
+      .set('Host', host)
+      .send({ email: 'user@example.com', password: 'secret' });
+    expect(res.status).toBe(200);
+    return String(res.headers['set-cookie']);
+  }
+
+  it('sets Domain when both the configured domain and the request host are non-local', async () => {
+    env.COOKIE_DOMAIN = 'example.com';
+    expect(await loginFrom('app.example.com')).toContain('Domain=example.com');
+  });
+
+  it('trims surrounding whitespace off the configured domain', async () => {
+    env.COOKIE_DOMAIN = '  example.com  ';
+    expect(await loginFrom('app.example.com')).toContain('Domain=example.com');
+  });
+
+  it('omits Domain when COOKIE_DOMAIN is blank', async () => {
+    env.COOKIE_DOMAIN = '';
+    expect(await loginFrom('app.example.com')).not.toContain('Domain=');
+  });
+
+  it('omits Domain when the configured domain is itself a local host', async () => {
+    env.COOKIE_DOMAIN = 'localhost';
+    expect(await loginFrom('app.example.com')).not.toContain('Domain=');
+  });
+
+  it('omits Domain when the request arrives over a local host', async () => {
+    env.COOKIE_DOMAIN = 'example.com';
+    expect(await loginFrom('localhost')).not.toContain('Domain=');
+  });
+
+  it('strips IPv6 brackets from the request host before the local-host check', async () => {
+    // req.hostname yields "[::1]" for an IPv6 literal; the bracket-strip is what lets
+    // "::1" match LOCAL_COOKIE_HOSTS and suppress the Domain attribute.
+    env.COOKIE_DOMAIN = 'example.com';
+    expect(await loginFrom('[::1]')).not.toContain('Domain=');
   });
 });

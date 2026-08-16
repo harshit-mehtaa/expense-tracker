@@ -84,6 +84,11 @@ describe('getForeignAsset', () => {
     const result = await getForeignAsset('u1', 'fa-x');
     expect(result).toBeNull();
   });
+
+  it('drops the owner filter for ADMIN — can fetch another member\'s entry', async () => {
+    await getForeignAsset('admin-1', 'fa-1', 'ADMIN');
+    expect(faMock.findFirst).toHaveBeenCalledWith({ where: { id: 'fa-1', deletedAt: null } });
+  });
 });
 
 describe('createForeignAsset', () => {

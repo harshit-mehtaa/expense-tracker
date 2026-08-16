@@ -209,6 +209,47 @@ describe('getCashflow', () => {
     expect(may.income).toBe(0);
   });
 
+  it('resolves income category names, falling back to Uncategorized', async () => {
+    txMock.groupBy
+      .mockResolvedValueOnce([]) // expense
+      .mockResolvedValueOnce([
+        { categoryId: 'cat-sal', _sum: { amount: 90000 } },
+        { categoryId: 'cat-gone', _sum: { amount: 5000 } }, // id has no Category row
+        { categoryId: null, _sum: { amount: 1000 } },
+      ]);
+    catMock.findMany.mockResolvedValue([{ id: 'cat-sal', name: 'Salary' }]);
+    const r = await getProfitAndLoss('u1', 'MEMBER', '2025-26');
+    const byName = Object.fromEntries(r.incomeCategories.map((c: any) => [c.categoryName, c.total]));
+    expect(byName['Salary']).toBe(90000);
+    // Both the dangling id and the null id collapse onto the Uncategorized label.
+    expect(r.incomeCategories.filter((c: any) => c.categoryName === 'Uncategorized')).toHaveLength(2);
+  });
+
+  it('treats a null income _sum.amount as zero', async () => {
+    txMock.groupBy
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ categoryId: 'cat-sal', _sum: { amount: null } }]);
+    catMock.findMany.mockResolvedValue([{ id: 'cat-sal', name: 'Salary' }]);
+    const r = await getProfitAndLoss('u1', 'MEMBER', '2025-26');
+    expect(r.incomeCategories[0].total).toBe(0);
+  });
+
+  it('merges per-user rows that share a category into one total', async () => {
+    // getNetExpenseByUserCategory keys its map by `userId:categoryId`, so the same
+    // category spent on by two members arrives as two entries that must be summed.
+    txMock.groupBy
+      .mockResolvedValueOnce([
+        { userId: 'u1', categoryId: 'cat-1', _sum: { amount: 5000 } },
+        { userId: 'u2', categoryId: 'cat-1', _sum: { amount: 3000 } },
+      ])
+      .mockResolvedValueOnce([]);
+    catMock.findMany.mockResolvedValue([{ id: 'cat-1', name: 'Food' }]);
+    const r = await getProfitAndLoss('admin-1', 'ADMIN', '2025-26');
+    const food = r.expenseCategories.filter((c: any) => c.categoryName === 'Food');
+    expect(food).toHaveLength(1);
+    expect(food[0].total).toBe(8000);
+  });
+
   it('ADMIN with targetUserId does not throw', async () => {
     await expect(getCashflow('admin-1', 'ADMIN', undefined, 'u2')).resolves.toHaveLength(12);
   });
@@ -389,6 +430,61 @@ describe('computeNetWorthStatement', () => {
     // realEstate aggregate uses currentValue
     expect(r.assets.realEstate).toBe(5000000);
     expect((r.assets as any).realEstateItems).toBeUndefined();
+  });
+
+  it('scales a co-owned property to the viewing member\'s share', async () => {
+    reMock.findMany.mockResolvedValue([
+      {
+        propertyName: 'Pune Flat', propertyType: 'RESIDENTIAL',
+        purchasePrice: 4000000, currentValue: 6000000, userId: 'u9',
+        owners: [
+          { userId: 'u1', sharePercent: 25 },
+          { userId: 'u2', sharePercent: 75 },
+        ],
+      },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+    expect(r.realEstateItems[0]).toMatchObject({ sharePercent: 25, amount: 1000000, currentValue: 1500000 });
+    expect(r.assets.realEstate).toBe(1500000);
+  });
+
+  it('gives the record owner a full share when the owners list omits them', async () => {
+    reMock.findMany.mockResolvedValue([
+      {
+        propertyName: 'Solo Flat', propertyType: 'RESIDENTIAL',
+        purchasePrice: 1000000, currentValue: 2000000, userId: 'u1',
+        owners: [{ userId: 'u2', sharePercent: 60 }],
+      },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+    expect(r.realEstateItems[0].sharePercent).toBe(100);
+    expect(r.assets.realEstate).toBe(2000000);
+  });
+
+  it('gives a non-owner viewer a zero share', async () => {
+    reMock.findMany.mockResolvedValue([
+      {
+        propertyName: 'Other Flat', propertyType: 'RESIDENTIAL',
+        purchasePrice: 1000000, currentValue: 2000000, userId: 'u9',
+        owners: [{ userId: 'u2', sharePercent: 100 }],
+      },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+    expect(r.realEstateItems[0].sharePercent).toBe(0);
+    expect(r.assets.realEstate).toBe(0);
+  });
+
+  it('family-wide view (no userId) counts properties at full value and omits sharePercent', async () => {
+    reMock.findMany.mockResolvedValue([
+      {
+        propertyName: 'Family Flat', propertyType: 'RESIDENTIAL',
+        purchasePrice: 1000000, currentValue: 2000000, userId: 'u9',
+        owners: [{ userId: 'u2', sharePercent: 40 }],
+      },
+    ]);
+    const r = await computeNetWorthStatement();
+    expect(r.realEstateItems[0].sharePercent).toBeUndefined();
+    expect(r.assets.realEstate).toBe(2000000);
   });
 
   it('non-INR investment with missing rateMap entry falls back to FX=1 (line 426 ?? branch)', async () => {
@@ -664,6 +760,20 @@ describe('getTrialBalance', () => {
     const r = await getTrialBalance('u1', 'MEMBER', '2025-26');
     const debitSum = r.entries.filter((e) => e.type === 'DEBIT').reduce((s, e) => s + e.debit, 0);
     expect(r.totals.totalDebits).toBe(debitSum);
+  });
+
+  it('merges per-user rows that share a category into one debit entry', async () => {
+    txMock.groupBy
+      .mockResolvedValueOnce([
+        { userId: 'u1', categoryId: 'cat-1', _sum: { amount: 4000 } },
+        { userId: 'u2', categoryId: 'cat-1', _sum: { amount: 6000 } },
+      ])
+      .mockResolvedValueOnce([]);
+    catMock.findMany.mockResolvedValue([{ id: 'cat-1', name: 'Rent' }]);
+    const r = await getTrialBalance('admin-1', 'ADMIN', '2025-26');
+    const rent = r.entries.filter((e: any) => e.accountName === 'Rent');
+    expect(rent).toHaveLength(1);
+    expect(rent[0].debit).toBe(10000);
   });
 
   it('netSavings = totalIncome - totalExpenses', async () => {
@@ -1116,6 +1226,22 @@ describe('getUpcomingAlerts', () => {
     expect(alert!.daysUntilDue).toBe(20);
   });
 
+  it('premiumDueDate=31 on Jan 31 → next occurrence lands past the 30-day window, no alert', async () => {
+    // Jan 31 12:00 with dueDate=31: this month's occurrence (Jan 31 00:00) is already past,
+    // so it bumps to "Feb 31" — which Date normalizes to Mar 3, beyond the Mar 2 cutoff.
+    // Short months push the next occurrence outside the window. This branch was previously
+    // marked `c8 ignore` as unreachable; it is reachable at the end of every short month.
+    // (Midday matters: at exactly midnight the occurrence equals `now` and never bumps.)
+    vi.setSystemTime(new Date(2026, 0, 31, 12));
+    insMock.findMany.mockResolvedValue([{
+      id: 'ins-eom', policyName: 'Term Life', providerName: 'LIC',
+      premiumAmount: 15000, premiumDueDate: 31, premiumFrequency: 'MONTHLY',
+    }]);
+    const r = await getUpcomingAlerts('u1', 'MEMBER');
+    expect(r.find((a: any) => a.type === 'INSURANCE_PREMIUM')).toBeUndefined();
+    vi.setSystemTime(PINNED_DATE); // restore outer April pin
+  });
+
   it('EMI with emiDate before today uses next-month formula (line 225 false branch)', async () => {
     // Pinned date = April 15 → today=15. emiDate=5 < 15 → daysUntil = 30-15+5 = 20 → >7 → excluded
     loanMock.findMany.mockResolvedValue([{
@@ -1201,6 +1327,64 @@ describe('getUpcomingAlerts', () => {
       const alert = r.find((a: any) => a.type === 'BUDGET_ALERT');
       expect(alert).toBeDefined();
       expect(alert!.entityId).toBe('b-oct-q');
+    });
+  });
+
+  // ── Premium-cycle window per frequency ────────────────────────────────────
+  // Clock is pinned to 2025-04-15; premiumDueDate 20 → next occurrence 2025-04-20.
+  // A payment counts as "already paid" only if it lands inside the cycle window
+  // (dueDate minus cycleMonths, dueDate]. Longer cycles accept older payments.
+  describe('insurance premium cycle windows', () => {
+    function policy(premiumFrequency: string | null, lastPaymentISO?: string) {
+      return [{
+        id: 'ins-cycle', policyName: 'Policy', providerName: 'Provider',
+        premiumAmount: 10000, premiumDueDate: 20, premiumFrequency,
+        ...(lastPaymentISO ? { transactions: [{ id: 'tx', date: new Date(lastPaymentISO) }] } : {}),
+      }];
+    }
+
+    async function hasPremiumAlert() {
+      const r = await getUpcomingAlerts('u1', 'MEMBER');
+      return r.some((a: any) => a.type === 'INSURANCE_PREMIUM');
+    }
+
+    it.each([
+      ['QUARTERLY', '2025-02-01T00:00:00.000Z'],   // window opens 2025-01-20
+      ['HALF_YEARLY', '2024-11-01T00:00:00.000Z'], // window opens 2024-10-20
+      ['ANNUALLY', '2024-06-01T00:00:00.000Z'],    // window opens 2024-04-20
+    ])('%s: a payment inside the cycle window suppresses the alert', async (freq, paidAt) => {
+      insMock.findMany.mockResolvedValue(policy(freq, paidAt));
+      expect(await hasPremiumAlert()).toBe(false);
+    });
+
+    it.each([
+      ['QUARTERLY', '2024-12-01T00:00:00.000Z'],   // before 2025-01-20
+      ['HALF_YEARLY', '2024-09-01T00:00:00.000Z'], // before 2024-10-20
+      ['ANNUALLY', '2024-03-01T00:00:00.000Z'],    // before 2024-04-20
+    ])('%s: a payment older than the cycle window still raises the alert', async (freq, paidAt) => {
+      insMock.findMany.mockResolvedValue(policy(freq, paidAt));
+      expect(await hasPremiumAlert()).toBe(true);
+    });
+
+    it('SINGLE: any recorded payment settles the policy for good', async () => {
+      // cycleMonths is null for single-premium policies — no recurring window applies.
+      insMock.findMany.mockResolvedValue(policy('SINGLE', '2001-01-01T00:00:00.000Z'));
+      expect(await hasPremiumAlert()).toBe(false);
+    });
+
+    it('SINGLE with no payment recorded still raises the alert', async () => {
+      insMock.findMany.mockResolvedValue(policy('SINGLE'));
+      expect(await hasPremiumAlert()).toBe(true);
+    });
+
+    it('an unrecognized frequency falls back to a 1-month cycle', async () => {
+      insMock.findMany.mockResolvedValue(policy('FORTNIGHTLY', '2025-04-01T00:00:00.000Z'));
+      expect(await hasPremiumAlert()).toBe(false); // inside the 2025-03-20 window
+    });
+
+    it('a null frequency also falls back to a 1-month cycle', async () => {
+      insMock.findMany.mockResolvedValue(policy(null, '2025-01-01T00:00:00.000Z'));
+      expect(await hasPremiumAlert()).toBe(true); // older than the 2025-03-20 window
     });
   });
 });
