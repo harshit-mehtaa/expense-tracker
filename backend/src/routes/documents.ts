@@ -9,13 +9,15 @@ import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendCreated, sendNoContent, sendSuccess } from '../utils/response';
 import { prisma } from '../config/prisma';
+import { env } from '../config/env';
+import { sanitizeFilename } from '../utils/sanitizeFilename';
 import { AppError } from '../utils/AppError';
 import { recordAuditLog } from '../services/auditService';
 
 const router = Router();
 router.use(requireAuth);
 
-const uploadsRoot = '/app/uploads';
+const uploadsRoot = env.UPLOADS_DIR;
 const uploadsRootResolved = path.resolve(uploadsRoot);
 const documentsDir = path.join(uploadsRoot, 'documents');
 if (!fs.existsSync(documentsDir)) fs.mkdirSync(documentsDir, { recursive: true });
@@ -67,10 +69,6 @@ const upload = multer({
     else cb(new AppError('Unsupported document type', 400));
   },
 });
-
-function sanitizeFileName(name: string): string {
-  return name.replace(/[<>"'/\\]/g, '_').replace(/[\x00-\x1f]/g, '').slice(0, 200);
-}
 
 function unlinkQuietly(filePath: string | undefined): void {
   if (!filePath) return;
@@ -208,7 +206,7 @@ router.post('/', upload.single('file'), asyncHandler(async (req, res) => {
       userId: ownerId,
       relatedEntityType: parsed.data.entityType,
       relatedEntityId: parsed.data.entityId,
-      fileName: sanitizeFileName(req.file.originalname),
+      fileName: sanitizeFilename(req.file.originalname),
       filePath: `documents/${req.file.filename}`,
       fileSize: req.file.size,
       mimeType: req.file.mimetype,

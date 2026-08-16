@@ -44,14 +44,18 @@
   route-level tests observe the payload by mocking the module, so the guard is no longer
   needed for testability. Declined in 2026-08-16 as too wide a blast radius (every
   existing test would attempt a real audit write). Revisit deliberately, not casually.
-- [high] `src/index.ts` (287 lines) is excluded from the coverage gate but is NOT just
-  bootstrap: `sanitizeFilename` (stored-XSS mitigation), the multer `fileFilter` upload
-  boundary, and the whole `POST /api/transactions/import` handler live there at 0%. Two
-  known bug patterns sit inside it unmeasured: it returns **HTTP 201 after a total batch-
-  insert failure** (catch sets `imported = 0` then falls through to `sendCreated`), and it
-  does an unbounded serial insert loop inside one open `$transaction`. Fix: extract
-  `createApp()` + `routes/import.ts` so `index.ts` is only `app.listen`, then drop the
-  exclusion. Until then, "100% backend coverage" has an asterisk.
+- [medium] The import insert loop (`services/statementImportService.ts`) is serial and
+  unbounded inside one open `$transaction`. Prisma's default interactive-transaction
+  timeout is 5s, so a large statement throws P2028 — which now surfaces as a clear 500
+  rather than the old silent "201, imported: 0". Fix with `createMany` or chunking; both
+  change dedup/atomicity semantics, so it needs its own plan.
+- [medium] `transactionService.bulkImportTransactions` (~:1133) is DEAD (zero non-test
+  callers) yet fully tested, so it inflates the coverage denominator with unreachable code.
+  It also writes `bankStatementImport.filename` UNSANITIZED at ~:1169 — bypassing
+  `utils/sanitizeFilename`, which the other writer applies. And its `buildImportHash`
+  (~:34) disagrees with the live `makeImportHash` (omits `type`, applies `Math.abs`), so
+  if it were ever wired up, dedup would silently diverge. No live vector today because
+  nothing calls it. Delete it (and its ~50 lines of tests) as its own task.
 - [medium] No backend lint at all — `tsc --noEmit` and tests are the only backend gates.
   Style/quality issues that ESLint would catch on the frontend go unchecked here.
 - [medium] Frontend has ~3% coverage and no test mounts a page component. Explicitly
@@ -71,11 +75,11 @@
 ## Quality Thresholds
 - Backend: `tsc --noEmit` clean, `npm run test:coverage` green (1720 tests as of last
   scan) at **100% statements/branches/functions/lines — enforced in CI**, not aspirational.
-  **Caveat, read this before quoting the 100%:** `vitest.config.ts` excludes `src/index.ts`
-  and `src/config/prisma.ts`. The `index.ts` exclusion is NOT harmless — it holds
-  `sanitizeFilename` (stored-XSS mitigation), the multer upload `fileFilter` (the upload
-  security boundary), and the whole ~130-line `POST /api/transactions/import` handler, all
-  at 0%. "100% backend coverage" means 100% of everything except that file.
+  The only remaining coverage exclusion is `src/config/prisma.ts` (a third-party singleton
+  with no branches). `src/index.ts` used to be excluded too, which hid the entire bank-
+  statement import handler, the multer upload filter and the filename sanitizer at 0% —
+  that was fixed by extracting `app.ts` / `routes/import.ts` / `statementImportService.ts`.
+  The 100% figure no longer carries an asterisk.
 - Frontend: `npm run lint` clean (0 warnings for the rules currently enabled),
   `tsc --noEmit` clean, `npm run test` green.
 - CI (`quality` job) runs all of the above on every PR and push to `main`; every other

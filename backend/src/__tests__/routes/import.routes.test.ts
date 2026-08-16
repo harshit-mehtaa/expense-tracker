@@ -1,243 +1,470 @@
 /**
- * Integration smoke tests for POST /api/transactions/import.
- * Builds a minimal Express app (same middleware stack as index.ts)
- * to avoid the Docker-only /app/uploads side-effect on import.
+ * Route integration tests for POST /api/transactions/import.
  *
- * Verifies that the endpoint correctly branches on CSV vs PDF file type,
- * passes password to parsePDF, and rejects unsupported formats.
+ * These drive the REAL router with REAL multer and REAL multipart uploads via
+ * supertest .attach(). That is only possible because env.UPLOADS_DIR points at a
+ * writable temp dir (see __tests__/setup.ts) — multer({ dest }) mkdirs at construction
+ * time and, being externalized CJS, cannot be intercepted by vi.mock('fs').
+ *
+ * This file replaces a previous version that built its own copy of the handler inline
+ * and tested that copy, which had silently drifted from production.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
-import express from 'express';
-import multer from 'multer';
+import fs from 'fs';
 import os from 'os';
-import { AppError } from '../../utils/AppError';
-import { asyncHandler } from '../../utils/asyncHandler';
+import path from 'path';
+import express from 'express';
+import cookieParser from 'cookie-parser';
 import { errorHandler } from '../../middleware/errorHandler';
 
-// ── Mock auth ─────────────────────────────────────────────────────────────────
+// Own upload dir, not the shared one from setup.ts. Vitest runs test files in parallel
+// and this suite both lists and wipes the directory, so sharing it would make these
+// assertions flaky the moment another file performs a real upload.
+// vi.hoisted: the vi.mock factory below is hoisted above normal const declarations.
+const { UPLOAD_DIR } = vi.hoisted(() => ({
+  UPLOAD_DIR: require('path').join(
+    require('os').tmpdir(),
+    `expense-tracker-import-routes-${process.pid}`,
+  ) as string,
+}));
+
+vi.mock('../../config/env', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config/env')>();
+  return { ...actual, env: { ...actual.env, UPLOADS_DIR: UPLOAD_DIR } };
+});
+
+const ADMIN_USER = { userId: 'admin-id', email: 'admin@example.com', role: 'ADMIN' as const };
+const MEMBER_USER = { userId: 'member-id', email: 'member@example.com', role: 'MEMBER' as const };
+
+// ─── Module mocks (hoisted) ────────────────────────────────────────────────────
+
 vi.mock('../../middleware/auth', () => ({
   requireAuth: (req: any, _res: any, next: any) => {
-    req.user = { userId: 'user-test', email: 'test@example.com', role: 'MEMBER' as const };
+    req.user = (req as any).__testUser ?? ADMIN_USER;
     next();
   },
-  requireAdmin: (_req: any, _res: any, next: any) => next(),
 }));
 
-// ── Mock import service ───────────────────────────────────────────────────────
-vi.mock('../../services/importService', () => ({
-  parseCSV: vi.fn(),
-  parsePDF: vi.fn(),
-  makeImportHash: vi.fn().mockReturnValue('mock-hash-abc'),
-}));
-
-// ── Mock prisma ───────────────────────────────────────────────────────────────
 vi.mock('../../config/prisma', () => {
-  const prisma = {
-    bankAccount: { findFirst: vi.fn() },
-    transaction: { findMany: vi.fn().mockResolvedValue([]) },
-    bankStatementImport: { create: vi.fn().mockResolvedValue({}) },
-    $transaction: vi.fn().mockImplementation(async (fn: any) => fn({
-      transaction: { create: vi.fn().mockResolvedValue({}) },
-      bankAccount: { update: vi.fn() },
-    })),
-  };
+  const prisma = { user: { findFirst: vi.fn() } };
   return { default: prisma, prisma };
 });
 
-import { requireAuth } from '../../middleware/auth';
-import * as importSvc from '../../services/importService';
+vi.mock('../../services/importService', () => ({
+  parseCSV: vi.fn(),
+  parsePDF: vi.fn(),
+}));
+
+vi.mock('../../services/categoryRuleService', () => ({
+  applyCategoryRules: vi.fn(),
+}));
+
+vi.mock('../../services/statementImportService', () => ({
+  persistParsedStatement: vi.fn(),
+}));
+
+vi.mock('../../services/auditService', () => ({
+  recordAuditLog: vi.fn(),
+}));
+
+// ─── Imports (after mocks) ─────────────────────────────────────────────────────
+
+import importRouter from '../../routes/import';
 import { prisma } from '../../config/prisma';
-import { sendCreated } from '../../utils/response';
+import { parseCSV, parsePDF } from '../../services/importService';
+import { applyCategoryRules } from '../../services/categoryRuleService';
+import { persistParsedStatement } from '../../services/statementImportService';
+import { recordAuditLog } from '../../services/auditService';
+import { env } from '../../config/env';
 
-const parseCSVMock = importSvc.parseCSV as ReturnType<typeof vi.fn>;
-const parsePDFMock = importSvc.parsePDF as ReturnType<typeof vi.fn>;
+const m = (fn: unknown) => fn as ReturnType<typeof vi.fn>;
+const userFindFirstMock = (prisma as any).user.findFirst as ReturnType<typeof vi.fn>;
 
-const PARSED_RESULT = {
-  transactions: [
-    { date: new Date('2025-04-01'), description: 'SALARY', amount: 50000, type: 'INCOME' as const },
-  ],
+/** Valid CUID-format id (20-30 alphanumeric chars) for the admin-on-behalf-of cases. */
+const VALID_TARGET_ID = 'clm1234567890abcdefghij';
+
+function mountImportRouter(user?: typeof MEMBER_USER) {
+  const app = express();
+  app.use(express.json());
+  app.use(cookieParser());
+  if (user) app.use((req: any, _res: any, next: any) => { req.__testUser = user; next(); });
+  app.use('/api/transactions/import', importRouter);
+  app.use(errorHandler);
+  return app;
+}
+
+const PARSED_TX = {
+  date: new Date('2025-04-01T00:00:00.000Z'),
+  description: 'Coffee',
+  amount: 100,
+  type: 'EXPENSE' as const,
+};
+
+const PARSE_RESULT = {
+  transactions: [PARSED_TX],
   errors: [],
   warnings: [],
   bank: 'HDFC',
 };
 
-/** Builds a minimal Express app with just the import endpoint */
-function makeImportApp() {
-  const app = express();
-  app.use(express.json());
-
-  const upload = multer({
-    dest: os.tmpdir(), // Use OS temp dir — works everywhere
-    limits: { fileSize: 15 * 1024 * 1024 },
-    fileFilter: (_req, file, cb) => {
-      const isCSV = ['text/csv', 'application/csv', 'text/plain', 'application/vnd.ms-excel'].includes(file.mimetype)
-        || file.originalname.endsWith('.csv');
-      const isPDF = ['application/pdf', 'application/x-pdf'].includes(file.mimetype)
-        || file.originalname.endsWith('.pdf');
-      if (isCSV || isPDF) {
-        cb(null, true);
-      } else {
-        cb(new AppError('Only CSV or PDF files are allowed', 400));
-      }
-    },
-  });
-
-  app.post(
-    '/api/transactions/import',
-    requireAuth,
-    upload.single('file'),
-    asyncHandler(async (req, res) => {
-      if (!req.file) throw AppError.badRequest('No file uploaded');
-
-      const accountId = req.body.bankAccountId as string | undefined;
-      const bankHint = req.body.bank as string | undefined;
-      const pdfPassword = req.body.pdfPassword as string | undefined;
-
-      const isPDF = req.file.mimetype === 'application/pdf'
-        || req.file.mimetype === 'application/x-pdf'
-        || req.file.originalname.endsWith('.pdf');
-
-      const result = isPDF
-        ? await importSvc.parsePDF(Buffer.alloc(0), bankHint, pdfPassword)
-        : importSvc.parseCSV(Buffer.alloc(0), bankHint);
-
-      const scopeId = accountId ?? (req as any).user!.userId;
-      const txsWithHash = result.transactions.map((tx: any) => ({
-        ...tx,
-        hash: importSvc.makeImportHash(tx.date, tx.amount, tx.type, tx.description, scopeId),
-      }));
-
-      const hashes = txsWithHash.map((t: any) => t.hash);
-      const existingHashes = new Set<string>(
-        ((await prisma.transaction.findMany({
-          where: { importHash: { in: hashes } },
-          select: { importHash: true },
-        })) as any[]).map((r: any) => r.importHash!),
-      );
-
-      const toCreate = txsWithHash.filter((t: any) => !existingHashes.has(t.hash));
-      const duplicates = txsWithHash.length - toCreate.length;
-
-      let imported = 0;
-      await prisma.$transaction(async (tx: any) => {
-        for (const t of toCreate) {
-          await tx.transaction.create({ data: { ...t } });
-          imported++;
-        }
-      });
-
-      await prisma.bankStatementImport.create({
-        data: {
-          userId: (req as any).user!.userId,
-          bankAccountId: accountId ?? null,
-          bankName: result.bank,
-          rowCount: result.transactions.length,
-          importedCount: imported,
-          duplicatesSkipped: duplicates,
-          errorsCount: 0,
-          filename: req.file.originalname,
-        },
-      });
-
-      sendCreated(res, {
-        bank: result.bank,
-        total: result.transactions.length,
-        imported,
-        duplicatesSkipped: duplicates,
-        errors: [],
-        parseErrors: result.errors,
-        warnings: result.warnings,
-      });
-    }),
-  );
-
-  app.use(errorHandler);
-  return app;
+/** Files sitting in the multer dest dir, used to prove temp cleanup. */
+function uploadsDirFiles(): string[] {
+  if (!fs.existsSync(env.UPLOADS_DIR)) return [];
+  return fs.readdirSync(env.UPLOADS_DIR).filter((f) => fs.statSync(`${env.UPLOADS_DIR}/${f}`).isFile());
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  parseCSVMock.mockReturnValue(PARSED_RESULT);
-  parsePDFMock.mockResolvedValue(PARSED_RESULT);
-  (prisma.bankStatementImport.create as ReturnType<typeof vi.fn>).mockResolvedValue({});
+  userFindFirstMock.mockResolvedValue({ id: VALID_TARGET_ID });
+  m(parseCSV).mockReturnValue(PARSE_RESULT);
+  m(parsePDF).mockResolvedValue(PARSE_RESULT);
+  m(applyCategoryRules).mockResolvedValue({ transactions: [PARSED_TX], appliedCount: 0 });
+  m(persistParsedStatement).mockResolvedValue({
+    imported: 1,
+    duplicatesSkipped: 0,
+    importRecord: { id: 'imp-1' },
+  });
 });
 
-describe('POST /api/transactions/import — file type routing', () => {
-  it('routes a .csv file to parseCSV (not parsePDF)', async () => {
-    const csvContent = Buffer.from('Date,Description,Amount\n01/04/25,TEST,500.00\n');
-    const res = await request(makeImportApp())
+// ═══ Parser dispatch (the 7 assertions carried over from the deleted file) ═════
+
+describe('POST /api/transactions/import — parser dispatch', () => {
+  it('routes a .csv upload to parseCSV, not parsePDF', async () => {
+    const res = await request(mountImportRouter())
       .post('/api/transactions/import')
-      .attach('file', csvContent, { filename: 'statement.csv', contentType: 'text/csv' });
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
 
     expect(res.status).toBe(201);
-    expect(parseCSVMock).toHaveBeenCalledOnce();
-    expect(parsePDFMock).not.toHaveBeenCalled();
+    expect(parseCSV).toHaveBeenCalledTimes(1);
+    expect(parsePDF).not.toHaveBeenCalled();
   });
 
-  it('routes a .pdf file to parsePDF (not parseCSV)', async () => {
-    const pdfContent = Buffer.from('%PDF-1.4 fake pdf content');
-    const res = await request(makeImportApp())
+  it('routes a .pdf upload to parsePDF, not parseCSV', async () => {
+    const res = await request(mountImportRouter())
       .post('/api/transactions/import')
-      .attach('file', pdfContent, { filename: 'statement.pdf', contentType: 'application/pdf' });
+      .attach('file', Buffer.from('%PDF-1.4'), { filename: 'stmt.pdf', contentType: 'application/pdf' });
 
     expect(res.status).toBe(201);
-    expect(parsePDFMock).toHaveBeenCalledOnce();
-    expect(parseCSVMock).not.toHaveBeenCalled();
+    expect(parsePDF).toHaveBeenCalledTimes(1);
+    expect(parseCSV).not.toHaveBeenCalled();
   });
 
-  it('accepts a .pdf file when MIME type is application/x-pdf', async () => {
-    const pdfContent = Buffer.from('%PDF-1.4 fake pdf content');
-    const res = await request(makeImportApp())
+  it('accepts the application/x-pdf mimetype variant', async () => {
+    const res = await request(mountImportRouter())
       .post('/api/transactions/import')
-      .attach('file', pdfContent, { filename: 'statement.pdf', contentType: 'application/x-pdf' });
+      .attach('file', Buffer.from('%PDF-1.4'), { filename: 'stmt.pdf', contentType: 'application/x-pdf' });
 
     expect(res.status).toBe(201);
-    expect(parsePDFMock).toHaveBeenCalledOnce();
+    expect(parsePDF).toHaveBeenCalledTimes(1);
   });
 
-  it('passes pdfPassword from request body to parsePDF', async () => {
-    const pdfContent = Buffer.from('%PDF-1.4 fake pdf content');
-    await request(makeImportApp())
+  it('forwards pdfPassword as parsePDF\'s 3rd arg, with bank undefined as the 2nd', async () => {
+    await request(mountImportRouter())
       .post('/api/transactions/import')
-      .attach('file', pdfContent, { filename: 'statement.pdf', contentType: 'application/pdf' })
-      .field('pdfPassword', 'secret123');
+      .field('pdfPassword', 'hunter2')
+      .attach('file', Buffer.from('%PDF-1.4'), { filename: 'stmt.pdf', contentType: 'application/pdf' });
 
-    expect(parsePDFMock).toHaveBeenCalledWith(
-      expect.any(Buffer),
-      undefined,
-      'secret123',
+    expect(parsePDF).toHaveBeenCalledWith(expect.any(Buffer), undefined, 'hunter2');
+  });
+
+  it('forwards the bank hint to parseCSV when supplied', async () => {
+    await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .field('bank', 'ICICI')
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(parseCSV).toHaveBeenCalledWith(expect.any(Buffer), 'ICICI');
+  });
+
+  it('returns a body carrying bank and total', async () => {
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(res.body.data.bank).toBe('HDFC');
+    expect(res.body.data.total).toBe(1);
+  });
+});
+
+// ═══ fileFilter — the upload security boundary ════════════════════════════════
+
+describe('POST /api/transactions/import — fileFilter', () => {
+  it('rejects image/jpeg with 400', async () => {
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('\xff\xd8\xff'), { filename: 'photo.jpg', contentType: 'image/jpeg' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('Only CSV or PDF files are allowed');
+    expect(parseCSV).not.toHaveBeenCalled();
+    expect(parsePDF).not.toHaveBeenCalled();
+  });
+
+  it('accepts a CSV identified by EXTENSION alone (mimetype octet-stream)', async () => {
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('date,amount\n'), {
+        filename: 'stmt.csv', contentType: 'application/octet-stream',
+      });
+
+    expect(res.status).toBe(201);
+    expect(parseCSV).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a PDF identified by EXTENSION alone (mimetype octet-stream)', async () => {
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('%PDF-1.4'), {
+        filename: 'stmt.pdf', contentType: 'application/octet-stream',
+      });
+
+    expect(res.status).toBe(201);
+  });
+
+  it('routes an extension-only PDF to parsePDF (isPDF falls back to the suffix)', async () => {
+    await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('%PDF-1.4'), {
+        filename: 'stmt.pdf', contentType: 'application/octet-stream',
+      });
+
+    expect(parsePDF).toHaveBeenCalledTimes(1);
+    expect(parseCSV).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['application/csv', 'a.bin'],
+    ['text/plain', 'b.bin'],
+    ['application/vnd.ms-excel', 'c.bin'],
+  ])('accepts the %s mimetype regardless of extension', async (contentType, filename) => {
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('date,amount\n'), { filename, contentType });
+
+    expect(res.status).toBe(201);
+  });
+});
+
+// ═══ Validation ═══════════════════════════════════════════════════════════════
+
+describe('POST /api/transactions/import — validation', () => {
+  it('returns 400 when no file is attached', async () => {
+    const res = await request(mountImportRouter()).post('/api/transactions/import');
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('No file uploaded');
+  });
+
+  it('returns 400 listing parse errors when nothing could be parsed', async () => {
+    m(parseCSV).mockReturnValue({
+      transactions: [],
+      errors: [
+        { row: 1, message: 'bad date', raw: 'x' },
+        { row: 2, message: 'bad amount', raw: 'y' },
+      ],
+      warnings: [],
+      bank: 'HDFC',
+    });
+
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('garbage'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('No transactions parsed');
+    expect(res.body.message).toContain('bad date');
+    expect(res.body.message).toContain('bad amount');
+    expect(persistParsedStatement).not.toHaveBeenCalled();
+  });
+});
+
+// ═══ Owner resolution ═════════════════════════════════════════════════════════
+
+describe('POST /api/transactions/import — owner resolution', () => {
+  it('an ADMIN with ?targetUserId persists under the TARGET member', async () => {
+    await request(mountImportRouter())
+      .post(`/api/transactions/import?targetUserId=${VALID_TARGET_ID}`)
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(persistParsedStatement).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerUserId: VALID_TARGET_ID }),
+    );
+    expect(applyCategoryRules).toHaveBeenCalledWith(VALID_TARGET_ID, expect.any(Array));
+  });
+
+  it('an ADMIN without targetUserId persists under their own id', async () => {
+    await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(persistParsedStatement).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerUserId: 'admin-id' }),
     );
   });
 
-  it('rejects unsupported file types with 400', async () => {
-    const imageContent = Buffer.from('fake image content');
-    const res = await request(makeImportApp())
-      .post('/api/transactions/import')
-      .attach('file', imageContent, { filename: 'statement.jpg', contentType: 'image/jpeg' });
+  it('a MEMBER passing targetUserId is IGNORED — they cannot import for someone else', async () => {
+    await request(mountImportRouter(MEMBER_USER))
+      .post(`/api/transactions/import?targetUserId=${VALID_TARGET_ID}`)
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
 
-    expect(res.status).toBe(400);
-    expect(parseCSVMock).not.toHaveBeenCalled();
-    expect(parsePDFMock).not.toHaveBeenCalled();
+    expect(persistParsedStatement).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerUserId: MEMBER_USER.userId }),
+    );
+  });
+});
+
+// ═══ Persistence hand-off & audit ═════════════════════════════════════════════
+
+describe('POST /api/transactions/import — persistence and audit', () => {
+  it('hands the parsed statement to the service with the RAW filename (service sanitizes)', async () => {
+    await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .field('bankAccountId', 'acc1')
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(persistParsedStatement).toHaveBeenCalledWith({
+      ownerUserId: 'admin-id',
+      accountId: 'acc1',
+      bank: 'HDFC',
+      rowCount: 1,
+      transactions: [expect.objectContaining({ description: 'Coffee' })],
+      filename: 'stmt.csv',
+    });
   });
 
-  it('returns 400 when no file is attached', async () => {
-    const res = await request(makeImportApp())
-      .post('/api/transactions/import');
+  it('records an audit entry against the returned import record', async () => {
+    m(persistParsedStatement).mockResolvedValue({
+      imported: 5, duplicatesSkipped: 2, importRecord: { id: 'imp-42' },
+    });
 
-    expect(res.status).toBe(400);
+    await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(recordAuditLog).toHaveBeenCalledWith({
+      performedByUserId: 'admin-id',
+      action: 'CREATE',
+      entityType: 'BankStatementImport',
+      entityId: 'imp-42',
+      newValue: { id: 'imp-42' },
+    });
   });
 
-  it('returns bank and import counts in the response', async () => {
-    const csvContent = Buffer.from('Date,Description,Amount\n01/04/25,TEST,500.00\n');
-    const res = await request(makeImportApp())
-      .post('/api/transactions/import')
-      .attach('file', csvContent, { filename: 'statement.csv', contentType: 'text/csv' });
+  it('logs the audit against the ACTING admin even when importing for another member', async () => {
+    await request(mountImportRouter())
+      .post(`/api/transactions/import?targetUserId=${VALID_TARGET_ID}`)
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
 
-    expect(res.status).toBe(201);
-    expect(res.body.data).toMatchObject({
+    expect(m(recordAuditLog).mock.calls[0][0].performedByUserId).toBe('admin-id');
+  });
+
+  it('surfaces a service failure through the error handler', async () => {
+    const { AppError } = await import('../../utils/AppError');
+    m(persistParsedStatement).mockRejectedValue(
+      new AppError('Import failed — no transactions were saved. Please try again.', 500, 'IMPORT_FAILED', true),
+    );
+
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(res.status).toBe(500);
+    // isOperational was forced true, so the curated message reaches the user.
+    expect(res.body.message).toBe('Import failed — no transactions were saved. Please try again.');
+    expect(recordAuditLog).not.toHaveBeenCalled();
+  });
+});
+
+// ═══ Response shape ═══════════════════════════════════════════════════════════
+
+describe('POST /api/transactions/import — response shape', () => {
+  it('reports counts from the service and categorized count from the rules pass', async () => {
+    m(applyCategoryRules).mockResolvedValue({ transactions: [PARSED_TX], appliedCount: 3 });
+    m(persistParsedStatement).mockResolvedValue({
+      imported: 7, duplicatesSkipped: 4, importRecord: { id: 'imp-1' },
+    });
+
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(res.body.data).toEqual(expect.objectContaining({
       bank: 'HDFC',
       total: 1,
+      imported: 7,
+      duplicatesSkipped: 4,
+      categorized: 3,
+      errors: [],
+    }));
+  });
+
+  it('always returns an empty errors array (a partial batch failure is impossible)', async () => {
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(res.body.data.errors).toEqual([]);
+  });
+
+  it('passes through parse errors and warnings, capped at 10', async () => {
+    m(parseCSV).mockReturnValue({
+      transactions: [PARSED_TX],
+      errors: Array.from({ length: 15 }, (_, i) => ({ row: i, message: `e${i}`, raw: '' })),
+      warnings: ['heads up'],
+      bank: 'HDFC',
     });
+
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(res.body.data.parseErrors).toHaveLength(10);
+    expect(res.body.data.warnings).toEqual(['heads up']);
+  });
+});
+
+// ═══ Temp file cleanup ════════════════════════════════════════════════════════
+
+describe('POST /api/transactions/import — temp file cleanup', () => {
+  it('unlinks the uploaded temp file after a successful read', async () => {
+    const before = uploadsDirFiles();
+
+    await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    // multer wrote a temp file; the finally block must have removed it.
+    expect(uploadsDirFiles()).toEqual(before);
+  });
+
+  it('swallows an unlink failure so a locked temp file cannot fail the import', async () => {
+    // The cleanup is best-effort: on Windows/NFS the handle can still be busy. If that
+    // threw, a perfectly good import would 500 after the rows were already parsed.
+    const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementationOnce(() => {
+      throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+    });
+
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(unlinkSpy).toHaveBeenCalled();
+    expect(res.status).toBe(201); // the throw was caught and ignored
+    unlinkSpy.mockRestore();
+
+    // Clean up the file the mocked unlink skipped.
+    for (const f of uploadsDirFiles()) fs.rmSync(`${env.UPLOADS_DIR}/${f}`, { force: true });
+  });
+
+  it('unlinks the temp file even when parsing throws', async () => {
+    m(parseCSV).mockImplementation(() => { throw new Error('parser exploded'); });
+    const before = uploadsDirFiles();
+
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(res.status).toBe(500);
+    expect(uploadsDirFiles()).toEqual(before);
   });
 });
