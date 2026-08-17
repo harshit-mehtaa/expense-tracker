@@ -20,7 +20,15 @@ import { priceAsOf, currentPrice, annualisedCost } from '../utils/subscriptionPr
 const subscriptionInclude = {
   prices: { orderBy: { effectiveFrom: 'desc' } },
   recurringRule: {
-    select: { id: true, frequency: true, nextRunDate: true, isActive: true },
+    select: {
+      id: true, frequency: true, nextRunDate: true, isActive: true,
+      // How the charge is actually paid. These live on the rule because the rule is the
+      // spec for every generated transaction; without them the UI could collect a
+      // payment method at creation and then never show it back.
+      paymentMode: true, bankAccountId: true, categoryId: true,
+      bankAccount: { select: { id: true, bankName: true, accountType: true, accountNumberLast4: true } },
+      category: { select: { id: true, name: true, icon: true, color: true } },
+    },
   },
 } as const;
 
@@ -281,6 +289,12 @@ export interface UpdateSubscriptionInput {
   trialEndDate?: string | null;
   frequency?: RecurringFrequency;
   nextRunDate?: string | null;
+  /** How it is paid. Settable at creation but, until now, never changeable — so moving a
+   *  subscription to a different card meant deleting and re-creating it, losing the price
+   *  history that makes past charges explainable. */
+  paymentMode?: string | null;
+  bankAccountId?: string | null;
+  categoryId?: string | null;
 }
 
 /**
@@ -301,6 +315,16 @@ export async function updateSubscription(
   if (!existing) throw AppError.notFound('Subscription');
 
   const scheduleChanged = data.frequency !== undefined || data.nextRunDate !== undefined;
+  const paymentChanged = data.paymentMode !== undefined
+    || data.bankAccountId !== undefined
+    || data.categoryId !== undefined;
+
+  // Same ownership check the create path runs. Without it a requester could point their
+  // subscription at somebody else's account or category by id, and the rule would happily
+  // generate charges against it.
+  if (data.bankAccountId || data.categoryId) {
+    await assertLinkedRecordsOwned(existing.userId, data.bankAccountId, data.categoryId);
+  }
 
   await prisma.$transaction(async (tx) => {
     await tx.subscription.update({
@@ -324,7 +348,7 @@ export async function updateSubscription(
       && existing.status === 'TRIALING'
       && data.nextRunDate === undefined;
 
-    if ((scheduleChanged || movesTrial) && existing.recurringRule) {
+    if ((scheduleChanged || movesTrial || paymentChanged) && existing.recurringRule) {
       await tx.recurringRule.update({
         where: { id: existing.recurringRule.id },
         data: {
@@ -333,6 +357,12 @@ export async function updateSubscription(
             nextRunDate: new Date(data.nextRunDate),
           }),
           ...(movesTrial && { nextRunDate: new Date(data.trialEndDate as string) }),
+          // `null` clears deliberately; `undefined` means the field was not sent at all.
+          ...(data.paymentMode !== undefined && {
+            paymentMode: (data.paymentMode as PaymentMode | null) ?? null,
+          }),
+          ...(data.bankAccountId !== undefined && { bankAccountId: data.bankAccountId ?? null }),
+          ...(data.categoryId !== undefined && { categoryId: data.categoryId ?? null }),
         },
       });
     }

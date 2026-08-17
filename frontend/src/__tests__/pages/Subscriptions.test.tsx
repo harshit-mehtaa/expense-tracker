@@ -7,13 +7,13 @@
  * for cleared fields. These tests exist so that cannot happen twice.
  */
 import { describe, it, expect } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import SubscriptionsPage from '@/pages/subscriptions/Subscriptions';
 import { renderPage, failOnConsoleError } from '../support/renderPage';
 import { url } from '../support/handlers';
-import { MEMBER_USER } from '../support/fixtures';
+import { MEMBER_USER, ADMIN_USER } from '../support/fixtures';
 
 failOnConsoleError();
 
@@ -38,6 +38,13 @@ const NETFLIX = {
   nextRenewalDate: '2026-09-01T00:00:00.000Z',
   recurringRule: {
     id: 'rule-1', frequency: 'MONTHLY', nextRunDate: '2026-09-01T00:00:00.000Z', isActive: true,
+    paymentMode: 'UPI',
+    bankAccountId: 'acct-1',
+    categoryId: 'cat-1',
+    bankAccount: {
+      id: 'acct-1', bankName: 'HDFC Bank', accountType: 'CREDIT_CARD', accountNumberLast4: '4821',
+    },
+    category: { id: 'cat-1', name: 'Streaming', icon: null, color: null },
   },
   usage: {
     chargeCount: 3, totalPaid: 1947, averageCharge: 649,
@@ -47,8 +54,20 @@ const NETFLIX = {
   },
 };
 
+const ACCOUNTS = [
+  { id: 'acct-1', bankName: 'HDFC Bank', accountType: 'CREDIT_CARD', accountNumberLast4: '4821' },
+  { id: 'acct-2', bankName: 'ICICI Bank', accountType: 'SAVINGS', accountNumberLast4: '9003' },
+];
+
+const CATEGORIES = [
+  { id: 'cat-1', name: 'Streaming', parentId: null, icon: null, color: null },
+  { id: 'cat-2', name: 'Utilities', parentId: null, icon: null, color: null },
+];
+
 const handlers = (subscriptions: unknown[] = [NETFLIX]) => [
   http.get(url('/subscriptions'), () => HttpResponse.json({ data: subscriptions })),
+  http.get(url('/accounts'), () => HttpResponse.json({ data: ACCOUNTS })),
+  http.get(url('/categories'), () => HttpResponse.json({ data: CATEGORIES })),
 ];
 
 describe('Subscriptions page — smoke', () => {
@@ -358,5 +377,171 @@ describe('Subscriptions page — destructive and misleading actions', () => {
     // Rendered in the toast and mirrored into the aria-live region, so more than one
     // node matches — what matters is that the backend's own wording reaches the user.
     await waitFor(() => expect(screen.getAllByText(/already cancelled/i).length).toBeGreaterThan(0));
+  });
+});
+
+// ─── Adding one as an ADMIN ──────────────────────────────────────────────────
+
+/**
+ * A subscription needs exactly one owner, so the family-wide view cannot create one —
+ * and family-wide is an admin's DEFAULT view. The page had the read-only guard copied
+ * from Loans but not the member selector that makes it escapable, so an admin saw no Add
+ * button and had no way to get one. Every test here rendered as a MEMBER, which is how
+ * that shipped.
+ */
+describe('Subscriptions page — as an ADMIN', () => {
+  it('offers a member selector, so the family-wide view is escapable', async () => {
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions', user: ADMIN_USER, handlers: handlers(),
+    });
+
+    await screen.findByText('Netflix');
+    expect(await screen.findByLabelText(/view:/i)).toBeInTheDocument();
+  });
+
+  it('explains why there is no Add button while viewing the whole family', async () => {
+    // Silently omitting the button left the page with no way to act and no reason given.
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions', user: ADMIN_USER, handlers: handlers(),
+    });
+
+    await screen.findByText('Netflix');
+    expect(screen.getByText(/choose a member above/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add subscription/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the Add button once a member is chosen', async () => {
+    const user = userEvent.setup();
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions', user: ADMIN_USER, handlers: handlers(),
+    });
+
+    await screen.findByText('Netflix');
+    await user.selectOptions(await screen.findByLabelText(/view:/i), 'u-member');
+
+    expect(await screen.findByRole('button', { name: /add subscription/i })).toBeInTheDocument();
+  });
+
+  it('a MEMBER gets the Add button immediately, with no selector to worry about', async () => {
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
+    });
+
+    await screen.findByText('Netflix');
+    expect(screen.getByRole('button', { name: /add subscription/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/view:/i)).not.toBeInTheDocument();
+  });
+});
+
+// ─── How it is paid ──────────────────────────────────────────────────────────
+
+/**
+ * The form collected a name, amount and schedule but never how the charge is paid, even
+ * though the owned rule has carried paymentMode, bankAccountId and categoryId all along.
+ * A subscription therefore generated an uncategorised transaction attached to no account
+ * — invisible to every budget.
+ */
+describe('Subscriptions page — payment method', () => {
+  const openForm = async (user: ReturnType<typeof userEvent.setup>) => {
+    await screen.findByText('Netflix');
+    await user.click(screen.getByRole('button', { name: /add subscription/i }));
+  };
+
+  it('offers a payment type, including netbanking', async () => {
+    const user = userEvent.setup();
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
+    });
+    await openForm(user);
+
+    const select = screen.getByLabelText(/payment type/i);
+    expect(select).toBeInTheDocument();
+    // The enum had no netbanking value at all until this change.
+    expect(within(select).getByRole('option', { name: 'Netbanking' })).toBeInTheDocument();
+    expect(within(select).getByRole('option', { name: 'UPI' })).toBeInTheDocument();
+  });
+
+  it('offers the accounts to pay from, named as they are elsewhere', async () => {
+    const user = userEvent.setup();
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
+    });
+    await openForm(user);
+
+    const select = await screen.findByLabelText(/paid from/i);
+    expect(
+      within(select).getByRole('option', { name: 'HDFC Bank ····4821 (Credit Card)' }),
+    ).toBeInTheDocument();
+  });
+
+  it('sends the payment method when creating', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions',
+      user: MEMBER_USER,
+      handlers: [
+        ...handlers(),
+        http.post(url('/subscriptions'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: NETFLIX }, { status: 201 });
+        }),
+      ],
+    });
+    await openForm(user);
+
+    await user.type(screen.getByLabelText(/^name$/i), 'Spotify');
+    await user.type(screen.getByLabelText(/amount/i), '199');
+    await user.selectOptions(screen.getByLabelText(/payment type/i), 'NETBANKING');
+    await user.selectOptions(await screen.findByLabelText(/paid from/i), 'acct-1');
+    await user.selectOptions(await screen.findByLabelText(/^category$/i), 'cat-1');
+    await user.click(screen.getByRole('button', { name: /^add$/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body).toMatchObject({
+      paymentMode: 'NETBANKING', bankAccountId: 'acct-1', categoryId: 'cat-1',
+    });
+  });
+
+  it('shows how an existing subscription is paid', async () => {
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
+    });
+
+    await screen.findByText('Netflix');
+    expect(screen.getByText(/UPI · HDFC Bank ····4821 · Streaming/)).toBeInTheDocument();
+  });
+
+  it('says so plainly when the payment method is not set', async () => {
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions',
+      user: MEMBER_USER,
+      handlers: handlers([{
+        ...NETFLIX,
+        recurringRule: {
+          id: 'rule-1', frequency: 'MONTHLY',
+          nextRunDate: '2026-09-01T00:00:00.000Z', isActive: true,
+        },
+      }]),
+    });
+
+    await screen.findByText('Netflix');
+    expect(screen.getByText('Not set')).toBeInTheDocument();
+  });
+
+  it('prefills the payment method when editing, rather than silently clearing it', async () => {
+    // The three fields live on the rule, not the subscription. Reading them from the
+    // wrong place would blank the card on every unrelated edit.
+    const user = userEvent.setup();
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
+    });
+
+    await screen.findByText('Netflix');
+    await user.click(screen.getByRole('button', { name: /edit/i }));
+
+    expect(await screen.findByLabelText(/payment type/i)).toHaveValue('UPI');
+    expect(await screen.findByLabelText(/paid from/i)).toHaveValue('acct-1');
+    expect(await screen.findByLabelText(/^category$/i)).toHaveValue('cat-1');
   });
 });

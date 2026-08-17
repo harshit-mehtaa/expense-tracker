@@ -29,6 +29,8 @@ import { useMemberSelector } from '@/hooks/useMemberSelector';
 import RecurringRulesPage from '@/pages/transactions/RecurringRules';
 import { formatINR } from '@/lib/indianFormat';
 import { avatarInitial, buildMemberColorMap, resolveAvatarColor } from '@/lib/memberAvatar';
+import { PAYMENT_MODES, PAYMENT_MODE_LABELS } from '@/lib/paymentModes';
+import { formatAccountOption } from '@/lib/accountFormat';
 
 interface Transaction {
   id: string;
@@ -120,37 +122,7 @@ const TRANSACTION_TYPES = [
   { value: 'TRANSFER', label: 'Transfer' },
 ] as const;
 
-const PAYMENT_MODES = ['UPI', 'NEFT', 'RTGS', 'IMPS', 'CASH', 'CHEQUE', 'CARD', 'EMI', 'AUTO_DEBIT'] as const;
 
-const PAYMENT_MODE_LABELS: Record<string, string> = {
-  UPI: 'UPI', NEFT: 'NEFT', RTGS: 'RTGS', IMPS: 'IMPS',
-  CASH: 'Cash', CHEQUE: 'Cheque', CARD: 'Card', EMI: 'EMI', AUTO_DEBIT: 'Auto Debit',
-};
-
-const ACCOUNT_TYPE_LABELS: Record<string, string> = {
-  SAVINGS: 'Savings',
-  CURRENT: 'Current',
-  SALARY: 'Salary',
-  CREDIT_CARD: 'Credit Card',
-  DEBIT_CARD: 'Debit Card',
-  PREPAID_CARD: 'Prepaid Card',
-  NRE: 'NRE',
-  NRO: 'NRO',
-  PPF: 'PPF',
-  EPF: 'EPF',
-  DEMAT: 'Demat',
-};
-
-function formatAccountOption(
-  account: any,
-  options: { showOwner?: boolean; fallbackOwnerName?: string } = {},
-): string {
-  const suffix = account.accountNumberLast4 ? ` ····${account.accountNumberLast4}` : '';
-  const type = ACCOUNT_TYPE_LABELS[account.accountType] ?? account.accountType;
-  const ownerName = options.showOwner ? (account.userName || options.fallbackOwnerName) : undefined;
-  const ownerPrefix = ownerName ? `${ownerName} - ` : '';
-  return `${ownerPrefix}${account.bankName}${suffix}${type ? ` (${type})` : ''}`;
-}
 
 function formatTransactionAccount(account?: { bankName: string; accountNumberLast4?: string | null } | null): string | undefined {
   if (!account) return undefined;
@@ -800,7 +772,7 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
               <Label>Payment Mode (optional)</Label>
               <select {...register('paymentMode')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                 <option value="">— Select —</option>
-                {['UPI', 'NEFT', 'RTGS', 'IMPS', 'CASH', 'CHEQUE', 'CARD', 'EMI', 'AUTO_DEBIT'].map((m) => (
+                {PAYMENT_MODES.map((m) => (
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>
@@ -2226,7 +2198,7 @@ function AddTransactionModal({
               <Label>Payment Mode (optional)</Label>
               <select {...register('paymentMode')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                 <option value="">— Select —</option>
-                {['UPI', 'NEFT', 'RTGS', 'IMPS', 'CASH', 'CHEQUE', 'CARD', 'EMI', 'AUTO_DEBIT'].map((m) => (
+                {PAYMENT_MODES.map((m) => (
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>

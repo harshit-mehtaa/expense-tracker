@@ -12,12 +12,8 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import api from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { ACCOUNT_TYPE_LABELS } from '@/lib/accountFormat';
 
-const ACCOUNT_TYPE_LABELS: Record<string, string> = {
-  SAVINGS: 'Savings', CURRENT: 'Current', SALARY: 'Salary',
-  CREDIT_CARD: 'Credit Card', DEBIT_CARD: 'Debit Card', PREPAID_CARD: 'Prepaid Card',
-  NRE: 'NRE', NRO: 'NRO', PPF: 'PPF', EPF: 'EPF', DEMAT: 'Demat',
-};
 
 const ACCOUNT_TYPE_COLORS: Record<string, string> = {
   SAVINGS: 'bg-blue-100 text-blue-800', CURRENT: 'bg-gray-100 text-gray-800',

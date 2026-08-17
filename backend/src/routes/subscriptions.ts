@@ -7,6 +7,7 @@ import { sendCreated, sendNoContent, sendSuccess } from '../utils/response';
 import * as svc from '../services/subscriptionService';
 import { recordAuditLog } from '../services/auditService';
 import { resolveTargetUserId, resolveWriteUserId } from '../utils/resolveTargetUserId';
+import { PAYMENT_MODE } from '../constants/paymentModes';
 
 const router = Router();
 router.use(requireAuth);
@@ -59,12 +60,6 @@ const optionalHttpUrl = z
 
 const FREQUENCY = z.enum(['DAILY', 'WEEKLY', 'MONTHLY', 'QUARTERLY', 'YEARLY']);
 
-// The same enum every sibling route uses (routes/recurring.ts:19). Accepting free text
-// here let a bogus value reach Prisma's enum column, which throws a
-// PrismaClientValidationError rather than an AppError — a 500 where 422 belongs.
-const PAYMENT_MODE = z.enum([
-  'UPI', 'NEFT', 'RTGS', 'IMPS', 'CASH', 'CHEQUE', 'CARD', 'EMI', 'AUTO_DEBIT',
-]);
 
 /** Resuming must not backfill the period the subscription was cancelled. The service
  *  comment claimed this; only a guard actually makes it true. */
@@ -98,6 +93,11 @@ const updateSchema = z.object({
   trialEndDate: optionalDateString,
   frequency: FREQUENCY.optional(),
   nextRunDate: optionalDateString,
+  // Omitted here originally, so the form could set a payment method once and never
+  // correct it — a silent read-only field is worse than no field.
+  paymentMode: PAYMENT_MODE.nullable().optional(),
+  bankAccountId: optionalId,
+  categoryId: optionalId,
 });
 
 const priceChangeSchema = z.object({

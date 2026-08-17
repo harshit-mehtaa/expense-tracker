@@ -9,6 +9,7 @@ import { AppError } from '../utils/AppError';
 import { prisma } from '../config/prisma';
 import { recordAuditLog } from '../services/auditService';
 import { resolveTargetUserId, resolveWriteUserId } from '../utils/resolveTargetUserId';
+import { PAYMENT_MODE } from '../constants/paymentModes';
 
 const CUID_RE = /^[a-z0-9]{20,30}$/i;
 
@@ -27,7 +28,7 @@ const createTransactionSchema = z.object({
   categoryId: z.string().cuid().optional(),
   amount: z.number().positive('Amount must be positive'),
   type: z.enum(['INCOME', 'EXPENSE', 'TRANSFER']),
-  paymentMode: z.enum(['UPI', 'NEFT', 'RTGS', 'IMPS', 'CASH', 'CHEQUE', 'CARD', 'EMI', 'AUTO_DEBIT']).optional(),
+  paymentMode: PAYMENT_MODE.optional(),
   upiIdUsed: z.string().optional(),
   description: z.string().min(1).max(500),
   remark: z.string().max(1000).optional().nullable(),
@@ -149,7 +150,7 @@ const updateTransactionSchema = z.object({
   amount: z.number().positive().optional(),
   type: z.enum(['INCOME', 'EXPENSE']).optional(), // TRANSFER edits are not supported
   date: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional(),
-  paymentMode: z.enum(['UPI', 'NEFT', 'RTGS', 'IMPS', 'CASH', 'CHEQUE', 'CARD', 'EMI', 'AUTO_DEBIT']).optional(),
+  paymentMode: PAYMENT_MODE.optional(),
   categoryId: z.string().cuid().optional().nullable(),
   tags: z.array(z.string()).optional(),
   gstAmount: z.number().nonnegative().optional(),

@@ -7,6 +7,7 @@ import * as recurringService from '../services/recurringService';
 import { RecurringFrequency } from '@prisma/client';
 import { resolveTargetUserId, resolveWriteUserId } from '../utils/resolveTargetUserId';
 import { recordAuditLog } from '../services/auditService';
+import { PAYMENT_MODE } from '../constants/paymentModes';
 
 const router = Router();
 router.use(requireAuth);
@@ -16,7 +17,7 @@ const createRuleSchema = z.object({
   categoryId: z.string().cuid().optional(),
   amount: z.number().positive('Amount must be positive'),
   type: z.enum(['INCOME', 'EXPENSE', 'TRANSFER']),
-  paymentMode: z.enum(['UPI', 'NEFT', 'RTGS', 'IMPS', 'CASH', 'CHEQUE', 'CARD', 'EMI', 'AUTO_DEBIT']).optional(),
+  paymentMode: PAYMENT_MODE.optional(),
   description: z.string().min(1).max(500),
   tags: z.array(z.string()).default([]),
   gstAmount: z.number().nonnegative().optional(),

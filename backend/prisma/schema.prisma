@@ -95,6 +95,7 @@ enum TransactionType {
 
 enum PaymentMode {
   UPI
+  NETBANKING
   NEFT
   RTGS
   IMPS

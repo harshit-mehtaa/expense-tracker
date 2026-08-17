@@ -55,6 +55,18 @@ export interface Subscription {
     frequency: Frequency;
     nextRunDate: string;
     isActive: boolean;
+    /** How each generated charge is paid. Stored on the rule because the rule is the
+     *  spec every generated transaction is built from. */
+    paymentMode?: string | null;
+    bankAccountId?: string | null;
+    categoryId?: string | null;
+    bankAccount?: {
+      id: string;
+      bankName: string;
+      accountType: string;
+      accountNumberLast4?: string | null;
+    } | null;
+    category?: { id: string; name: string; icon?: string | null; color?: string | null } | null;
   } | null;
   usage: SubscriptionUsage;
 }

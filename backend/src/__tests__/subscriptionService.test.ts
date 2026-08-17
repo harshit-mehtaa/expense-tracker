@@ -412,6 +412,58 @@ describe('updateSubscription', () => {
     await expect(updateSubscription('u2', 'sub-1', { name: 'x' })).rejects.toThrow(/not found/i);
   });
 
+  // ── How it is paid ──────────────────────────────────────────────────────────
+  // Settable at creation but not changeable, so moving a subscription to a new card
+  // meant deleting and re-creating it — losing the price history that makes past
+  // charges explainable.
+
+  it('pushes a payment mode change through to the owned rule', async () => {
+    await updateSubscription('u1', 'sub-1', { paymentMode: 'NETBANKING' });
+    expect(ruleMock.update.mock.calls[0][0].data).toMatchObject({ paymentMode: 'NETBANKING' });
+  });
+
+  it('moves a subscription to a different card', async () => {
+    await updateSubscription('u1', 'sub-1', { bankAccountId: 'acct-1' });
+    expect(ruleMock.update.mock.calls[0][0].data).toMatchObject({ bankAccountId: 'acct-1' });
+  });
+
+  it('recategorises without touching the schedule', async () => {
+    await updateSubscription('u1', 'sub-1', { categoryId: 'cat-1' });
+    const { data } = ruleMock.update.mock.calls[0][0];
+    expect(data).toMatchObject({ categoryId: 'cat-1' });
+    expect(data.frequency).toBeUndefined();
+    expect(data.nextRunDate).toBeUndefined();
+  });
+
+  it('clears a payment field on explicit null, but leaves it alone when absent', async () => {
+    // `null` means "clear it"; `undefined` means the form did not send the field. Getting
+    // this backwards would wipe the card every time someone renamed a subscription.
+    await updateSubscription('u1', 'sub-1', { paymentMode: null });
+    expect(ruleMock.update.mock.calls[0][0].data).toMatchObject({ paymentMode: null });
+
+    ruleMock.update.mockClear();
+    await updateSubscription('u1', 'sub-1', { name: 'Renamed' });
+    expect(ruleMock.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses an account belonging to somebody else', async () => {
+    // Without the ownership check a requester could point their subscription at another
+    // member's account by id and generate charges against it.
+    (prisma as any).bankAccount.findFirst.mockResolvedValue(null);
+    await expect(
+      updateSubscription('u1', 'sub-1', { bankAccountId: 'someone-elses' }),
+    ).rejects.toThrow();
+    expect(ruleMock.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a category belonging to somebody else', async () => {
+    (prisma as any).category.findFirst.mockResolvedValue(null);
+    await expect(
+      updateSubscription('u1', 'sub-1', { categoryId: 'someone-elses' }),
+    ).rejects.toThrow();
+    expect(ruleMock.update).not.toHaveBeenCalled();
+  });
+
   it('extending a trial moves the first charge with it', async () => {
     // Creation couples trialEndDate and nextRunDate; update did not, so a trial extended
     // to 01/10 still billed on 01/09 while the card said the trial was live.

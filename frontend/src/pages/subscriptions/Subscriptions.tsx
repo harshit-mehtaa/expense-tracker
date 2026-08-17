@@ -13,6 +13,10 @@ import {
   type Subscription, type Frequency, type SubscriptionStatus,
 } from '@/api/subscriptions';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
+import { PAYMENT_MODES, paymentModeLabel } from '@/lib/paymentModes';
+import { formatAccountOption, formatAccountShort } from '@/lib/accountFormat';
+import { toCategoryTreeOptions, getCategoryTreeOptionLabel } from '@/lib/categoryUtils';
+import api from '@/lib/api';
 import { formatDate, toDateInputValue } from '@/lib/dateFormat';
 import { useToast } from '@/contexts/ToastContext';
 
@@ -25,6 +29,12 @@ const subscriptionSchema = z.object({
   trialEndDate: z.string().optional(),
   cancellationUrl: z.string().optional(),
   notes: z.string().optional(),
+  // How the charge is paid. Optional because plenty of people genuinely do not know
+  // offhand which card a subscription sits on, and refusing to record the subscription
+  // over it would be worse than recording it without.
+  paymentMode: z.string().optional(),
+  bankAccountId: z.string().optional(),
+  categoryId: z.string().optional(),
 });
 type SubscriptionForm = z.infer<typeof subscriptionSchema>;
 
@@ -57,6 +67,15 @@ function SubscriptionCard({
 }) {
   const { usage } = subscription;
   const frequency = subscription.recurringRule?.frequency;
+
+  // "UPI · HDFC Bank ····4821 · Streaming", skipping whichever parts are unset rather
+  // than rendering empty separators.
+  const rule = subscription.recurringRule;
+  const paidBy = [
+    paymentModeLabel(rule?.paymentMode),
+    formatAccountShort(rule?.bankAccount),
+    rule?.category?.name ?? '',
+  ].filter(Boolean);
   const isCancelled = subscription.status === 'CANCELLED';
 
   return (
@@ -137,6 +156,16 @@ function SubscriptionCard({
           <INRDisplay amount={usage.totalPaid} className="font-medium" />
           <span className="text-xs text-muted-foreground"> ({usage.chargeCount})</span>
         </div>
+        {/* Worth its own line: "which card is this on?" is the question you ask when a
+            card is replaced or a charge shows up you did not expect. */}
+        <div className="col-span-2">
+          <p className="text-xs text-muted-foreground">Paid by</p>
+          <p className="font-medium">
+            {paidBy.length > 0
+              ? paidBy.join(' · ')
+              : <span className="text-muted-foreground font-normal">Not set</span>}
+          </p>
+        </div>
       </div>
 
       {/* The honest use of transaction data: it cannot say whether you used the service,
@@ -199,7 +228,7 @@ function SubscriptionCard({
 export default function SubscriptionsPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const { isAdmin, viewUserId } = useMemberSelector();
+  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Subscription | null>(null);
   const [pricingFor, setPricingFor] = useState<Subscription | null>(null);
@@ -209,6 +238,24 @@ export default function SubscriptionsPage() {
     queryKey: ['subscriptions', viewUserId],
     queryFn: () => subscriptionsApi.getAll(viewUserId),
   });
+
+  // Scoped to the member being viewed: the backend rejects an account or category owned
+  // by somebody else, so offering the whole family's would only produce a failed save.
+  const { data: accounts = [] } = useQuery({
+    queryKey: ['accounts', viewUserId],
+    queryFn: () => api.get<{ data: any[] }>('/accounts', {
+      params: viewUserId ? { userId: viewUserId } : {},
+    }).then((r) => r.data.data),
+  });
+
+  const { data: categories = [] } = useQuery({
+    queryKey: ['categories', 'all'],
+    queryFn: () => api.get<{ data: any[] }>('/categories').then((r) => r.data.data),
+  });
+
+  // Same sorted, indented tree the transaction form uses, so a category is in the place
+  // you expect on both screens.
+  const categoryOptions = toCategoryTreeOptions(categories);
 
   const {
     register, handleSubmit, reset, formState: { errors },
@@ -236,7 +283,10 @@ export default function SubscriptionsPage() {
    */
   const stripBlanks = (data: SubscriptionForm) => {
     const out: Record<string, unknown> = { ...data };
-    for (const key of ['vendor', 'trialEndDate', 'cancellationUrl', 'notes']) {
+    for (const key of [
+      'vendor', 'trialEndDate', 'cancellationUrl', 'notes',
+      'paymentMode', 'bankAccountId', 'categoryId',
+    ]) {
       if (out[key] === '') out[key] = null;
     }
     return out;
@@ -304,6 +354,10 @@ export default function SubscriptionsPage() {
       trialEndDate: subscription.trialEndDate ? subscription.trialEndDate.slice(0, 10) : '',
       cancellationUrl: subscription.cancellationUrl ?? '',
       notes: subscription.notes ?? '',
+      // These live on the owned rule, not on the subscription itself.
+      paymentMode: subscription.recurringRule?.paymentMode ?? '',
+      bankAccountId: subscription.recurringRule?.bankAccountId ?? '',
+      categoryId: subscription.recurringRule?.categoryId ?? '',
     });
     setShowForm(true);
   }
@@ -322,10 +376,40 @@ export default function SubscriptionsPage() {
           </h1>
           <p className="text-sm text-muted-foreground">
             {active.length} active — <INRDisplay amount={totalPerYear} /> a year
+            {viewUserId
+              ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
+              : isAdmin ? ' · All Family' : ''}
           </p>
+          {/* Without this an ADMIN is stuck in the family-wide view, which is read-only —
+              a new subscription needs exactly one owner — and so had no way to add one. */}
+          {isAdmin && !isMembersLoading && (
+            <div className="flex items-center gap-2 mt-2">
+              <label htmlFor="subs-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+              {isMembersError ? (
+                <span className="text-xs text-destructive">Could not load members</span>
+              ) : (
+                <select
+                  id="subs-member-select"
+                  value={viewUserId ?? ''}
+                  onChange={(e) => setViewUserId(e.target.value || undefined)}
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
+                >
+                  <option value="">All Family</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
         </div>
-        {/* Family-wide view is read-only: a new subscription needs one owner. */}
-        {!(isAdmin && !viewUserId) && (
+        {/* A new subscription needs exactly one owner, so the family-wide view cannot
+            create one. Say so rather than simply omitting the button. */}
+        {isAdmin && !viewUserId ? (
+          <p className="text-xs text-muted-foreground max-w-[16rem] text-right">
+            Choose a member above to add a subscription.
+          </p>
+        ) : (
           <Button onClick={() => { setEditing(null); setShowForm(true); }}>
             <Plus className="h-4 w-4 mr-1" /> Add Subscription
           </Button>
@@ -456,6 +540,62 @@ export default function SubscriptionsPage() {
                 <p className="text-xs text-muted-foreground mt-1">
                   Where to go when you want out — worth saving now, not when you are annoyed.
                 </p>
+              </div>
+
+              {/* How it is paid. Every generated charge inherits these, so leaving them
+                  blank produces an uncategorised transaction attached to no account. */}
+              <div className="rounded-md border p-3 space-y-3">
+                <p className="text-sm font-medium">How it is paid</p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <Label htmlFor="sub-paymentMode">Payment type</Label>
+                    <select
+                      {...register('paymentMode')}
+                      id="sub-paymentMode"
+                      className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                    >
+                      <option value="">— Not set —</option>
+                      {PAYMENT_MODES.map((m) => (
+                        <option key={m} value={m}>{paymentModeLabel(m)}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="sub-bankAccountId">Paid from</Label>
+                    <select
+                      {...register('bankAccountId')}
+                      id="sub-bankAccountId"
+                      className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                    >
+                      <option value="">— Not set —</option>
+                      {accounts.map((a: any) => (
+                        <option key={a.id} value={a.id}>{formatAccountOption(a)}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="sub-categoryId">Category</Label>
+                  <select
+                    {...register('categoryId')}
+                    id="sub-categoryId"
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  >
+                    <option value="">— Not set —</option>
+                    {categoryOptions.map(({ category, depth }) => (
+                      <option key={category.id} value={category.id}>
+                        {getCategoryTreeOptionLabel(category, depth)}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Each charge is recorded with these. Without a category the spend will
+                    not appear against any budget.
+                  </p>
+                </div>
               </div>
 
               <div>
