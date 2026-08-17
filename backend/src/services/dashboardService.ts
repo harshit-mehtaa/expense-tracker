@@ -518,7 +518,7 @@ async function fetchAssetBreakdown(userId?: string) {
     ? { OR: [{ userId }, { owners: { some: { userId } } }] }
     : {};
 
-  const [accounts, fds, rds, investments, gold, realestate] = await Promise.all([
+  const [accounts, fds, rds, investments, gold, otherAssets, realestate] = await Promise.all([
     prisma.bankAccount.findMany({
       where: { ...where, isActive: true },
       select: { bankName: true, accountNumberLast4: true, accountType: true, currentBalance: true },
@@ -539,6 +539,18 @@ async function fetchAssetBreakdown(userId?: string) {
     prisma.goldHolding.findMany({
       where,
       select: { type: true, description: true, quantityGrams: true, purchasePricePerGram: true, currentPricePerGram: true },
+    }),
+    // Assets that nothing else already represents.
+    //
+    // An Asset records what secures a loan, so a property asset usually points at the
+    // RealEstate row that tracks it properly — and RealEstate is already counted here,
+    // and share-weighted besides. Counting both would report the same flat twice. Same
+    // for gold against a GoldHolding. Only assets with neither link are unrepresented,
+    // and those are exactly the ones a car loan leaves with no offset today.
+    prisma.asset.findMany({
+      where: { ...where, realEstateId: null, goldHoldingId: null },
+      select: { name: true, assetType: true, value: true },
+      orderBy: { value: 'desc' },
     }),
     prisma.realEstate.findMany({
       where: realEstateWhere,
@@ -618,6 +630,15 @@ async function fetchAssetBreakdown(userId?: string) {
     .sort((a, b) => b.amount - a.amount);
   const realEstate = realEstateItems.reduce((s, p) => s + p.currentValue, 0);
 
+  // Vehicles and anything else recorded only as loan collateral. Without these, taking a
+  // car loan dropped net worth by the whole loan with nothing on the other side.
+  const otherAssetItems = otherAssets.map((a) => ({
+    name: a.name,
+    assetType: a.assetType,
+    currentValue: Number(a.value),
+  }));
+  const otherAssetsTotal = otherAssetItems.reduce((sum, a) => sum + a.currentValue, 0);
+
   return {
     bankAccounts,
     fdItems,
@@ -625,13 +646,15 @@ async function fetchAssetBreakdown(userId?: string) {
     investmentItems,
     goldItems,
     realEstateItems,
+    otherAssetItems,
     bankBalances,
     fixedDeposits,
     recurringDeposits,
     investments: investments_,
     gold: gold_,
     realEstate,
-    total: bankBalances + fixedDeposits + recurringDeposits + investments_ + gold_ + realEstate,
+    otherAssets: otherAssetsTotal,
+    total: bankBalances + fixedDeposits + recurringDeposits + investments_ + gold_ + realEstate + otherAssetsTotal,
   };
 }
 
@@ -700,7 +723,10 @@ export async function computeNetWorthStatement(userId?: string) {
       totalLiabilities += amt;
     }
   }
-  const { total: totalAssets, bankAccounts, fdItems, rdItems, investmentItems, goldItems, realEstateItems, ...assets } = assetBreakdown;
+  const {
+    total: totalAssets, bankAccounts, fdItems, rdItems, investmentItems, goldItems,
+    realEstateItems, otherAssetItems, ...assets
+  } = assetBreakdown;
   return {
     assets,
     bankAccounts,
@@ -709,6 +735,7 @@ export async function computeNetWorthStatement(userId?: string) {
     investmentItems,
     goldItems,
     realEstateItems,
+    otherAssetItems,
     liabilities,
     totalAssets,
     totalLiabilities,

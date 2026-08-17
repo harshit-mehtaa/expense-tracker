@@ -635,6 +635,21 @@ export default function ReportsPage() {
                     ))}
                   </div>
                 )}
+                {/* Assets recorded as loan collateral that nothing else tracks — a vehicle,
+                    most commonly. Without these a car loan showed as a liability with
+                    nothing on the other side. Anything already tracked as real estate or
+                    gold is excluded server-side so it is not counted twice. */}
+                {Array.isArray(netWorth.otherAssetItems) && netWorth.otherAssetItems.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Other Assets</p>
+                    {netWorth.otherAssetItems.map((a: { name: string; assetType: string; currentValue: number }, i: number) => (
+                      <div key={i} className="flex justify-between text-sm">
+                        <span className="truncate pr-2">{a.name}</span>
+                        <INRDisplay amount={a.currentValue} />
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {/* Fallback: no accounts and no other assets */}
                 {(!Array.isArray(netWorth.bankAccounts) || netWorth.bankAccounts.length === 0) && netWorth.assets.bankBalances > 0 && (
                   <div className="space-y-1.5">

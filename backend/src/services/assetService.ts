@@ -14,6 +14,7 @@ import type { Prisma } from '@prisma/client';
 
 const assetInclude = {
   realEstate: { select: { id: true, propertyName: true, currentValue: true } },
+  goldHolding: { select: { id: true, description: true, quantityGrams: true } },
   loans: { select: { id: true, lenderName: true, loanType: true, outstandingBalance: true } },
 } as const;
 
@@ -45,8 +46,21 @@ async function assertRealEstateOwned(userId: string, realEstateId: string | null
   if (!property) throw AppError.notFound('Property');
 }
 
+/**
+ * Same rule for the gold link: `assetInclude` returns the holding, so an unvalidated id
+ * would leak another member's gold through the asset.
+ */
+async function assertGoldHoldingOwned(userId: string, goldHoldingId: string | null | undefined) {
+  if (!goldHoldingId) return;
+  const holding = await prisma.goldHolding.findFirst({
+    where: { id: goldHoldingId, userId }, select: { id: true },
+  });
+  if (!holding) throw AppError.notFound('Gold holding');
+}
+
 export async function createAsset(userId: string, data: Omit<Prisma.AssetCreateInput, 'user'>) {
   await assertRealEstateOwned(userId, (data as any).realEstateId);
+  await assertGoldHoldingOwned(userId, (data as any).goldHoldingId);
   return prisma.asset.create({
     data: { ...data, userId } as Prisma.AssetUncheckedCreateInput,
     include: assetInclude,
@@ -64,6 +78,7 @@ export async function updateAsset(
   });
   if (!asset) throw AppError.notFound('Asset');
   if ('realEstateId' in data) await assertRealEstateOwned(asset.userId, (data as any).realEstateId);
+  if ('goldHoldingId' in data) await assertGoldHoldingOwned(asset.userId, (data as any).goldHoldingId);
   return prisma.asset.update({ where: { id }, data, include: assetInclude });
 }
 

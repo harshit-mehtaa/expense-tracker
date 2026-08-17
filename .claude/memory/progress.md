@@ -2,13 +2,9 @@
 
 ## Status: idle
 
-Last completed: category management — tree view, usage stats, merge, safe delete.
+Last completed: Asset.value now counts toward net worth, deduped against RealEstate/GoldHolding.
 
 ## QUEUED NEXT
-
-### 1. `Asset.value` never enters net worth
-A vehicle worth Rs 12L shows the AUTO loan as a liability with no offsetting asset.
-Needs dedup design vs RealEstate/Gold.
 
 ### 2. MEMBER cannot add co-owners
 No non-admin member-listing endpoint. Affects loans AND real estate. Widens data
@@ -23,6 +19,12 @@ cross-browser fix is a custom picker across 26 inputs, which costs the native mo
 date UI. Only worth doing if those browsers matter.
 
 ## Tech debt noted
+- `Asset.goldHoldingId` has no UI. The link works via the API and is what stops a gold
+  asset double-counting against a GoldHolding, but the loan form's inline asset creation
+  cannot set it — so a gold asset created there will double-count if that gold is also
+  tracked as a holding. Add a picker when type is GOLD.
+- `Asset.value` and `RealEstate.currentValue` hold the same number in two columns and can
+  drift. RealEstate is authoritative for net worth now, but nothing keeps them in step.
 - Category delete guards run children -> budgets -> transactions, so a category with both
   children and transactions needs two round trips to remove. Correct precedence, mildly
   annoying; surface all blockers at once if it becomes a nuisance.

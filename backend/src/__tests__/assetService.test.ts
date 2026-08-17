@@ -12,6 +12,7 @@ vi.mock('../config/prisma', () => {
     asset: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
     // assertRealEstateOwned confirms a linked property belongs to the asset's owner.
     realEstate: { findFirst: vi.fn() },
+    goldHolding: { findFirst: vi.fn() },
   };
   return { default: mock, prisma: mock };
 });
@@ -23,6 +24,7 @@ import {
 
 const assetMock = (prisma as any).asset;
 const realEstateMock = (prisma as any).realEstate;
+const goldMock = (prisma as any).goldHolding;
 
 const MOCK_ASSET = {
   id: 'asset-1',
@@ -198,6 +200,59 @@ describe('a linked property must belong to the asset owner', () => {
 
     expect(realEstateMock.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 're-admin', userId: 'u-member' } }),
+    );
+    expect(assetMock.update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The gold link mirrors the property one, and exists so net worth can tell whether gold
+ * pledged against a loan is already counted as a holding.
+ */
+describe('a linked gold holding must belong to the asset owner', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    assetMock.create.mockResolvedValue({ id: 'a-1' });
+  });
+
+  it("refuses to create an asset pointing at another member's gold", async () => {
+    goldMock.findFirst.mockResolvedValue(null);
+
+    await expect(
+      createAsset('u1', { assetType: 'GOLD', name: 'Chain', value: 100, goldHoldingId: 'g-other' } as never),
+    ).rejects.toThrow(/gold holding/i);
+
+    expect(assetMock.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a holding the user does own', async () => {
+    goldMock.findFirst.mockResolvedValue({ id: 'g-mine' });
+
+    await createAsset('u1', { assetType: 'GOLD', name: 'Chain', value: 100, goldHoldingId: 'g-mine' } as never);
+
+    expect(goldMock.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'g-mine', userId: 'u1' } }),
+    );
+    expect(assetMock.create).toHaveBeenCalled();
+  });
+
+  it('skips the check when no holding is linked', async () => {
+    await createAsset('u1', { assetType: 'VEHICLE', name: 'Swift', value: 100 } as never);
+
+    expect(goldMock.findFirst).not.toHaveBeenCalled();
+    expect(assetMock.create).toHaveBeenCalled();
+  });
+
+  it('checks against the ASSET owner on update, not the requester', async () => {
+    assetMock.findFirst.mockResolvedValue({ id: 'a-1', userId: 'u-member' });
+    goldMock.findFirst.mockResolvedValue(null);
+
+    await expect(
+      updateAsset('admin-1', 'a-1', { goldHoldingId: 'g-admin' } as never, 'ADMIN'),
+    ).rejects.toThrow(/gold holding/i);
+
+    expect(goldMock.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'g-admin', userId: 'u-member' } }),
     );
     expect(assetMock.update).not.toHaveBeenCalled();
   });

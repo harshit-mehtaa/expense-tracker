@@ -16,6 +16,8 @@ const assetSchema = z.object({
   name: z.string().min(1).max(120),
   value: z.number().nonnegative(),
   realEstateId: z.string().optional(),
+  // Links a gold asset to the holding that already tracks it, so net worth counts it once.
+  goldHoldingId: z.string().optional(),
   notes: z.string().max(1000).optional(),
 });
 

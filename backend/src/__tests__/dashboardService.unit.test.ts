@@ -39,6 +39,8 @@ vi.mock('../config/prisma', () => {
     insurancePolicy: { findMany: vi.fn() },
     advanceTaxEvent: { findMany: vi.fn() },
     subscription: { findMany: vi.fn() },
+    // Assets not already represented by a RealEstate or GoldHolding row.
+    asset: { findMany: vi.fn() },
     budget: { findMany: vi.fn() },
   };
   return { default: prismaObj, prisma: prismaObj };
@@ -79,6 +81,7 @@ const sipMock = (prisma as any).sIP;
 const insMock = (prisma as any).insurancePolicy;
 const taxEventMock = (prisma as any).advanceTaxEvent;
 const subscriptionMock = (prisma as any).subscription;
+const assetMock = (prisma as any).asset;
 const budgetMock = (prisma as any).budget;
 const queryRawMock = (prisma as any).$queryRaw as ReturnType<typeof vi.fn>;
 const generateRecurringMock = generateDueRecurringTransactions as ReturnType<typeof vi.fn>;
@@ -111,6 +114,7 @@ function resetAllMocks() {
   insMock.findMany.mockResolvedValue([]);
   taxEventMock.findMany.mockResolvedValue([]);
   subscriptionMock.findMany.mockResolvedValue([]);
+  assetMock.findMany.mockResolvedValue([]);
   budgetMock.findMany.mockResolvedValue([]);
 }
 
@@ -1678,6 +1682,7 @@ describe('subscription alerts', () => {
 
   it('bounds the query to the alert window rather than loading everything', async () => {
     subscriptionMock.findMany.mockResolvedValue([]);
+  assetMock.findMany.mockResolvedValue([]);
 
     await getUpcomingAlerts('u1', 'MEMBER');
 
@@ -1694,5 +1699,90 @@ describe('subscription alerts', () => {
 
     const alerts = await getUpcomingAlerts('u1', 'MEMBER');
     expect(alerts.filter((a: any) => a.type === 'SUBSCRIPTION_TRIAL')).toHaveLength(0);
+  });
+});
+
+// ─── Other assets in net worth ───────────────────────────────────────────────
+
+/**
+ * An Asset records what secures a loan. RealEstate and GoldHolding are the detailed
+ * trackers, and both are already counted, so an asset linked to one must not be counted
+ * again — a flat would otherwise appear twice in net worth.
+ */
+describe('computeNetWorthStatement — other assets', () => {
+  beforeEach(resetAllMocks);
+
+  it('counts an asset that nothing else represents', async () => {
+    // The gap this fixes: a car loan is a liability with no offsetting asset.
+    assetMock.findMany.mockResolvedValue([
+      { name: 'Swift Dzire', assetType: 'VEHICLE', value: 1200000 },
+    ]);
+
+    const r = await computeNetWorthStatement('u1');
+
+    expect(r.assets.otherAssets).toBe(1200000);
+    expect(r.otherAssetItems).toEqual([
+      { name: 'Swift Dzire', assetType: 'VEHICLE', currentValue: 1200000 },
+    ]);
+  });
+
+  it('adds them to the asset total', async () => {
+    assetMock.findMany.mockResolvedValue([
+      { name: 'Swift Dzire', assetType: 'VEHICLE', value: 1200000 },
+    ]);
+
+    const r = await computeNetWorthStatement('u1');
+    expect(r.totalAssets).toBe(1200000);
+  });
+
+  it('EXCLUDES an asset already tracked as real estate or gold', async () => {
+    // The query filters on both links, so a linked asset never reaches the sum. Asserting
+    // the filter itself: counting a linked property would report the same flat twice.
+    await computeNetWorthStatement('u1');
+
+    expect(assetMock.findMany.mock.calls[0][0].where).toMatchObject({
+      realEstateId: null,
+      goldHoldingId: null,
+    });
+  });
+
+  it('scopes to the requesting user, since an asset has a single owner', async () => {
+    await computeNetWorthStatement('u1');
+    expect(assetMock.findMany.mock.calls[0][0].where.userId).toBe('u1');
+  });
+
+  it('is family-wide when no user is given', async () => {
+    await computeNetWorthStatement();
+    expect(assetMock.findMany.mock.calls[0][0].where.userId).toBeUndefined();
+  });
+
+  it('reports zero when there are none, rather than undefined', async () => {
+    const r = await computeNetWorthStatement('u1');
+    expect(r.assets.otherAssets).toBe(0);
+    expect(r.otherAssetItems).toEqual([]);
+  });
+
+  it('sums several assets', async () => {
+    assetMock.findMany.mockResolvedValue([
+      { name: 'Car', assetType: 'VEHICLE', value: 1200000 },
+      { name: 'Watch', assetType: 'OTHER', value: 300000 },
+    ]);
+
+    const r = await computeNetWorthStatement('u1');
+    expect(r.assets.otherAssets).toBe(1500000);
+  });
+
+  it('offsets a loan secured against it, instead of dropping net worth by the whole loan', async () => {
+    // The point of the change, stated as an outcome rather than a field.
+    // Liabilities are share-weighted in JS from findMany, not groupBy.
+    loanMock.findMany.mockResolvedValue([
+      { loanType: 'AUTO', outstandingBalance: 800000, userId: 'u1', owners: [] },
+    ]);
+    assetMock.findMany.mockResolvedValue([
+      { name: 'Swift Dzire', assetType: 'VEHICLE', value: 1200000 },
+    ]);
+
+    const r = await computeNetWorthStatement('u1');
+    expect(r.netWorth).toBe(1200000 - 800000);
   });
 });
