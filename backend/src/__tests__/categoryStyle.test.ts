@@ -32,7 +32,9 @@ describe('getDefaultCategoryStyle — exact name match (priority 1)', () => {
   });
 
   it('collapses punctuation and extra whitespace before matching', () => {
-    expect(getDefaultCategoryStyle('  Amazon-Prime!!  ', 'EXPENSE')).toEqual({ icon: '▶️', color: '#00a8e1' });
+    // The play button moved to YouTube, where it is the canonical mark; Prime gets a
+    // package. The point of this test is the normalisation, not the emoji.
+    expect(getDefaultCategoryStyle('  Amazon-Prime!!  ', 'EXPENSE')).toEqual({ icon: '📦', color: '#00a8e1' });
   });
 
   it('takes priority over a keyword match the name would also satisfy', () => {
@@ -89,5 +91,50 @@ describe('getDefaultCategoryStyle — EXPENSE fallback (priority 4)', () => {
 
   it('handles a name that normalizes to an empty string', () => {
     expect(getDefaultCategoryStyle('!!!', 'INCOME')).toEqual({ icon: '💰', color: '#22c55e' });
+  });
+});
+
+describe('getDefaultCategoryStyle — utilities and transport are distinguishable', () => {
+  it('gives water, gas and electricity three different icons', () => {
+    // All three used to fall into one keyword rule and render as the same light bulb.
+    const water = getDefaultCategoryStyle('Water bill', 'EXPENSE');
+    const gas = getDefaultCategoryStyle('Gas bill', 'EXPENSE');
+    const power = getDefaultCategoryStyle('Electricity bill', 'EXPENSE');
+
+    expect(new Set([water.icon, gas.icon, power.icon]).size).toBe(3);
+  });
+
+  it('distinguishes a trip from the flight taken on it', () => {
+    expect(getDefaultCategoryStyle('Travel', 'EXPENSE').icon)
+      .not.toBe(getDefaultCategoryStyle('Flight', 'EXPENSE').icon);
+  });
+
+  it('distinguishes household help from the house itself', () => {
+    expect(getDefaultCategoryStyle('Househelp', 'EXPENSE').icon)
+      .not.toBe(getDefaultCategoryStyle('Rent', 'EXPENSE').icon);
+  });
+
+  it('reads an Indian "Auto" as an auto-rickshaw, not a car', () => {
+    expect(getDefaultCategoryStyle('Auto', 'EXPENSE').icon).toBe('🛺');
+  });
+
+  it('resolves a cab, which previously matched nothing and fell back', () => {
+    expect(getDefaultCategoryStyle('Cab', 'EXPENSE').icon).toBe('🚕');
+  });
+
+  it('sends property tax to the tax icon rather than the house icon', () => {
+    expect(getDefaultCategoryStyle('Property tax', 'EXPENSE').icon)
+      .not.toBe(getDefaultCategoryStyle('House rent', 'EXPENSE').icon);
+  });
+
+  it('matches a common misspelling of maintenance as typed', () => {
+    expect(getDefaultCategoryStyle('Maintainence', 'EXPENSE').icon).toBe('🔧');
+    expect(getDefaultCategoryStyle('Maintenance', 'EXPENSE').icon).toBe('🔧');
+  });
+
+  it('gives none of these the generic receipt fallback', () => {
+    for (const name of ['Parking', 'Cab', 'Cook', 'Nanny', 'Youtube', 'Maintainence']) {
+      expect(getDefaultCategoryStyle(name, 'EXPENSE').icon).not.toBe('🧾');
+    }
   });
 });
