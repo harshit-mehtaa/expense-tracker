@@ -36,6 +36,18 @@ No registry login is required. The base images (`ghcr.io/harshit-mehtaa/node:20-
 `ghcr.io/harshit-mehtaa/nginx:alpine`) are public, as are `postgres:16-alpine` and
 `nginx:alpine` from Docker Hub.
 
+> **If a build fails with `DeadlineExceeded` on `load metadata`**, BuildKit timed out
+> resolving a base image manifest. It is transient and not an auth problem — the images
+> are public and no login is needed. Pull the bases once, then build again:
+>
+> ```bash
+> docker pull ghcr.io/harshit-mehtaa/node:20-alpine
+> docker pull ghcr.io/harshit-mehtaa/nginx:alpine
+> docker compose build
+> ```
+>
+> Once they are local the build resolves them immediately, including with `--pull`.
+
 ### 1. Clone
 
 ```bash
