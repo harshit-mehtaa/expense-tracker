@@ -46,7 +46,11 @@ services:
     build:
       context: ./frontend
       target: builder
-    command: ["npx", "vite", "--host", "0.0.0.0", "--port", "5173"]
+    # `npm install` before Vite, for the same reason the backend runs `prisma generate`
+    # here: node_modules comes from the image while the source is bind-mounted, so adding
+    # a dependency on the host leaves the container unable to resolve it and the whole app
+    # fails to load. It is a no-op (~1s) when nothing has changed.
+    command: ["sh", "-c", "npm install --no-audit --no-fund && npx vite --host 0.0.0.0 --port 5173"]
     volumes:
       # Mount only source dirs — container keeps its own node_modules
       - ./frontend/src:/app/src
@@ -58,6 +62,11 @@ services:
       # which decides the format of every native <input type="date"> -- went on rendering
       # mm/dd/yyyy after it had already been fixed.
       - ./frontend/index.html:/app/index.html
+      # Mounted so the install above sees dependencies added on the host. node_modules is
+      # deliberately NOT mounted — it must stay Linux-native inside the container rather
+      # than the macOS host's copy.
+      - ./frontend/package.json:/app/package.json
+      - ./frontend/package-lock.json:/app/package-lock.json
     environment:
       NODE_ENV: development
       # CHOKIDAR_USEPOLLING: same virtiofs fix for Vite's chokidar file watcher
