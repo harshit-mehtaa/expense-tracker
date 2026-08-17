@@ -117,6 +117,9 @@ const accountSchema = z.object({
     .regex(/^$|^[A-Za-z]{4}0[A-Za-z0-9]{6}$/, 'Enter a valid IFSC code')
     .optional(),
   currentBalance: z.coerce.number().default(0),
+  /** Cards only. Which side of zero the entered amount belongs on. Not sent to the API —
+   *  it decides the sign of `currentBalance`. */
+  isCreditBalance: z.boolean().default(false),
   upiId: z.string().optional(),
   interestRate: z.coerce.number().optional(),
   creditLimit: optionalPositiveAmountSchema,
@@ -134,23 +137,25 @@ const accountSchema = z.object({
 });
 
 type AccountForm = z.infer<typeof accountSchema>;
-type AccountPayload = Omit<AccountForm, 'customBankName'>;
+type AccountPayload = Omit<AccountForm, 'customBankName' | 'isCreditBalance'>;
 type AccountFormMode = 'BANK' | 'CREDIT_CARD';
 
 function cleanAccountPayload(
   data: AccountForm,
   mode: AccountFormMode = data.accountType === 'CREDIT_CARD' ? 'CREDIT_CARD' : 'BANK',
-  preservePositiveCreditBalance = false,
 ): AccountPayload {
   const bankName = data.bankName === OTHER_BANK ? data.customBankName?.trim() : data.bankName.trim();
   const accountType = mode === 'CREDIT_CARD'
     ? isCardTypeValue(data.accountType) ? data.accountType : 'CREDIT_CARD'
     : data.accountType;
   const isCard = isCardTypeValue(accountType);
+  // Previously the sign was preserved whenever the stored balance was already positive,
+  // to avoid silently rewriting someone's data. That also made a wrongly-signed card
+  // impossible to correct through the form: a card holding what was actually owed stayed
+  // a positive asset for good, inflating net worth by twice the amount. The user now says
+  // which it is.
   const currentBalance = accountType === 'CREDIT_CARD'
-    ? preservePositiveCreditBalance
-      ? Math.abs(Number(data.currentBalance) || 0)
-      : -Math.abs(Number(data.currentBalance) || 0)
+    ? (data.isCreditBalance ? 1 : -1) * Math.abs(Number(data.currentBalance) || 0)
     : data.currentBalance;
 
   return {
@@ -211,7 +216,7 @@ export default function AccountsPage() {
 
   const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<AccountForm>({
     resolver: zodResolver(accountSchema),
-    defaultValues: { bankName: BANKS[0], accountType: 'SAVINGS', currentBalance: 0 },
+    defaultValues: { bankName: BANKS[0], accountType: 'SAVINGS', currentBalance: 0, isCreditBalance: false },
   });
   const selectedBankName = watch('bankName');
   const selectedCustomBankName = watch('customBankName');
@@ -229,11 +234,7 @@ export default function AccountsPage() {
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: AccountForm }) => api.put(
       `/accounts/${id}`,
-      cleanAccountPayload(
-        data,
-        formMode,
-        formMode === 'CREDIT_CARD' && editing?.accountType === 'CREDIT_CARD' && Number(editing?.currentBalance) > 0,
-      ),
+      cleanAccountPayload(data, formMode),
     ),
     onSuccess: () => { invalidateAccounts(); setEditing(null); setShowForm(false); reset(); },
   });
@@ -266,6 +267,7 @@ export default function AccountsPage() {
     setValue('accountNumber', account.accountNumber ?? '');
     setValue('ifscCode', mode === 'CREDIT_CARD' ? '' : account.ifscCode ?? '');
     setValue('currentBalance', account.accountType === 'CREDIT_CARD' ? Math.max(Math.abs(Number(account.currentBalance)), 0) : account.currentBalance);
+    setValue('isCreditBalance', account.accountType === 'CREDIT_CARD' && Number(account.currentBalance) > 0);
     setValue('upiId', mode === 'CREDIT_CARD' ? '' : account.upiId ?? '');
     setValue('creditLimit', account.creditLimit ?? undefined);
     setValue('billingCycleStartDay', account.billingCycleStartDay ?? undefined);
@@ -277,14 +279,14 @@ export default function AccountsPage() {
   function openAddBankAccount() {
     setEditing(null);
     setFormMode('BANK');
-    reset({ bankName: BANKS[0], accountType: 'SAVINGS', currentBalance: 0 });
+    reset({ bankName: BANKS[0], accountType: 'SAVINGS', currentBalance: 0, isCreditBalance: false });
     setShowForm(true);
   }
 
   function openAddCreditCard() {
     setEditing(null);
     setFormMode('CREDIT_CARD');
-    reset({ bankName: BANKS[0], accountType: 'CREDIT_CARD', currentBalance: 0 });
+    reset({ bankName: BANKS[0], accountType: 'CREDIT_CARD', currentBalance: 0, isCreditBalance: false });
     setShowForm(true);
   }
 
@@ -377,16 +379,16 @@ export default function AccountsPage() {
   const numberLabel = formMode === 'CREDIT_CARD' ? 'Card Number (optional)' : 'Account Number (optional)';
   const numberPlaceholder = formMode === 'CREDIT_CARD' ? 'Full card number or last 4 digits' : 'Full account number';
   const isSelectedCreditCard = selectedAccountType === 'CREDIT_CARD';
-  const isEditingCreditBalance = isSelectedCreditCard && Number(editing?.currentBalance) > 0;
+  const isEditingCreditBalance = watch('isCreditBalance') === true;
   const balanceLabel = formMode === 'CREDIT_CARD'
     ? isSelectedCreditCard
       ? isEditingCreditBalance ? 'Current Credit Balance (₹)' : 'Current Outstanding (₹)'
       : 'Current Balance (₹)'
     : 'Current Balance (₹)';
   const balanceHelp = formMode === 'CREDIT_CARD' && isSelectedCreditCard && !isEditingCreditBalance
-    ? 'Enter the amount currently due. It will be stored as card outstanding.'
+    ? 'Enter the amount currently due. It is stored as what you owe and counts as a liability.'
     : isSelectedCreditCard && isEditingCreditBalance
-    ? 'This card currently has a credit balance, so the amount will be kept positive.'
+    ? 'A credit balance is money the issuer owes you, so it counts as an asset.'
     : formMode === 'CREDIT_CARD'
     ? 'Use 0 when the card balance is already tracked by a linked bank account.'
     : null;
@@ -897,6 +899,25 @@ export default function AccountsPage() {
                 <Label htmlFor="account-current-balance" required>{balanceLabel}</Label>
                 <Input id="account-current-balance" {...register('currentBalance')} type="number" step="0.01" />
                 {balanceHelp && <p className="text-xs text-muted-foreground">{balanceHelp}</p>}
+                {/* Which side of zero the amount belongs on. The form used to infer this
+                    from the stored sign, which meant a card holding what was actually
+                    owed could never be corrected — it stayed an asset for good. */}
+                {isSelectedCreditCard && (
+                  <label className="flex items-start gap-2 text-sm pt-1">
+                    <input
+                      id="account-is-credit-balance"
+                      type="checkbox"
+                      {...register('isCreditBalance')}
+                      className="mt-1 rounded"
+                    />
+                    <span>
+                      This is a credit balance, not an amount owed
+                      <span className="block text-xs text-muted-foreground">
+                        Tick only if the card is overpaid or holds a refund.
+                      </span>
+                    </span>
+                  </label>
+                )}
               </div>
               {formMode === 'BANK' && (
                 <div className="space-y-1">

@@ -96,3 +96,81 @@ describe('Accounts page — smoke', () => {
     });
   });
 });
+
+// ─── Which side of zero a card balance sits on ───────────────────────────────
+
+/**
+ * A credit card's balance is negative when you owe. The form used to infer that from the
+ * sign already stored: if a card held a positive number it was treated as a credit
+ * balance and kept positive on every subsequent save. So a card recording what was
+ * actually owed could never be corrected through the UI, and stayed on the asset side —
+ * overstating net worth by twice the amount. One real card was wrong this way.
+ */
+describe('Accounts page — credit card balance sign', () => {
+  const OWED_CARD = {
+    id: 'card-1',
+    bankName: 'HDFC Bank',
+    accountType: 'CREDIT_CARD',
+    accountNumberLast4: '7740',
+    currentBalance: 6547,      // wrongly positive: this is what is owed
+    isActive: true,
+  };
+
+  const openCardEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+    await screen.findByText(/HDFC Bank/);
+    const editButtons = await screen.findAllByRole('button', { name: /edit/i });
+    await user.click(editButtons[0]);
+  };
+
+  it('lets a wrongly-signed card be corrected to what is owed', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    renderPage(<AccountsPage />, {
+      route: '/accounts',
+      user: MEMBER_USER,
+      handlers: [
+        http.get(url('/accounts'), () => HttpResponse.json({ data: [OWED_CARD] })),
+        http.put(url('/accounts/card-1'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: OWED_CARD });
+        }),
+      ],
+    });
+
+    await openCardEditor(user);
+
+    // Opening the form reflects what is stored: currently flagged as a credit balance.
+    const creditToggle = await screen.findByLabelText(/credit balance, not an amount owed/i);
+    expect(creditToggle).toBeChecked();
+
+    // Say it is actually owed — previously impossible.
+    await user.click(creditToggle);
+    await user.click(screen.getByRole('button', { name: /save|update/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body.currentBalance).toBe(-6547);
+  });
+
+  it('keeps a genuine credit balance positive when the user says so', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    renderPage(<AccountsPage />, {
+      route: '/accounts',
+      user: MEMBER_USER,
+      handlers: [
+        http.get(url('/accounts'), () => HttpResponse.json({ data: [OWED_CARD] })),
+        http.put(url('/accounts/card-1'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: OWED_CARD });
+        }),
+      ],
+    });
+
+    await openCardEditor(user);
+    expect(await screen.findByLabelText(/credit balance, not an amount owed/i)).toBeChecked();
+    await user.click(screen.getByRole('button', { name: /save|update/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body.currentBalance).toBe(6547);
+  });
+});
