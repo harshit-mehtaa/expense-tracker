@@ -727,3 +727,62 @@ describe('Loans page — inline asset creation can defer to an existing record',
     expect(screen.queryByLabelText(/already tracked/i)).not.toBeInTheDocument();
   });
 });
+
+// ─── A MEMBER can share a loan ───────────────────────────────────────────────
+
+/**
+ * The member list used to come from /admin/users with the query disabled for non-admins,
+ * so a MEMBER's owner dropdown held only themselves. "Add Owner" produced a duplicate row
+ * the schema rejects, which made co-ownership unusable for the two-person household it
+ * exists to serve.
+ */
+describe('Loans page — a MEMBER can add a co-owner', () => {
+  const FAMILY = [
+    { id: 'u-member', name: 'Sneha', colorTag: '#ec4899' },
+    { id: 'u-other', name: 'Harshit', colorTag: '#3b82f6' },
+  ];
+
+  const withFamily = () => [
+    http.get(url('/users/members'), () => HttpResponse.json({ data: FAMILY })),
+    ...loanHandlers(),
+  ];
+
+  it('offers other family members, not just themselves', async () => {
+    const user = userEvent.setup();
+    renderPage(<LoansPage />, { route: '/loans', user: MEMBER_USER, handlers: withFamily() });
+
+    await screen.findByText('HDFC Home Loan');
+    await user.click(screen.getByRole('button', { name: /edit loan/i }));
+    await screen.findByRole('heading', { name: /edit loan/i });
+
+    const ownerSelects = screen.getAllByRole('combobox')
+      .filter((el) => Array.from(el.querySelectorAll('option')).some((o) => o.textContent === 'Harshit'));
+    expect(ownerSelects.length).toBeGreaterThan(0);
+  });
+
+  it('can add a second owner row that is actually selectable', async () => {
+    // Previously the only option was a duplicate of themselves, which the share schema
+    // then rejected as "Owner already added".
+    const user = userEvent.setup();
+    renderPage(<LoansPage />, { route: '/loans', user: MEMBER_USER, handlers: withFamily() });
+
+    await screen.findByText('HDFC Home Loan');
+    await user.click(screen.getByRole('button', { name: /edit loan/i }));
+    await screen.findByRole('heading', { name: /edit loan/i });
+    await user.click(screen.getByRole('button', { name: /add owner/i }));
+
+    const names = screen.getAllByRole('option').map((o) => o.textContent);
+    expect(names).toContain('Harshit');
+  });
+
+  it('gets no member switcher — the list is for co-owners, not for viewing', async () => {
+    // Populating the list must not become a way to read another member's data. The
+    // switcher is gated on isAdmin here, and the server refuses a targetUserId from a
+    // non-admin regardless.
+    renderPage(<LoansPage />, { route: '/loans', user: MEMBER_USER, handlers: withFamily() });
+
+    await screen.findByText('HDFC Home Loan');
+    expect(screen.queryByLabelText(/viewing|member/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /all family/i })).not.toBeInTheDocument();
+  });
+});

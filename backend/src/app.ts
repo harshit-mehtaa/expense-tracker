@@ -26,6 +26,7 @@ import snapshotsRouter from './routes/snapshots';
 import reportsRouter from './routes/reports';
 import categoryRulesRouter from './routes/categoryRules';
 import assetsRouter from './routes/assets';
+import usersRouter from './routes/users';
 import subscriptionsRouter from './routes/subscriptions';
 import documentsRouter from './routes/documents';
 
@@ -90,6 +91,7 @@ export function createApp() {
   app.use('/api/snapshots/net-worth', snapshotsRouter);
   app.use('/api/reports', reportsRouter);
   app.use('/api/category-rules', categoryRulesRouter);
+  app.use('/api/users', usersRouter);
   app.use('/api/assets', assetsRouter);
   app.use('/api/subscriptions', subscriptionsRouter);
   app.use('/api/documents', documentsRouter);

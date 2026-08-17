@@ -2,14 +2,9 @@
 
 ## Status: idle
 
-Last completed: inline asset creation can link to the record that already tracks it,
-closing a live double-count on new property and gold assets.
+Last completed: a MEMBER can add co-owners (GET /api/users/members).
 
 ## QUEUED NEXT
-
-### 2. MEMBER cannot add co-owners
-No non-admin member-listing endpoint. Affects loans AND real estate. Widens data
-exposure, so it is a product decision.
 
 ### 3. No P3009 / rollback runbook in DEPLOY.md
 docker-compose.yml:41 blocks backend startup on migrate success; no documented recovery.

@@ -1,6 +1,9 @@
 /**
  * Tests for useMemberSelector hook.
- * Uses vi.mock for AuthContext and MSW for the /admin/users API.
+ *
+ * Every role now reads /users/members. It used to fetch /admin/users with
+ * `enabled: isAdmin`, which left a MEMBER with an empty list — and so a co-owner dropdown
+ * containing only themselves, making a jointly-owned loan impossible to record.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
@@ -40,7 +43,7 @@ describe('useMemberSelector — ADMIN', () => {
   beforeEach(() => {
     useAuthMock.mockReturnValue({ user: { role: 'ADMIN', id: 'u1' } });
     server.use(
-      http.get('http://localhost:3000/admin/users', () =>
+      http.get('http://localhost:3000/users/members', () =>
         HttpResponse.json({ data: MOCK_MEMBERS }),
       ),
     );
@@ -76,6 +79,11 @@ describe('useMemberSelector — ADMIN', () => {
 describe('useMemberSelector — MEMBER', () => {
   beforeEach(() => {
     useAuthMock.mockReturnValue({ user: { role: 'MEMBER', id: 'u2' } });
+    server.use(
+      http.get('http://localhost:3000/users/members', () =>
+        HttpResponse.json({ data: MOCK_MEMBERS }),
+      ),
+    );
   });
 
   it('isAdmin is false for MEMBER role', () => {
@@ -83,19 +91,27 @@ describe('useMemberSelector — MEMBER', () => {
     expect(result.current.isAdmin).toBe(false);
   });
 
-  it('does not fetch members (query disabled)', async () => {
-    let fetchCalled = false;
-    server.use(
-      http.get('http://localhost:3000/admin/users', () => {
-        fetchCalled = true;
-        return HttpResponse.json({ data: [] });
-      }),
-    );
-
+  it('DOES fetch members, so a co-owner can be chosen', async () => {
+    // Previously disabled for non-admins, which left the dropdown containing only
+    // themselves and made co-ownership unusable for the household it exists for.
     const { result } = renderHook(() => useMemberSelector(), { wrapper: wrapper() });
-    // Give it a moment to potentially fire
-    await new Promise((r) => setTimeout(r, 50));
-    expect(fetchCalled).toBe(false);
-    expect(result.current.members).toHaveLength(0);
+    await waitFor(() => expect(result.current.isMembersLoading).toBe(false));
+    expect(result.current.members.map((m) => m.name)).toContain('Alice');
+  });
+
+  it('still excludes inactive members', async () => {
+    const { result } = renderHook(() => useMemberSelector(), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.isMembersLoading).toBe(false));
+    expect(result.current.members.map((m) => m.name)).not.toContain('Charlie');
+  });
+
+  it('gets NO ability to view another member — viewUserId stays undefined', async () => {
+    // The list is for picking co-owners. Viewing another member's data is admin-only, and
+    // the server refuses a targetUserId from a non-admin regardless of what is sent.
+    const { result } = renderHook(() => useMemberSelector(), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.isMembersLoading).toBe(false));
+    expect(result.current.viewUserId).toBeUndefined();
+    expect(result.current.isAdmin).toBe(false);
   });
 });
+

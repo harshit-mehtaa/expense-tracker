@@ -24,6 +24,9 @@ export function baseHandlers(user: TestUser = ADMIN_USER) {
       HttpResponse.json({ data: { accessToken: 'test-token' } })),
     http.get(url('/auth/me'), () => HttpResponse.json({ data: user })),
     http.get(url('/admin/users'), () => HttpResponse.json({ data: MEMBERS })),
+    // Every role reads this now — the co-owner picker needs a member list, and a MEMBER
+    // cannot reach /admin/users.
+    http.get(url('/users/members'), () => HttpResponse.json({ data: MEMBERS })),
     http.get(url('/categories'), () => HttpResponse.json({ data: CATEGORIES })),
     http.get(url('/accounts'), () => HttpResponse.json({ data: ACCOUNTS })),
   ];
