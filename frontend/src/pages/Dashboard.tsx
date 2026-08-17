@@ -161,7 +161,7 @@ export default function DashboardPage() {
       {/* Charts row */}
       <div className="grid gap-4 lg:grid-cols-3">
         {/* Cash Flow chart (spans 2 cols) */}
-        <div className="lg:col-span-2 rounded-xl border border-border/60 bg-card shadow-card p-4">
+        <div className="lg:col-span-2 rounded-xl border border-border/60 bg-card shadow-card p-4 min-w-0 overflow-hidden">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-base font-semibold">Cash Flow — FY {selectedFY}</h2>
@@ -239,7 +239,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Asset split (simplified placeholder) */}
-        <div className="rounded-xl border border-border/60 bg-card shadow-card p-4">
+        <div className="rounded-xl border border-border/60 bg-card shadow-card p-4 min-w-0 overflow-hidden">
           <h2 className="mb-4 text-base font-semibold">Assets vs Liabilities</h2>
           <ResponsiveContainer width="100%" height={200}>
             <PieChart>
@@ -369,7 +369,7 @@ export default function DashboardPage() {
 
       {/* Net Worth Trend */}
       {netWorthChartData.length > 0 && (
-        <div className="rounded-xl border border-border/60 bg-card shadow-card p-4">
+        <div className="rounded-xl border border-border/60 bg-card shadow-card p-4 min-w-0 overflow-hidden">
           <div className="mb-3">
             <h2 className="text-base font-semibold">Net Worth Trend</h2>
             <p className="text-xs text-muted-foreground mt-0.5">Monthly snapshots — based on data at time of capture</p>
@@ -398,7 +398,7 @@ export default function DashboardPage() {
 
       {/* Family spending breakdown — admin only */}
       {user?.role === 'ADMIN' && familyOverview && familyOverview.members.length > 1 && (
-        <div className="rounded-xl border border-border/60 bg-card shadow-card p-4">
+        <div className="rounded-xl border border-border/60 bg-card shadow-card p-4 min-w-0 overflow-hidden">
           <div className="flex items-center gap-2 mb-3">
             <Users className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-base font-semibold">Family Spending — FY {selectedFY}</h2>

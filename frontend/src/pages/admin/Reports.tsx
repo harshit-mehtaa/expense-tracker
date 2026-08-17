@@ -254,7 +254,7 @@ export default function ReportsPage() {
             <>
               {/* Summary cards */}
               {summary && (
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 [&>*]:min-w-0">
                   <div className="rounded-xl border bg-card p-5 space-y-1">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total Income</p>
                     <INRDisplay amount={summary.totalIncome} short className="text-2xl font-bold text-green-600 dark:text-green-400" />
@@ -277,9 +277,9 @@ export default function ReportsPage() {
               )}
 
               {/* Monthly trend */}
-              <section className="space-y-3">
+              <section className="space-y-3 min-w-0">
                 <h2 className="text-lg font-semibold">Monthly Trend</h2>
-                <div className="rounded-xl border bg-card p-4">
+                <div className="rounded-xl border bg-card p-4 min-w-0 overflow-hidden">
                   {!hasMonthlyData ? (
                     <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">
                       No data for this financial year
@@ -302,15 +302,15 @@ export default function ReportsPage() {
               </section>
 
               {/* Expense breakdown */}
-              <section className="space-y-3">
+              <section className="space-y-3 min-w-0">
                 <h2 className="text-lg font-semibold">Expense Breakdown</h2>
                 {expenseCategories.length === 0 ? (
                   <div className="text-center py-8 border rounded-xl text-muted-foreground text-sm">
                     No expense data for this financial year
                   </div>
                 ) : (
-                  <div className="grid lg:grid-cols-2 gap-6">
-                    <div className="rounded-xl border bg-card p-4">
+                  <div className="grid lg:grid-cols-2 gap-6 [&>*]:min-w-0">
+                    <div className="rounded-xl border bg-card p-4 min-w-0 overflow-hidden">
                       <ResponsiveContainer width="100%" height={300}>
                         <BarChart data={expenseBarData} layout="vertical" margin={{ left: 80, top: 4, right: 8, bottom: 0 }}>
                           <CartesianGrid {...GRID_STYLE} horizontal={false} />
@@ -321,7 +321,7 @@ export default function ReportsPage() {
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
-                    <div className="space-y-4">
+                    <div className="space-y-4 min-w-0 overflow-hidden">
                       <ResponsiveContainer width="100%" height={200}>
                         <PieChart>
                           <Pie data={expensePieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={44} outerRadius={88} paddingAngle={2} strokeWidth={0} label={false}>
@@ -349,15 +349,15 @@ export default function ReportsPage() {
               </section>
 
               {/* Income sources */}
-              <section className="space-y-3">
+              <section className="space-y-3 min-w-0">
                 <h2 className="text-lg font-semibold">Income Sources</h2>
                 {incomeCategories.length === 0 ? (
                   <div className="text-center py-8 border rounded-xl text-muted-foreground text-sm">
                     No income data for this financial year
                   </div>
                 ) : (
-                  <div className="grid lg:grid-cols-2 gap-6">
-                    <div className="rounded-xl border bg-card p-4">
+                  <div className="grid lg:grid-cols-2 gap-6 [&>*]:min-w-0">
+                    <div className="rounded-xl border bg-card p-4 min-w-0 overflow-hidden">
                       <ResponsiveContainer width="100%" height={300}>
                         <BarChart data={incomeBarData} layout="vertical" margin={{ left: 80, top: 4, right: 8, bottom: 0 }}>
                           <CartesianGrid {...GRID_STYLE} horizontal={false} />
@@ -368,7 +368,7 @@ export default function ReportsPage() {
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
-                    <div className="space-y-4">
+                    <div className="space-y-4 min-w-0 overflow-hidden">
                       <ResponsiveContainer width="100%" height={200}>
                         <PieChart>
                           <Pie data={incomePieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={44} outerRadius={88} paddingAngle={2} strokeWidth={0} label={false}>
@@ -406,8 +406,8 @@ export default function ReportsPage() {
           {spendingByCat.length === 0 ? (
             <div className="text-center py-8 border rounded-lg text-muted-foreground">No spending data for this FY</div>
           ) : (
-            <div className="grid lg:grid-cols-2 gap-6">
-              <div className="rounded-lg border bg-card p-4">
+            <div className="grid lg:grid-cols-2 gap-6 [&>*]:min-w-0">
+              <div className="rounded-lg border bg-card p-4 min-w-0 overflow-hidden">
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart data={spendingBarData} layout="vertical" margin={{ left: 80, top: 4, right: 8, bottom: 0 }}>
                     <CartesianGrid {...GRID_STYLE} horizontal={false} />
@@ -418,7 +418,7 @@ export default function ReportsPage() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-              <div className="space-y-4">
+              <div className="space-y-4 min-w-0 overflow-hidden">
                 <ResponsiveContainer width="100%" height={200}>
                   <PieChart>
                     <Pie data={spendingPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={44} outerRadius={88} paddingAngle={2} strokeWidth={0} label={false}>

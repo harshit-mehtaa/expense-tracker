@@ -505,7 +505,7 @@ export default function TaxCentrePage() {
             <div className="rounded-lg border bg-card p-6 space-y-4">
               <h2 className="font-semibold">Gross Income Components</h2>
               <div className="flex flex-col md:flex-row items-center gap-6">
-                <div className="w-full md:w-52 h-52 shrink-0">
+                <div className="w-full md:w-52 h-52 shrink-0 min-w-0 overflow-hidden">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie data={incomeSegments} dataKey="value" cx="50%" cy="50%" outerRadius={80} innerRadius={35}>

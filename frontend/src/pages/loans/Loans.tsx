@@ -177,7 +177,7 @@ function AmortizationModal({ loan, amortData, onClose }: { loan: Loan; amortData
         {/* Charts */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Balance decay */}
-          <div>
+          <div className="min-w-0 overflow-hidden">
             <p className="text-sm font-medium text-muted-foreground mb-2">Outstanding Balance</p>
             <ResponsiveContainer width="100%" height={200}>
               <AreaChart data={schedule} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
@@ -210,7 +210,7 @@ function AmortizationModal({ loan, amortData, onClose }: { loan: Loan; amortData
           </div>
 
           {/* Principal vs Interest yearly */}
-          <div>
+          <div className="min-w-0 overflow-hidden">
             <p className="text-sm font-medium text-muted-foreground mb-2">Principal vs Interest (by year)</p>
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={yearlyData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
