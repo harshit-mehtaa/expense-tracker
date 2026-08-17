@@ -326,6 +326,88 @@ describe('computeNetWorthStatement', () => {
     expect((r.assets as any).bankAccounts).toBeUndefined();
   });
 
+  // ── Credit cards ────────────────────────────────────────────────────────────
+  // Card balances were summed into `bankBalances` on the asset side, so a card you owed
+  // on showed as a negative bank balance: the cash figure was understated by the debt and
+  // the debt appeared under no liability line.
+
+  it('reports what is owed on a card as a liability, not as negative cash', async () => {
+    bankMock.findMany.mockResolvedValue([
+      { bankName: 'HDFC', accountNumberLast4: '1234', accountType: 'SAVINGS', currentBalance: 100000 },
+      { bankName: 'ICICI', accountNumberLast4: '7740', accountType: 'CREDIT_CARD', currentBalance: -6547 },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+
+    expect(r.assets.bankBalances).toBe(100000);   // cash, undiminished by card debt
+    expect(r.creditCardDebt).toBe(6547);
+    expect(r.totalAssets).toBe(100000);
+    expect(r.totalLiabilities).toBe(6547);
+  });
+
+  it('leaves the net worth total unchanged by the split', async () => {
+    // The whole point: a card at -6547 previously reduced assets by 6547, which nets the
+    // same as raising liabilities by 6547. Only the breakdown should move.
+    bankMock.findMany.mockResolvedValue([
+      { bankName: 'HDFC', accountNumberLast4: '1234', accountType: 'SAVINGS', currentBalance: 100000 },
+      { bankName: 'ICICI', accountNumberLast4: '7740', accountType: 'CREDIT_CARD', currentBalance: -6547 },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+    expect(r.netWorth).toBe(93453);
+  });
+
+  it('keeps cards out of the bank account list', async () => {
+    bankMock.findMany.mockResolvedValue([
+      { bankName: 'HDFC', accountNumberLast4: '1234', accountType: 'SAVINGS', currentBalance: 100000 },
+      { bankName: 'ICICI', accountNumberLast4: '7740', accountType: 'CREDIT_CARD', currentBalance: -6547 },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+
+    expect(r.bankAccounts.map((a: any) => a.accountType)).toEqual(['SAVINGS']);
+    expect(r.creditCardAccounts).toHaveLength(1);
+    expect(r.creditCardAccounts[0].bankName).toBe('ICICI');
+  });
+
+  it('treats a positive card balance as a genuine credit, not a liability', async () => {
+    // An overpaid card really is money owed TO you. It must not become a negative
+    // liability, which would inflate net worth twice over.
+    bankMock.findMany.mockResolvedValue([
+      { bankName: 'HDFC', accountNumberLast4: '7740', accountType: 'CREDIT_CARD', currentBalance: 6547 },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+
+    expect(r.creditCardDebt).toBe(0);
+    expect(r.totalAssets).toBe(6547);
+    expect(r.netWorth).toBe(6547);
+  });
+
+  it('separates loans from card debt so the snapshot column keeps its meaning', async () => {
+    bankMock.findMany.mockResolvedValue([
+      { bankName: 'ICICI', accountNumberLast4: '7740', accountType: 'CREDIT_CARD', currentBalance: -5000 },
+    ]);
+    loanMock.findMany.mockResolvedValue([
+      { loanType: 'HOME', outstandingBalance: 200000, userId: 'u1', owners: [] },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+
+    expect(r.totalLoans).toBe(200000);        // what the `loans` snapshot column stores
+    expect(r.creditCardDebt).toBe(5000);
+    expect(r.totalLiabilities).toBe(205000);
+  });
+
+  it('does not let one card\'s credit balance cancel another\'s debt', async () => {
+    // Family-wide, a member sitting on a credit balance made another member's card debt
+    // vanish: the signed sum netted to positive and reported nothing owed.
+    bankMock.findMany.mockResolvedValue([
+      { bankName: 'HDFC', accountNumberLast4: '7740', accountType: 'CREDIT_CARD', currentBalance: 6547 },
+      { bankName: 'ICICI', accountNumberLast4: '2003', accountType: 'CREDIT_CARD', currentBalance: -299 },
+    ]);
+    const r = await computeNetWorthStatement();
+
+    expect(r.creditCardDebt).toBe(299);
+    expect(r.totalAssets).toBe(6547);
+    expect(r.netWorth).toBe(6248);
+  });
+
   it('includes loan outstanding balance in totalLiabilities', async () => {
     loanMock.findMany.mockResolvedValue([
       { loanType: 'HOME', outstandingBalance: 500000, userId: 'u1', owners: [] },

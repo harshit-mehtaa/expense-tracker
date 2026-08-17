@@ -1300,6 +1300,16 @@ function ConvertToTransferModal({ tx, onClose }: { tx: Transaction; onClose: () 
   const [adjustCounterpartyBalance, setAdjustCounterpartyBalance] = useState(false);
 
   const destinationAccounts = accounts.filter((a: any) => a.id !== tx.bankAccountId);
+  const counterpartyAccount = accounts.find((a: any) => a.id === counterpartyAccountId);
+  const isCardPayment = counterpartyAccount?.accountType === 'CREDIT_CARD';
+
+  // Paying a card bill genuinely does reduce what you owe, and unless you import card
+  // statements nothing else ever will. Left unchecked — the old default — a card balance
+  // only ever falls, so every recurring charge on it dragged net worth down permanently
+  // while the bill was in fact being paid.
+  useEffect(() => {
+    if (isCardPayment) setAdjustCounterpartyBalance(true);
+  }, [isCardPayment]);
   const { data: counterpartCandidates = [], isFetching: isLoadingCounterpartCandidates } = useQuery({
     queryKey: ['transfer-counterpart-candidates', tx.id, counterpartyAccountId],
     queryFn: () => api
@@ -1393,7 +1403,9 @@ function ConvertToTransferModal({ tx, onClose }: { tx: Transaction; onClose: () 
           <span>
             {isIncomingPayment ? 'Adjust source account balance' : 'Adjust destination account balance'}
             <span className="block text-xs text-muted-foreground">
-              Leave unchecked if that account already has the real balance.
+              {isCardPayment
+                ? 'Paying the bill reduces what you owe on the card. Leave this on unless you also import the card statement.'
+                : 'Leave unchecked if that account already has the real balance.'}
             </span>
           </span>
         </label>

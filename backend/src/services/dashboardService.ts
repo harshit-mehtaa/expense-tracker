@@ -569,13 +569,30 @@ async function fetchAssetBreakdown(userId?: string) {
   const rateMap: Record<string, number> = {};
   exchangeRates.forEach((r) => { rateMap[r.fromCurrency] = Number(r.rate); });
 
-  const bankAccounts = accounts.map((a) => ({
+  const allAccounts = accounts.map((a) => ({
     bankName: a.bankName,
     accountNumberLast4: a.accountNumberLast4 ?? null,
     accountType: a.accountType,
     currentBalance: Number(a.currentBalance),
   }));
+
+  // A credit card is a liability, not a bank balance. Netting cards into `bankBalances`
+  // meant the cash figure was reduced by card debt and the debt itself appeared nowhere —
+  // so neither number was the one you wanted. The convention is the one the account form
+  // enforces (Accounts.tsx): negative means you owe.
+  //
+  // The net worth TOTAL is unchanged by this split. A card at -5000 previously reduced
+  // assets by 5000; it now raises liabilities by 5000. Only the breakdown becomes honest.
+  const bankAccounts = allAccounts.filter((a) => a.accountType !== 'CREDIT_CARD');
+  const creditCardAccounts = allAccounts.filter((a) => a.accountType === 'CREDIT_CARD');
+
   const bankBalances = bankAccounts.reduce((s, a) => s + a.currentBalance, 0);
+
+  // Per card, NOT the signed sum. Summing first let one card's credit balance cancel
+  // another's debt: family-wide, a member sitting on a 6,547 credit made a second
+  // member's card debt vanish and reported zero owed across the household.
+  const creditCardDebt = creditCardAccounts.reduce((s, a) => s + Math.max(0, -a.currentBalance), 0);
+  const creditCardCredit = creditCardAccounts.reduce((s, a) => s + Math.max(0, a.currentBalance), 0);
 
   const fdItems = fds
     .map((f) => ({ bankName: f.bankName, amount: Number(f.principalAmount) }))
@@ -641,6 +658,8 @@ async function fetchAssetBreakdown(userId?: string) {
 
   return {
     bankAccounts,
+    creditCardAccounts,
+    creditCardDebt,
     fdItems,
     rdItems,
     investmentItems,
@@ -654,7 +673,10 @@ async function fetchAssetBreakdown(userId?: string) {
     gold: gold_,
     realEstate,
     otherAssets: otherAssetsTotal,
-    total: bankBalances + fixedDeposits + recurringDeposits + investments_ + gold_ + realEstate + otherAssetsTotal,
+    // Only a positive card balance is an asset; what is owed is added to liabilities by
+    // the caller, so counting it in both places would double it.
+    total: bankBalances + creditCardCredit + fixedDeposits + recurringDeposits
+      + investments_ + gold_ + realEstate + otherAssetsTotal,
   };
 }
 
@@ -724,12 +746,21 @@ export async function computeNetWorthStatement(userId?: string) {
     }
   }
   const {
-    total: totalAssets, bankAccounts, fdItems, rdItems, investmentItems, goldItems,
+    total: totalAssets, bankAccounts, creditCardAccounts, creditCardDebt,
+    fdItems, rdItems, investmentItems, goldItems,
     realEstateItems, otherAssetItems, ...assets
   } = assetBreakdown;
+
+  // What is owed on cards is a liability like any other. It is deliberately NOT folded
+  // into `liabilities`, which is keyed by LoanType and would have to lie about the type.
+  const totalLoans = totalLiabilities;
+  totalLiabilities += creditCardDebt;
+
   return {
     assets,
     bankAccounts,
+    creditCardAccounts,
+    creditCardDebt,
     fdItems,
     rdItems,
     investmentItems,
@@ -739,6 +770,8 @@ export async function computeNetWorthStatement(userId?: string) {
     liabilities,
     totalAssets,
     totalLiabilities,
+    /** Loans only. `totalLiabilities` also carries what is owed on cards. */
+    totalLoans,
     netWorth: totalAssets - totalLiabilities,
   };
 }
@@ -774,7 +807,10 @@ export async function upsertNetWorthSnapshot(userId: string) {
       investments: statement.assets.investments,
       gold: statement.assets.gold,
       realEstate: statement.assets.realEstate,
-      loans: statement.totalLiabilities,
+      creditCards: statement.creditCardDebt,
+      // Loans only. This previously took totalLiabilities, which was the same number
+      // until cards joined it — now it would silently overstate loan history.
+      loans: statement.totalLoans,
     },
     create: {
       userId,
@@ -788,7 +824,10 @@ export async function upsertNetWorthSnapshot(userId: string) {
       investments: statement.assets.investments,
       gold: statement.assets.gold,
       realEstate: statement.assets.realEstate,
-      loans: statement.totalLiabilities,
+      creditCards: statement.creditCardDebt,
+      // Loans only. This previously took totalLiabilities, which was the same number
+      // until cards joined it — now it would silently overstate loan history.
+      loans: statement.totalLoans,
     },
   });
 }

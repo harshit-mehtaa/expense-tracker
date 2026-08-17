@@ -667,17 +667,39 @@ export default function ReportsPage() {
               </div>
               <div className="rounded-lg border bg-card p-5 space-y-4">
                 <h3 className="font-medium text-muted-foreground text-sm uppercase tracking-wide">Liabilities</h3>
-                {Object.keys(netWorth.liabilities).length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No active loans</p>
+                {Object.keys(netWorth.liabilities).length === 0 && !netWorth.creditCardDebt ? (
+                  <p className="text-sm text-muted-foreground">No active loans or card debt</p>
                 ) : (
-                  <div className="space-y-1.5">
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Loans</p>
-                    {Object.entries(netWorth.liabilities).map(([type, amt]) => (
-                      <div key={type} className="flex justify-between text-sm">
-                        <span>{LOAN_TYPE_LABELS[type] ?? type}</span>
-                        <INRDisplay amount={amt as number} />
+                  <div className="space-y-3">
+                    {Object.keys(netWorth.liabilities).length > 0 && (
+                      <div className="space-y-1.5">
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Loans</p>
+                        {Object.entries(netWorth.liabilities).map(([type, amt]) => (
+                          <div key={type} className="flex justify-between text-sm">
+                            <span>{LOAN_TYPE_LABELS[type] ?? type}</span>
+                            <INRDisplay amount={amt as number} />
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
+                    {/* Cards used to be netted into Bank Balances as a negative asset, so
+                        what you owed on them appeared under no heading at all. */}
+                    {netWorth.creditCardDebt > 0 && (
+                      <div className="space-y-1.5">
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Credit Cards</p>
+                        {(netWorth.creditCardAccounts ?? [])
+                          .filter((c: { currentBalance: number }) => c.currentBalance < 0)
+                          .map((c: { bankName: string; accountNumberLast4: string | null; currentBalance: number }, i: number) => (
+                            <div key={i} className="flex justify-between text-sm">
+                              <span className="truncate pr-2">
+                                {c.bankName}
+                                {c.accountNumberLast4 ? ` ···${c.accountNumberLast4}` : ''}
+                              </span>
+                              <INRDisplay amount={Math.abs(c.currentBalance)} />
+                            </div>
+                          ))}
+                      </div>
+                    )}
                   </div>
                 )}
                 <div className="border-t pt-2 flex justify-between font-semibold">

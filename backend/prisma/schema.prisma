@@ -1122,6 +1122,9 @@ model NetWorthSnapshot {
   gold              Decimal? @db.Decimal(15, 2)
   realEstate        Decimal? @db.Decimal(15, 2)
   loans             Decimal? @db.Decimal(15, 2)
+  /// What is owed on credit cards. Previously netted into bankBalances as a negative
+  /// asset, so card debt appeared nowhere and the cash figure was understated by it.
+  creditCards       Decimal? @db.Decimal(15, 2)
   createdAt         DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
