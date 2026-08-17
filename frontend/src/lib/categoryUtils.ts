@@ -62,3 +62,63 @@ export function isCategoryDescendant(
 
   return false;
 }
+
+export interface CategoryTreeOption<T extends CategoryLike> {
+  category: T;
+  /** 0 for a top-level category, 1 for its children, and so on. */
+  depth: number;
+}
+
+/**
+ * Flattens categories into the order a tree would render them: each parent immediately
+ * followed by its own children, siblings alphabetical, to any depth.
+ *
+ * Pickers used to sort by leaf name, so "Cab" filed under C and "Travel" under T — a
+ * sub-category and its parent could sit twenty rows apart, and the only clue they were
+ * related was the path in the label.
+ *
+ * Categories whose parent is missing from the supplied list are treated as roots. That
+ * matters because every picker filters by type first: a child whose parent is a different
+ * type would otherwise vanish from the list entirely.
+ */
+export function toCategoryTreeOptions<T extends CategoryLike>(categories: T[]): CategoryTreeOption<T>[] {
+  const present = new Set(categories.map((c) => c.id));
+  const childrenOf = new Map<string | null, T[]>();
+
+  for (const c of categories) {
+    const parentId = c.parentId && present.has(c.parentId) ? c.parentId : null;
+    childrenOf.set(parentId, [...(childrenOf.get(parentId) ?? []), c]);
+  }
+  for (const siblings of childrenOf.values()) {
+    siblings.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  }
+
+  const out: CategoryTreeOption<T>[] = [];
+  const walk = (parentId: string | null, depth: number, seen: Set<string>) => {
+    for (const c of childrenOf.get(parentId) ?? []) {
+      // A cycle is rejected on write, but a bad row must not spin this forever.
+      if (seen.has(c.id)) continue;
+      out.push({ category: c, depth });
+      walk(c.id, depth + 1, new Set([...seen, c.id]));
+    }
+  };
+  walk(null, 0, new Set());
+  return out;
+}
+
+/**
+ * A `<select>` option label for a tree row: indented by depth, icon, then the plain name.
+ *
+ * The name alone rather than the full path — the indentation and the parent directly
+ * above already say where it sits, and repeating "Travel › " on every child wastes the
+ * width a native select has.
+ *
+ * Indented with a non-breaking space because browsers collapse ordinary leading spaces
+ * in an <option>.
+ */
+export function getCategoryTreeOptionLabel(category: CategoryLike, depth: number): string {
+  const indent = '\u00A0\u00A0\u00A0\u00A0'.repeat(depth);
+  const branch = depth > 0 ? '└ ' : '';
+  const icon = category.icon ? `${category.icon} ` : '';
+  return `${indent}${branch}${icon}${category.name}`;
+}

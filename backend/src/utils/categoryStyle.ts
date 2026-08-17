@@ -35,7 +35,16 @@ const STYLE_BY_NAME: Record<string, CategoryStyle> = {
   'spotify': { icon: '🎧', color: '#1db954' },
   'apple': { icon: '🍎', color: '#555555' },
   'icloud': { icon: '☁️', color: '#3b82f6' },
+  // Indian streaming. Simple Icons ships no mark for any of these (trademark), so the
+  // emoji stands in — but each gets its own brand colour rather than the default green.
   'hotstar': { icon: '⭐', color: '#1f80e0' },
+  'disney hotstar': { icon: '⭐', color: '#1f80e0' },
+  'jiohotstar': { icon: '⭐', color: '#1f80e0' },
+  'zee5': { icon: '🎞️', color: '#8230c6' },
+  'sonyliv': { icon: '🎞️', color: '#0a1f44' },
+  'jiocinema': { icon: '🎞️', color: '#e6157b' },
+  'voot': { icon: '🎞️', color: '#f2542d' },
+  'aha': { icon: '🎞️', color: '#f5a623' },
 
   // Utilities, split apart. The keyword rule lumps water, gas and electricity together
   // under one bulb, so three separate bills all looked identical.

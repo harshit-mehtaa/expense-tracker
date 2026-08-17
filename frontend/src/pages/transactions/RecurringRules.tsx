@@ -23,7 +23,7 @@ import {
 import api from '@/lib/api';
 import { formatDate, toDateInputValue } from '@/lib/dateFormat';
 import { cn } from '@/lib/utils';
-import { getCategoryLabel, getCategoryPath, sortCategoriesByNameAsc } from '@/lib/categoryUtils';
+import { getCategoryPath, toCategoryTreeOptions, getCategoryTreeOptionLabel } from '@/lib/categoryUtils';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 
 const FREQUENCY_LABELS: Record<RecurringFrequency, string> = {
@@ -286,8 +286,8 @@ export default function RecurringRulesPage() {
                   <select id="categoryId" {...register('categoryId')}
                     className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                     <option value="">— None —</option>
-                    {sortCategoriesByNameAsc(ruleCategories).map((c) => (
-                      <option key={c.id} value={c.id}>{getCategoryLabel(c, categories)}</option>
+                    {toCategoryTreeOptions(ruleCategories).map(({ category: c, depth }) => (
+                      <option key={c.id} value={c.id}>{getCategoryTreeOptionLabel(c, depth)}</option>
                     ))}
                   </select>
                 </div>

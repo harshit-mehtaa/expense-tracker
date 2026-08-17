@@ -138,3 +138,19 @@ describe('getDefaultCategoryStyle — utilities and transport are distinguishabl
     }
   });
 });
+
+describe('getDefaultCategoryStyle — Indian streaming services', () => {
+  it('gives each OTT service its own colour rather than the default green', () => {
+    // Simple Icons ships no mark for any of these (trademark), so the emoji stands in —
+    // but they must at least be distinguishable from one another.
+    const colours = ['Hotstar', 'Zee5', 'SonyLIV', 'JioCinema']
+      .map((n) => getDefaultCategoryStyle(n, 'EXPENSE').color);
+    expect(new Set(colours).size).toBe(colours.length);
+  });
+
+  it('does not leave a new OTT category on the generic receipt', () => {
+    for (const name of ['Hotstar', 'Zee5', 'SonyLIV', 'JioCinema', 'Voot']) {
+      expect(getDefaultCategoryStyle(name, 'EXPENSE').icon).not.toBe('🧾');
+    }
+  });
+});

@@ -212,3 +212,55 @@ describe('Transactions page — URL-driven tabs', () => {
     ).toBeInTheDocument();
   });
 });
+
+// ─── Category picker ordering ────────────────────────────────────────────────
+
+/** Travel › {Auto, Cab}, deliberately out of order and interleaved with a root. */
+const NESTED_CATEGORIES = [
+  { id: 'cab', name: 'Cab', type: 'EXPENSE', parentId: 'travel', icon: '🚕' },
+  { id: 'groceries', name: 'Groceries', type: 'EXPENSE', parentId: null, icon: '🛒' },
+  { id: 'travel', name: 'Travel', type: 'EXPENSE', parentId: null, icon: '🧳' },
+  { id: 'auto', name: 'Auto', type: 'EXPENSE', parentId: 'travel', icon: '🛺' },
+];
+
+describe('Transactions — the category picker is a tree', () => {
+  it('lists each child directly under its parent, not alphabetically by leaf name', async () => {
+    // Sorted by leaf name, "Cab" filed under C and "Travel" under T — a sub-category and
+    // its parent could sit far apart with only the label to relate them.
+    // ?add=1 opens the create dialog; there is no toolbar button for it.
+    renderPage(<TransactionsPage />, {
+      route: '/transactions?add=1',
+      user: MEMBER_USER,
+      handlers: [
+        http.get(url('/categories'), () => HttpResponse.json({ data: NESTED_CATEGORIES })),
+        ...txHandlers(),
+      ],
+    });
+
+    const select = await screen.findByLabelText(/^Category/i);
+    const labels = Array.from(select.querySelectorAll('option'))
+      .map((o) => o.textContent ?? '')
+      .filter((t) => !t.includes('Uncategorized'));
+
+    const names = labels.map((l) => l.replace(/[\s\u00A0└]/g, '').replace(/[^\w]/g, ''));
+    expect(names).toEqual(['Groceries', 'Travel', 'Auto', 'Cab']);
+  });
+
+  it('indents a child so the hierarchy is visible in the dropdown', async () => {
+    renderPage(<TransactionsPage />, {
+      route: '/transactions?add=1',
+      user: MEMBER_USER,
+      handlers: [
+        http.get(url('/categories'), () => HttpResponse.json({ data: NESTED_CATEGORIES })),
+        ...txHandlers(),
+      ],
+    });
+
+    const select = await screen.findByLabelText(/^Category/i);
+    const cab = Array.from(select.querySelectorAll('option')).find((o) => o.textContent?.includes('Cab'))!;
+
+    expect(cab.textContent).toContain('└');
+    // Non-breaking, because browsers collapse ordinary leading spaces in an <option>.
+    expect(cab.textContent!.startsWith('\u00A0')).toBe(true);
+  });
+});

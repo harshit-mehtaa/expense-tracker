@@ -20,7 +20,8 @@ import { investmentsApi } from '@/api/investments';
 import { insuranceApi, type InsurancePolicy } from '@/api/insurance';
 import { loansApi } from '@/api/loans';
 import { cn } from '@/lib/utils';
-import { getCategoryLabel, getCategoryPath, sortCategoriesByNameAsc, type CategoryLike } from '@/lib/categoryUtils';
+import { CategoryIcon } from '@/components/shared/CategoryIcon';
+import { getCategoryLabel, getCategoryPath, type CategoryLike, toCategoryTreeOptions, getCategoryTreeOptionLabel } from '@/lib/categoryUtils';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useBudgetsVsActuals, type BudgetActualItem } from '@/hooks/useBudgetsVsActuals';
@@ -427,7 +428,9 @@ function SIPCategoryInfo({ tx, compact = false }: { tx: Transaction; compact?: b
       )}
       {tx.categoryName && (
         <div className="text-[11px] text-muted-foreground truncate">
-          {tx.categoryIcon && <span className="mr-1">{tx.categoryIcon}</span>}
+          {tx.categoryName && (
+            <CategoryIcon name={tx.categoryName} icon={tx.categoryIcon} size={12} className="mr-1 inline-block align-text-bottom" />
+          )}
           {tx.categoryName}
         </div>
       )}
@@ -803,16 +806,16 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
               </select>
             </div>
             <div className="col-span-2 space-y-1">
-              <Label>Category (optional)</Label>
-              <select {...register('categoryId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+              <Label htmlFor="tx-edit-categoryId">Category (optional)</Label>
+              <select id="tx-edit-categoryId" {...register('categoryId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                 <option value="">— Uncategorized —</option>
                 {showCurrentCategoryFallback && (
                   <option value={selectedCategoryId}>
                     {tx.categoryIcon ? `${tx.categoryIcon} ` : ''}{tx.categoryName ?? 'Selected category'}
                   </option>
                 )}
-                {sortCategoriesByNameAsc(transactionCategories).map((c: any) => (
-                  <option key={c.id} value={c.id}>{getCategoryLabel(c, categories)}</option>
+                {toCategoryTreeOptions(transactionCategories).map(({ category: c, depth }) => (
+                  <option key={c.id} value={c.id}>{getCategoryTreeOptionLabel(c, depth)}</option>
                 ))}
               </select>
             </div>
@@ -1171,9 +1174,9 @@ function ImportModal({ onClose, targetUserId }: { onClose: () => void; targetUse
                       disabled={importCategories.length === 0}
                     >
                       <option value="">{importCategories.length === 0 ? 'No categories available' : 'Category'}</option>
-                      {sortCategoriesByNameAsc(importCategories).map((c: any) => (
-                        <option key={c.id} value={c.id}>{getCategoryLabel(c, categories)}</option>
-                      ))}
+                      {toCategoryTreeOptions(importCategories).map(({ category: c, depth }) => (
+                  <option key={c.id} value={c.id}>{getCategoryTreeOptionLabel(c, depth)}</option>
+                ))}
                     </select>
                     <Button size="sm" onClick={addRule} disabled={addRuleMutation.isPending || importCategories.length === 0} className="h-8">Add</Button>
                   </div>
@@ -2229,11 +2232,11 @@ function AddTransactionModal({
               </select>
             </div>
             <div className="space-y-1">
-              <Label>Category (optional)</Label>
-              <select {...register('categoryId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+              <Label htmlFor="tx-add-categoryId">Category (optional)</Label>
+              <select id="tx-add-categoryId" {...register('categoryId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                 <option value="">— Uncategorized —</option>
-                {sortCategoriesByNameAsc(transactionCategories).map((c: any) => (
-                  <option key={c.id} value={c.id}>{getCategoryLabel(c, categories)}</option>
+                {toCategoryTreeOptions(transactionCategories).map(({ category: c, depth }) => (
+                  <option key={c.id} value={c.id}>{getCategoryTreeOptionLabel(c, depth)}</option>
                 ))}
               </select>
             </div>
@@ -2685,10 +2688,11 @@ export default function TransactionsPage() {
                     {categories.length === 0 ? (
                       <p className="px-3 py-2 text-sm text-muted-foreground">No categories</p>
                     ) : (
-                      sortCategoriesByNameAsc(categories).map((c: any) => (
+                      toCategoryTreeOptions(categories).map(({ category: c, depth }) => (
                         <label
                           key={c.id}
                           className="flex items-center gap-2.5 px-3 py-2 hover:bg-muted cursor-pointer text-sm"
+                          style={{ paddingLeft: 12 + depth * 16 }}
                         >
                           <input
                             type="checkbox"
@@ -2696,8 +2700,10 @@ export default function TransactionsPage() {
                             onChange={() => toggleFilter('categoryIds', c.id)}
                             className="rounded"
                           />
-                          {c.icon && <span>{c.icon}</span>}
-                          <span>{getCategoryPath(c, categories)}</span>
+                          <CategoryIcon name={c.name} icon={c.icon} size={14} />
+                          {/* Name only: the indent and the parent directly above already
+                              say where it sits, so repeating the path wastes the width. */}
+                          <span>{c.name}</span>
                         </label>
                       ))
                     )}
@@ -2754,9 +2760,9 @@ export default function TransactionsPage() {
               className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
             >
               <option value="">Assign category…</option>
-              {sortCategoriesByNameAsc(categories).map((c: any) => (
-                <option key={c.id} value={c.id}>{getCategoryLabel(c, categories)}</option>
-              ))}
+              {toCategoryTreeOptions(categories).map(({ category: c, depth }) => (
+                  <option key={c.id} value={c.id}>{getCategoryTreeOptionLabel(c, depth)}</option>
+                ))}
             </select>
             <Button size="sm" variant="outline" onClick={handleBulkCategorize} disabled={!bulkCategoryId || isBulkCategorizing}>
               {isBulkCategorizing ? 'Applying…' : 'Apply'}
@@ -2877,7 +2883,9 @@ export default function TransactionsPage() {
                         </span>
                         {tx.categoryName && (
                           <div className="text-xs text-muted-foreground">
-                            {tx.categoryIcon && <span className="mr-1">{tx.categoryIcon}</span>}
+                            {tx.categoryName && (
+                              <CategoryIcon name={tx.categoryName} icon={tx.categoryIcon} size={12} className="mr-1 inline-block align-text-bottom" />
+                            )}
                             {tx.categoryName}
                           </div>
                         )}
@@ -2888,7 +2896,9 @@ export default function TransactionsPage() {
                       </span>
                     ) : (
                       <div className="space-y-1">
-                        {tx.categoryIcon && <span className="mr-1">{tx.categoryIcon}</span>}
+                        {tx.categoryName && (
+                          <CategoryIcon name={tx.categoryName} icon={tx.categoryIcon} size={12} className="mr-1 inline-block align-text-bottom" />
+                        )}
                         {tx.categoryName ?? '—'}
                         {(tx.refundedAmount ?? 0) > 0 && (
                           <div className="text-xs text-amber-600">
@@ -2993,7 +3003,9 @@ export default function TransactionsPage() {
                   )}
                   {tx.categoryName && !isSIP ? (
                     <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground">
-                      {tx.categoryIcon}
+                      {tx.categoryName && (
+                        <CategoryIcon name={tx.categoryName} icon={tx.categoryIcon} size={12} />
+                      )}
                       {tx.categoryName}
                     </span>
                   ) : !isTransfer && !isSIP && (

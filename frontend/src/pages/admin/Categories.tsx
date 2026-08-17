@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import api from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { CategoryIcon } from '@/components/shared/CategoryIcon';
 import { formatDate } from '@/lib/dateFormat';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import {
@@ -145,7 +146,10 @@ export default function CategoriesPage() {
     formState: { errors },
   } = useForm<CategoryForm>({
     resolver: zodResolver(categorySchema),
-    defaultValues: { type: 'EXPENSE', color: COLOR_PRESETS[0], parentId: '' },
+    // No colour preselected. The form used to default to COLOR_PRESETS[0], which meant
+    // every new category was created green: the backend applies its own styling only when
+    // no colour is sent, so a preselected swatch silently overrode it every time.
+    defaultValues: { type: 'EXPENSE', color: '', parentId: '' },
   });
 
   // ── Edit form ──────────────────────────────────────────────────────────────
@@ -793,7 +797,13 @@ function CategoryRow({
 
   return (
     <div
-      className={cn('flex items-center gap-3 rounded-lg border bg-card p-3', isUnused && 'opacity-60')}
+      className={cn(
+        'flex items-center gap-3 rounded-lg border bg-card p-3',
+        // NOT dimmed when unused. Reduced opacity reads as "disabled", and an unused
+        // category is fully manageable — it is the one most likely to need editing,
+        // merging or deleting, so it should be the easiest to reach, not the hardest.
+        isUnused && 'border-dashed',
+      )}
       style={{ marginLeft: depth * 20 }}
     >
       <button
@@ -806,10 +816,10 @@ function CategoryRow({
       </button>
 
       <div
-        className="h-8 w-8 rounded-lg flex items-center justify-center text-base shrink-0"
+        className="h-8 w-8 rounded-lg flex items-center justify-center shrink-0"
         style={{ backgroundColor: cat.color ? `${cat.color}22` : '#f1f5f9' }}
       >
-        {cat.icon ? <span>{cat.icon}</span> : <Tag className="h-4 w-4 text-muted-foreground" />}
+        <CategoryIcon name={cat.name} icon={cat.icon} color={cat.color} size={18} />
       </div>
 
       <div className="flex-1 min-w-0">
@@ -819,7 +829,9 @@ function CategoryRow({
         </div>
         <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground">
           {isUnused ? (
-            <span>Never used</span>
+            <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium">
+              Never used
+            </span>
           ) : usage ? (
             <>
               <span>{usage.rollupCount} txn{usage.rollupCount === 1 ? '' : 's'}</span>

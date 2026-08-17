@@ -84,18 +84,18 @@ describe('Categories page — smoke', () => {
 /** Food › Groceries, plus an unused Fuel. */
 const TREE = [
   {
-    id: 'food', name: 'Food', type: 'EXPENSE', icon: '🍔', color: '#f00',
+    id: 'food', name: 'Food', type: 'EXPENSE', icon: '🍔', color: '#ff0000',
     parentId: null, isDefault: false, userId: null, _count: { children: 1 },
     // A grouping parent: nothing filed against it directly, plenty underneath.
     usage: { directCount: 0, directTotal: 0, rollupCount: 4, rollupTotal: 4000, lastUsed: '2026-08-01T00:00:00.000Z' },
   },
   {
-    id: 'groceries', name: 'Groceries', type: 'EXPENSE', icon: '🛒', color: '#0f0',
+    id: 'groceries', name: 'Groceries', type: 'EXPENSE', icon: '🛒', color: '#00ff00',
     parentId: 'food', isDefault: false, userId: null, _count: { children: 0 },
     usage: { directCount: 4, directTotal: 4000, rollupCount: 4, rollupTotal: 4000, lastUsed: '2026-08-01T00:00:00.000Z' },
   },
   {
-    id: 'fuel', name: 'Fuel', type: 'EXPENSE', icon: '⛽', color: '#00f',
+    id: 'fuel', name: 'Fuel', type: 'EXPENSE', icon: '⛽', color: '#0000ff',
     parentId: null, isDefault: false, userId: null, _count: { children: 0 },
     usage: { directCount: 0, directTotal: 0, rollupCount: 0, rollupTotal: 0, lastUsed: null },
   },
@@ -223,5 +223,113 @@ describe('Categories page — merge', () => {
     await user.click(screen.getByRole('button', { name: /merge into/i }));
 
     expect(await screen.findByRole('button', { name: /^merge$/i })).toBeDisabled();
+  });
+});
+
+describe('Categories page — an unused category is still fully manageable', () => {
+  // The row used to render at 60% opacity, which reads as "disabled" — but every action
+  // works, and an unused category is the likeliest one to need editing or removing.
+
+  it('offers the same actions as a used one', async () => {
+    const user = userEvent.setup();
+    renderPage(<CategoriesPage />, { route: '/categories', handlers: categoryHandlers(TREE) });
+
+    await screen.findByText('Fuel');
+    await user.click(screen.getByRole('button', { name: /actions for fuel/i }));
+
+    expect(screen.getByRole('button', { name: /^edit$/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /merge into/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^delete$/i })).toBeEnabled();
+  });
+
+  it('can be edited', async () => {
+    const user = userEvent.setup();
+    let body: any = null;
+
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [
+        http.put(url('/categories/fuel'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: { ...TREE[2], name: 'Petrol' } });
+        }),
+        ...categoryHandlers(TREE),
+      ],
+    });
+
+    await screen.findByText('Fuel');
+    await user.click(screen.getByRole('button', { name: /actions for fuel/i }));
+    await user.click(screen.getByRole('button', { name: /^edit$/i }));
+
+    const name = await screen.findByLabelText(/name/i);
+    await user.clear(name);
+    await user.type(name, 'Petrol');
+    await user.click(screen.getByRole('button', { name: /save|update/i }));
+
+    await waitFor(() => expect(body?.name).toBe('Petrol'));
+  });
+
+  it('can be merged into another category', async () => {
+    const user = userEvent.setup();
+    let merged = false;
+
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [
+        http.post(url('/categories/fuel/merge'), () => {
+          merged = true;
+          return HttpResponse.json({ data: TREE[0] });
+        }),
+        ...categoryHandlers(TREE),
+      ],
+    });
+
+    await screen.findByText('Fuel');
+    await user.click(screen.getByRole('button', { name: /actions for fuel/i }));
+    await user.click(screen.getByRole('button', { name: /merge into/i }));
+    await user.selectOptions(await screen.findByLabelText(/merge into/i), 'groceries');
+    await user.click(screen.getByRole('button', { name: /^merge$/i }));
+
+    await waitFor(() => expect(merged).toBe(true));
+  });
+
+  it('is not visually marked as disabled', async () => {
+    renderPage(<CategoriesPage />, { route: '/categories', handlers: categoryHandlers(TREE) });
+
+    const label = await screen.findByText(/never used/i);
+    const row = label.closest('div.rounded-lg')!;
+    expect(row.className).not.toContain('opacity');
+  });
+});
+
+describe('Categories page — a new category is not forced to a default colour', () => {
+  it('sends no colour, so the backend applies the one it computes for the name', async () => {
+    // The form preselected COLOR_PRESETS[0], and createCategory only applies its own
+    // styling when no colour is sent — so every new category was created green and the
+    // whole name-to-colour map was dead for anything added through the UI.
+    const user = userEvent.setup();
+    let body: any = null;
+
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [
+        http.post(url('/categories'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: TREE[0] }, { status: 201 });
+        }),
+        ...categoryHandlers(TREE),
+      ],
+    });
+
+    await screen.findByText('Food');
+    await user.click(screen.getByRole('button', { name: /add category/i }));
+    await user.type(await screen.findByLabelText(/^name/i), 'Hotstar');
+    // The dialog's submit shares its label with the toolbar trigger that opened it.
+    const submit = screen.getAllByRole('button', { name: /^add category$/i })
+      .find((b) => b.getAttribute('type') === 'submit')!;
+    await user.click(submit);
+
+    await waitFor(() => expect(body).not.toBeNull());
+    expect(body.color === '' || body.color === undefined).toBe(true);
   });
 });

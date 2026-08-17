@@ -11,8 +11,9 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useFY } from '@/contexts/FYContext';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import api from '@/lib/api';
+import { CategoryIcon } from '@/components/shared/CategoryIcon';
 import { cn } from '@/lib/utils';
-import { getCategoryLabel, getCategoryPath, sortCategoriesByNameAsc } from '@/lib/categoryUtils';
+import { getCategoryPath, toCategoryTreeOptions, getCategoryTreeOptionLabel } from '@/lib/categoryUtils';
 
 function useBudgets(fy: string, targetUserId?: string) {
   return useQuery({
@@ -159,7 +160,9 @@ export default function BudgetsPage() {
               )}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    {budget.category?.icon && <span>{budget.category.icon}</span>}
+                    {budget.category && (
+                      <CategoryIcon name={budget.category.name} icon={budget.category.icon} size={16} />
+                    )}
                     <p className="font-semibold">
                       {budget.category ? getCategoryPath(budget.category, categories) : 'Unknown'}
                     </p>
@@ -210,9 +213,9 @@ export default function BudgetsPage() {
                 <Label required>Category</Label>
                 <select {...register('categoryId')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                   <option value="">— Select category —</option>
-                  {sortCategoriesByNameAsc(expenseCategories).map((c: any) => (
-                    <option key={c.id} value={c.id}>{getCategoryLabel(c, categories)}</option>
-                  ))}
+                  {toCategoryTreeOptions(expenseCategories).map(({ category: c, depth }) => (
+                  <option key={c.id} value={c.id}>{getCategoryTreeOptionLabel(c, depth)}</option>
+                ))}
                 </select>
                 {errors.categoryId && <p className="text-xs text-destructive">{errors.categoryId.message}</p>}
               </div>
