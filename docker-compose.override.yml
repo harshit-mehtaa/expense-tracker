@@ -51,6 +51,13 @@ services:
       # Mount only source dirs — container keeps its own node_modules
       - ./frontend/src:/app/src
       - ./frontend/public:/app/public
+      # index.html is Vite's entry document and is edited like source, but it lives at the
+      # project root rather than under src/. Without this mount it stays frozen at whatever
+      # the image was built with, so a change here appears in tests and in the repo while
+      # the running app silently serves the old one. That is how the `lang` attribute --
+      # which decides the format of every native <input type="date"> -- went on rendering
+      # mm/dd/yyyy after it had already been fixed.
+      - ./frontend/index.html:/app/index.html
     environment:
       NODE_ENV: development
       # CHOKIDAR_USEPOLLING: same virtiofs fix for Vite's chokidar file watcher

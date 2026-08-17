@@ -1,5 +1,18 @@
 <!doctype html>
-<html lang="en">
+<!--
+  lang drives the format of every native <input type="date"> widget. Chromium reads this
+  attribute; with the ambiguous "en" it fell back to the browser's UI language, which
+  rendered the pickers as mm/dd/yyyy for a US-configured browser.
+
+  "en-IN" is also the honest description of this app — it formats currency in rupees with
+  Indian digit grouping — and India writes dates dd/mm/yyyy, matching how the rest of the
+  product now renders them.
+
+  Note: Firefox and Safari take date-input ordering from the OS regional settings and
+  ignore this attribute. See src/lib/dateFormat.ts for the display-side formatting, which
+  is hand-rolled and locale-independent precisely so it cannot drift per browser.
+-->
+<html lang="en-IN">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
