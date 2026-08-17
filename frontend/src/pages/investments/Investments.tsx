@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { CHART_PALETTE } from '@/lib/chartUtils';
+import { formatDate, formatNextOccurrence } from '@/lib/dateFormat';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -481,13 +482,6 @@ export default function InvestmentsPage() {
   sips.forEach((sip) => {
     if (sip.investment?.id) sipByInvestmentId.set(sip.investment.id, sip);
   });
-
-  function formatDate(value?: string | null) {
-    if (!value) return '—';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '—';
-    return date.toLocaleDateString('en-IN');
-  }
 
   function daysUntil(value?: string | null) {
     if (!value) return null;
@@ -1126,8 +1120,8 @@ export default function InvestmentsPage() {
                         <INRDisplay amount={sip.monthlyAmount} short className="font-semibold" />
                       </div>
                       <div className="rounded-md border bg-muted/30 p-2.5">
-                        <p className="text-xs text-muted-foreground">Debit Day</p>
-                        <p className="font-semibold">Day {sip.sipDate}</p>
+                        <p className="text-xs text-muted-foreground">Next Debit</p>
+                        <p className="font-semibold">{formatNextOccurrence(sip.sipDate)}</p>
                       </div>
                       <div className="rounded-md border bg-muted/30 p-2.5">
                         <p className="text-xs text-muted-foreground">Started</p>

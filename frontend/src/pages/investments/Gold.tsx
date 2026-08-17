@@ -11,6 +11,7 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { investmentsApi, GoldHolding } from '@/api/investments';
 import { formatINR } from '@/lib/indianFormat';
+import { formatDate } from '@/lib/dateFormat';
 
 const GOLD_TYPES: Record<string, string> = {
   PHYSICAL: 'Physical Gold', SGB: 'Sovereign Gold Bond', GOLD_ETF: 'Gold ETF', DIGITAL: 'Digital Gold',
@@ -206,7 +207,7 @@ export default function GoldPage() {
               </div>
               <div className="col-span-2">
                 <p className="text-muted-foreground">Purchased</p>
-                <p>{new Date(h.purchaseDate).toLocaleDateString('en-IN')}</p>
+                <p>{formatDate(h.purchaseDate)}</p>
               </div>
             </div>
             {h.notes && (

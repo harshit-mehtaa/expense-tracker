@@ -13,6 +13,7 @@ import {
   type Subscription, type Frequency, type SubscriptionStatus,
 } from '@/api/subscriptions';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
+import { formatDate, toDateInputValue } from '@/lib/dateFormat';
 import { useToast } from '@/contexts/ToastContext';
 
 const subscriptionSchema = z.object({
@@ -39,25 +40,6 @@ const STATUS_STYLE: Record<SubscriptionStatus, string> = {
   ACTIVE: 'bg-green-100 text-green-700',
   CANCELLED: 'bg-muted text-muted-foreground',
 };
-
-/**
- * `<input type="date">` value for a local date.
- *
- * NOT `toISOString().slice(0,10)`: that is UTC, so between 00:00 and 05:29 IST it yields
- * yesterday — and on a field that drives billing, yesterday means "charge now".
- */
-function toDateInput(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-/** dd/mm/yyyy — the project-wide date presentation. */
-function formatDate(iso?: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString('en-GB');
-}
 
 function SubscriptionCard({
   subscription, onEdit, onCancel, onResume, onDelete, onPriceChange,
@@ -232,7 +214,7 @@ export default function SubscriptionsPage() {
     register, handleSubmit, reset, formState: { errors },
   } = useForm<SubscriptionForm>({
     resolver: zodResolver(subscriptionSchema),
-    defaultValues: { frequency: 'MONTHLY', startDate: toDateInput(new Date()) },
+    defaultValues: { frequency: 'MONTHLY', startDate: toDateInputValue(new Date()) },
   });
 
   const priceForm = useForm<PriceForm>({ resolver: zodResolver(priceSchema) });
@@ -293,7 +275,7 @@ export default function SubscriptionsPage() {
       // immediately. Resuming should schedule the next charge, not trigger one.
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
-      return subscriptionsApi.resume(id, toDateInput(tomorrow));
+      return subscriptionsApi.resume(id, toDateInputValue(tomorrow));
     },
     onSuccess: invalidate,
     onError: showError('Failed to resume'),
@@ -308,7 +290,7 @@ export default function SubscriptionsPage() {
   function closeForm() {
     setShowForm(false);
     setEditing(null);
-    reset({ frequency: 'MONTHLY', startDate: toDateInput(new Date()) });
+    reset({ frequency: 'MONTHLY', startDate: toDateInputValue(new Date()) });
   }
 
   function startEdit(subscription: Subscription) {
@@ -373,7 +355,7 @@ export default function SubscriptionsPage() {
                 setPricingFor(s);
                 priceForm.reset({
                   amount: s.currentPrice ?? 0,
-                  effectiveFrom: toDateInput(new Date()),
+                  effectiveFrom: toDateInputValue(new Date()),
                 });
               }}
             />

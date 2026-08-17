@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Search, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
+import { formatDate } from '@/lib/dateFormat';
 import { INRDisplay } from './INRDisplay';
 
 interface Props {
@@ -112,7 +113,7 @@ export function CommandPalette({ open, onClose }: Props) {
               <div className="min-w-0 mr-4">
                 <p className="text-sm font-medium truncate">{r.description}</p>
                 <p className="text-xs text-muted-foreground">
-                  {new Date(r.date).toLocaleDateString('en-IN')}
+                  {formatDate(r.date)}
                   {r.categoryName ? ` · ${r.categoryName}` : ''}
                 </p>
               </div>

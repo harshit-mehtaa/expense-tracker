@@ -21,6 +21,7 @@ import {
   type RecurringFrequency,
 } from '@/api/recurring';
 import api from '@/lib/api';
+import { formatDate, toDateInputValue } from '@/lib/dateFormat';
 import { cn } from '@/lib/utils';
 import { getCategoryLabel, getCategoryPath, sortCategoriesByNameAsc } from '@/lib/categoryUtils';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
@@ -86,7 +87,7 @@ export default function RecurringRulesPage() {
     defaultValues: {
       type: 'EXPENSE',
       frequency: 'MONTHLY',
-      nextRunDate: new Date().toISOString().slice(0, 10),
+      nextRunDate: toDateInputValue(new Date()),
     },
   });
 
@@ -148,7 +149,7 @@ export default function RecurringRulesPage() {
         description: t.description,
         amount: Number(t.amount),
         type: t.type,
-        date: new Date().toISOString().slice(0, 10),
+        date: toDateInputValue(new Date()),
         categoryId: t.categoryId ?? undefined,
         bankAccountId: t.bankAccountId ?? undefined,
         paymentMode: t.paymentMode ?? undefined,
@@ -341,7 +342,7 @@ export default function RecurringRulesPage() {
                   {rule.templateTransaction.category && (
                     <span className="truncate">{getCategoryPath(rule.templateTransaction.category, categories)}</span>
                   )}
-                  <span>Next: {new Date(rule.nextRunDate).toLocaleDateString('en-IN')}</span>
+                  <span>Next: {formatDate(rule.nextRunDate)}</span>
                 </div>
               </div>
               <div className="flex items-center gap-1 shrink-0">

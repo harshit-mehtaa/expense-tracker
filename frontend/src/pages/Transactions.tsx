@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import api from '@/lib/api';
+import { formatDate, formatNextOccurrence, toDateInputValue } from '@/lib/dateFormat';
 import { investmentsApi } from '@/api/investments';
 import { insuranceApi, type InsurancePolicy } from '@/api/insurance';
 import { loansApi } from '@/api/loans';
@@ -401,7 +402,7 @@ function SIPCategoryInfo({ tx, compact = false }: { tx: Transaction; compact?: b
     tx.sipMonthlyAmount !== null && tx.sipMonthlyAmount !== undefined && Number.isFinite(tx.sipMonthlyAmount)
       ? `Monthly ${formatINR(tx.sipMonthlyAmount)}`
       : null,
-    tx.sipDate ? `Day ${tx.sipDate}` : null,
+    tx.sipDate ? `SIP next ${formatNextOccurrence(tx.sipDate)}` : null,
   ].filter(Boolean);
   const mandate = mandateParts.length > 0 ? mandateParts.join(' · ') : null;
 
@@ -1365,7 +1366,7 @@ function ConvertToTransferModal({ tx, onClose }: { tx: Transaction; onClose: () 
   const formatCounterpartCandidate = (candidate: TransferCounterpartCandidate) => {
     const account = formatTransactionAccount(candidate.bankAccount);
     return [
-      new Date(candidate.date).toLocaleDateString('en-IN'),
+      formatDate(candidate.date),
       candidate.description,
       formatINR(Number(candidate.amount)),
       account,
@@ -1384,7 +1385,7 @@ function ConvertToTransferModal({ tx, onClose }: { tx: Transaction; onClose: () 
         <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-1">
           <p className="font-medium truncate">{tx.description}</p>
           <p className="text-muted-foreground">
-            {new Date(tx.date).toLocaleDateString('en-IN')} · <INRDisplay amount={tx.amount} />
+            {formatDate(tx.date)} · <INRDisplay amount={tx.amount} />
           </p>
           <p className="text-muted-foreground">
             {isIncomingPayment ? 'To' : 'From'}: {tx.bankAccountName ?? (isIncomingPayment ? 'Destination account' : 'Source account')}
@@ -1556,7 +1557,7 @@ function ConvertToSIPModal({ tx, onClose }: { tx: Transaction; onClose: () => vo
         <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-1">
           <p className="font-medium truncate">{tx.description}</p>
           <p className="text-muted-foreground">
-            {new Date(tx.date).toLocaleDateString('en-IN')} · <INRDisplay amount={tx.amount} />
+            {formatDate(tx.date)} · <INRDisplay amount={tx.amount} />
           </p>
           <p className="text-muted-foreground">From: {tx.bankAccountName ?? 'Bank account'}</p>
           {tx.sipName && <p className="text-muted-foreground">Current SIP: {tx.sipName}</p>}
@@ -1702,7 +1703,7 @@ function LinkPolicyModal({ tx, onClose }: { tx: Transaction; onClose: () => void
         <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-1">
           <p className="font-medium truncate">{tx.description}</p>
           <p className="text-muted-foreground">
-            {new Date(tx.date).toLocaleDateString('en-IN')} · <INRDisplay amount={tx.amount} />
+            {formatDate(tx.date)} · <INRDisplay amount={tx.amount} />
           </p>
           <p className="text-muted-foreground">From: {tx.bankAccountName ?? 'Bank account'}</p>
           {tx.insurancePolicyName && (
@@ -1839,9 +1840,9 @@ function LinkRefundModal({ tx, onClose }: { tx: Transaction; onClose: () => void
   });
 
   const formatExpense = (expense: Transaction) =>
-    `${new Date(expense.date).toLocaleDateString('en-IN')} · ${expense.description} · ${formatINR(expense.amount)}${expense.categoryName ? ` · ${expense.categoryName}` : ''}`;
+    `${formatDate(expense.date)} · ${expense.description} · ${formatINR(expense.amount)}${expense.categoryName ? ` · ${expense.categoryName}` : ''}`;
   const formatIncomingRefund = (refund: Transaction) =>
-    `${new Date(refund.date).toLocaleDateString('en-IN')} · ${refund.description} · ${formatINR(refund.amount)}`;
+    `${formatDate(refund.date)} · ${refund.description} · ${formatINR(refund.amount)}`;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -1856,7 +1857,7 @@ function LinkRefundModal({ tx, onClose }: { tx: Transaction; onClose: () => void
         <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-1">
           <p className="font-medium truncate">{tx.description}</p>
           <p className="text-muted-foreground">
-            {new Date(tx.date).toLocaleDateString('en-IN')} · <INRDisplay amount={tx.amount} />
+            {formatDate(tx.date)} · <INRDisplay amount={tx.amount} />
           </p>
           {tx.bankAccountName && <p className="text-muted-foreground">To: {tx.bankAccountName}</p>}
           {tx.refundForDescription && (
@@ -1931,7 +1932,7 @@ function LinkRefundModal({ tx, onClose }: { tx: Transaction; onClose: () => void
             <p className="font-medium text-foreground">Linked refunds</p>
             {tx.refunds.map((refund) => (
               <p key={refund.id}>
-                {new Date(refund.date).toLocaleDateString('en-IN')} · {refund.description} · <INRDisplay amount={Number(refund.amount)} />
+                {formatDate(refund.date)} · {refund.description} · <INRDisplay amount={Number(refund.amount)} />
               </p>
             ))}
           </div>
@@ -2076,7 +2077,7 @@ function TransactionDocumentsModal({ tx, onClose }: { tx: Transaction; onClose: 
               <div className="min-w-0">
                 <p className="text-sm font-medium truncate">{doc.fileName}</p>
                 <p className="text-xs text-muted-foreground">
-                  {formatFileSize(doc.fileSize)} · {new Date(doc.createdAt).toLocaleDateString('en-IN')}
+                  {formatFileSize(doc.fileSize)} · {formatDate(doc.createdAt)}
                 </p>
               </div>
               <div className="flex items-center gap-1 shrink-0">
@@ -2122,7 +2123,7 @@ function AddTransactionModal({
 
   const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<TxForm>({
     resolver: zodResolver(txSchema),
-    defaultValues: { type: 'EXPENSE', date: new Date().toISOString().slice(0, 10) },
+    defaultValues: { type: 'EXPENSE', date: toDateInputValue(new Date()) },
   });
 
   const amount = watch('amount');
@@ -2841,7 +2842,7 @@ export default function TransactionsPage() {
                     )}
                   </td>
                   <td className="px-2 py-3 align-top text-muted-foreground whitespace-nowrap">
-                    {new Date(tx.date).toLocaleDateString('en-IN')}
+                    {formatDate(tx.date)}
                   </td>
                   {showMemberIndicator && (
                     <td className="px-2 py-3 align-top text-center">
@@ -2957,7 +2958,7 @@ export default function TransactionsPage() {
                   )}
                   <span className="font-medium text-sm truncate">{tx.description}</span>
                   <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">
-                    {new Date(tx.date).toLocaleDateString('en-IN')}
+                    {formatDate(tx.date)}
                   </span>
                 </div>
                 {tx.remark && (

@@ -14,6 +14,7 @@ import { taxApi } from '@/api/tax';
 import { loansApi } from '@/api/loans';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { cn } from '@/lib/utils';
+import { formatDate } from '@/lib/dateFormat';
 import { formatINR } from '@/lib/indianFormat';
 import { CHART_PALETTE, CustomTooltip } from '@/lib/chartUtils';
 import InsightsTab from './InsightsTab';
@@ -643,7 +644,7 @@ export default function TaxCentrePage() {
                     }
                   </div>
                   <p className="text-2xl font-bold">{event.percentageDue}%</p>
-                  <p className="text-sm text-muted-foreground">Due: {due.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+                  <p className="text-sm text-muted-foreground">Due: {formatDate(due)}</p>
                   {(summary || projectedTax !== null) && (
                     <p className="text-sm">
                       Est. amount: <INRDisplay

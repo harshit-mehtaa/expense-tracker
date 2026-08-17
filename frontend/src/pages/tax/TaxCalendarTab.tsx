@@ -1,5 +1,6 @@
 import { Calendar, CheckCircle, AlertCircle, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { formatDate } from '@/lib/dateFormat';
 
 interface AdvanceTaxEvent {
   id: string;
@@ -137,7 +138,7 @@ export default function TaxCalendarTab({ fyYear, advanceTax }: TaxCalendarTabPro
 
               <div className="flex items-center gap-1.5 text-sm font-medium">
                 <Calendar className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                {event.date.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
+                {formatDate(event.date)}
               </div>
 
               <p className="text-xs text-muted-foreground">{event.description}</p>

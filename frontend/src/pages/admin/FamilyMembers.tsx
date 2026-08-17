@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import api from '@/lib/api';
+import { formatDate } from '@/lib/dateFormat';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -225,7 +226,7 @@ export default function FamilyMembersPage() {
 
               {user.lastLoginAt && (
                 <p className="text-xs text-muted-foreground">
-                  Last login: {new Date(user.lastLoginAt).toLocaleDateString('en-IN')}
+                  Last login: {formatDate(user.lastLoginAt)}
                 </p>
               )}
             </div>

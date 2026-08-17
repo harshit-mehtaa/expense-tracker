@@ -16,6 +16,7 @@ import {
   Cell,
 } from 'recharts';
 import { CHART_PALETTE, useChartGradients, CustomTooltip, AXIS_STYLE, GRID_STYLE } from '@/lib/chartUtils';
+import { toDateInputValue } from '@/lib/dateFormat';
 import { TrendingUp, TrendingDown, ArrowUpRight, Bell, Target, Users } from 'lucide-react';
 import { useFY } from '@/contexts/FYContext';
 import { fetchDashboardSummary, fetchCashflow, fetchUpcomingAlerts, fetchNetWorthHistory, upsertNetWorthSnapshot, fetchFamilyOverview } from '@/api/dashboard';
@@ -197,8 +198,10 @@ export default function DashboardPage() {
                   const fullYear = 2000 + parseInt(yr.replace("'", ''), 10);
                   const start = new Date(fullYear, monthIdx, 1);
                   const end = new Date(fullYear, monthIdx + 1, 0);
-                  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-                  navigate(`/transactions?startDate=${fmt(start)}&endDate=${fmt(end)}`);
+                  // NOT toISOString(): that converts these LOCAL midnights to UTC, which
+                  // in any positive-offset zone lands on the previous day — the range came
+                  // out as 31 Jul -> 30 Aug for "Aug 26".
+                  navigate(`/transactions?startDate=${toDateInputValue(start)}&endDate=${toDateInputValue(end)}`);
                 }}
               >
                 <GradDefs />

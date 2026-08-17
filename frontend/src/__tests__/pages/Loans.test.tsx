@@ -517,3 +517,30 @@ describe('Loans page — submitted payload', () => {
     expect(body.preEmiAmount).not.toBe(0);
   });
 });
+
+
+// ─── Date presentation ───────────────────────────────────────────────────────
+
+/**
+ * `toLocaleDateString('en-IN')` renders 1 January 2043 as "1/1/2043", not "01/01/2043".
+ * Nothing asserted on rendered dates before, so a silent revert to the locale formatter
+ * would have gone unnoticed everywhere outside Subscriptions.
+ */
+describe('Loans page — dates render as dd/mm/yyyy', () => {
+  it('zero-pads a single-digit day and month', () => {
+    // LOAN.endDate is 2043-01-01 — the case en-IN got wrong.
+    renderPage(<LoansPage />, { route: '/loans', handlers: loanHandlers(), user: MEMBER_USER });
+
+    return screen.findByText('01/01/2043').then((el) => expect(el).toBeInTheDocument());
+  });
+
+  it('shows the EMI as a real next date rather than a bare day number', async () => {
+    // emiDate is a day-of-month Int (5). It used to render "on 5th" — which also produced
+    // "1th" and "21th". Asserting SHAPE rather than a pinned date: the arithmetic is
+    // exhaustively covered in the pure tests, and fake timers here stall MSW.
+    renderPage(<LoansPage />, { route: '/loans', handlers: loanHandlers(), user: MEMBER_USER });
+
+    expect(await screen.findByText(/^Next: \d{2}\/\d{2}\/\d{4}$/)).toBeInTheDocument();
+    expect(screen.queryByText(/on 5th/)).not.toBeInTheDocument();
+  });
+});

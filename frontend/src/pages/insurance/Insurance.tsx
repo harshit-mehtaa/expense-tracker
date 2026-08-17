@@ -11,6 +11,7 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { insuranceApi, type InsurancePolicy } from '@/api/insurance';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { cn } from '@/lib/utils';
+import { formatDate, formatNextOccurrence } from '@/lib/dateFormat';
 
 const POLICY_TYPE_LABELS: Record<string, string> = {
   TERM_LIFE: 'Term Life', ENDOWMENT: 'Endowment', ULIP: 'ULIP',
@@ -49,11 +50,6 @@ type PolicyForm = z.infer<typeof policySchema>;
 function getAnnualPremium(policy: InsurancePolicy): number {
   const m: Record<string, number> = { MONTHLY: 12, QUARTERLY: 4, HALF_YEARLY: 2, ANNUALLY: 1, SINGLE: 1 };
   return policy.premiumAmount * (m[policy.premiumFrequency] ?? 1);
-}
-
-function formatDate(value?: string | null): string {
-  if (!value) return '';
-  return new Date(value).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 function policyColor(type: string): string {
@@ -232,13 +228,13 @@ export default function InsurancePage() {
                 </div>
                 {policy.premiumDueDate && (
                   <div>
-                    <p className="text-muted-foreground">Due Day</p>
-                    <p className="font-semibold flex items-center gap-1"><Calendar className="h-3 w-3" /> {policy.premiumDueDate}th</p>
+                    <p className="text-muted-foreground">Next Due</p>
+                    <p className="font-semibold flex items-center gap-1"><Calendar className="h-3 w-3" /> {formatNextOccurrence(policy.premiumDueDate)}</p>
                   </div>
                 )}
                 <div>
                   <p className="text-muted-foreground">Maturity/End</p>
-                  <p className="font-semibold">{policy.endDate ? new Date(policy.endDate).toLocaleDateString('en-IN') : '—'}</p>
+                  <p className="font-semibold">{policy.endDate ? formatDate(policy.endDate) : '—'}</p>
                 </div>
               </div>
 

@@ -12,6 +12,7 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { loansApi, type Loan, type AmortizationRow } from '@/api/loans';
 import { assetsApi, ASSET_TYPES, type AssetType } from '@/api/assets';
 import { formatINRShort } from '@/lib/indianFormat';
+import { formatDate, formatNextOccurrence } from '@/lib/dateFormat';
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, CustomTooltip } from '@/lib/chartUtils';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { useAuth } from '@/contexts/AuthContext';
@@ -292,7 +293,10 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
         </div>
         <div>
           <p className="text-muted-foreground">EMI</p>
-          <p className="font-semibold"><INRDisplay amount={loan.emiAmount} /> on {loan.emiDate}th</p>
+          <p className="font-semibold"><INRDisplay amount={loan.emiAmount} /></p>
+          {/* emiDate is a day-of-month Int, so the bare number made the reader do the
+              arithmetic — and the hardcoded "th" rendered day 1 as "1th". */}
+          <p className="text-xs text-muted-foreground">Next: {formatNextOccurrence(loan.emiDate)}</p>
         </div>
         <div>
           <p className="text-muted-foreground">Rate</p>
@@ -300,7 +304,7 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
         </div>
         <div>
           <p className="text-muted-foreground">End Date</p>
-          <p className="font-semibold">{new Date(loan.endDate).toLocaleDateString('en-IN')}</p>
+          <p className="font-semibold">{formatDate(loan.endDate)}</p>
         </div>
         {loan.preEmiAmount != null && loan.preEmiAmount > 0 && (
           <div>

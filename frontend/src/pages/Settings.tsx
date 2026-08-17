@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/contexts/AuthContext';
 import api from '@/lib/api';
+import { formatDate } from '@/lib/dateFormat';
 
 const profileSchema = z.object({
   name: z.string().min(1, 'Required'),
@@ -63,7 +64,7 @@ function ExchangeRateSettings() {
                 <RefreshCw className="h-3 w-3" />
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">Updated {new Date(r.updatedAt).toLocaleDateString('en-IN')}</p>
+            <p className="text-xs text-muted-foreground">Updated {formatDate(r.updatedAt)}</p>
           </div>
         ))}
       </div>
