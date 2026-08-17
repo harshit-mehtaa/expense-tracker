@@ -18,6 +18,9 @@ services:
       start_period: 10s
 
   # ── Database migrations + seed (one-shot, exits) ─────────────────────────
+  # If this service fails, the backend never starts — it depends on this completing
+  # successfully. Recovering from that (Prisma error P3009) is documented in
+  # DEPLOY.md, "When a migration fails".
   migrate:
     build:
       context: ./backend

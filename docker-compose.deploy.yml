@@ -30,6 +30,9 @@ services:
       start_period: 10s
 
   # ── Migrations (one-shot) ───────────────────────────────────────────────────
+  # If this service fails, the backend never starts — it depends on this completing
+  # successfully. Recovering from that (Prisma error P3009) is documented in
+  # DEPLOY.md, "When a migration fails".
   migrate:
     image: ghcr.io/harshit-mehtaa/expense-tracker-backend:latest
     env_file: .env

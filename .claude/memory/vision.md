@@ -30,6 +30,10 @@
 - API responses always use the `{ success, data, message?, pagination? }` envelope from
   `utils/response.ts` — never a hand-built response shape.
 
+## Operational Notes
+- A failed migration takes the whole stack down: backend `depends_on` migrate completing
+  successfully. Recovery from P3009 is documented and tested in DEPLOY.md.
+
 ## Tech Debt Inventory
 - [medium] 43 raw `prisma.` calls remain in route handlers, violating the "no Prisma in
   route handlers" rule: `documents.ts` 19, `categories.ts` 11, `budgets.ts` 8, and one
