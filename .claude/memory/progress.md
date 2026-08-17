@@ -2,7 +2,7 @@
 
 ## Status: idle
 
-Last completed: recurring rules own their specification (template ledger pollution fixed).
+Last completed: category management — tree view, usage stats, merge, safe delete.
 
 ## QUEUED NEXT
 
@@ -23,6 +23,9 @@ cross-browser fix is a custom picker across 26 inputs, which costs the native mo
 date UI. Only worth doing if those browsers matter.
 
 ## Tech debt noted
+- Category delete guards run children -> budgets -> transactions, so a category with both
+  children and transactions needs two round trips to remove. Correct precedence, mildly
+  annoying; surface all blockers at once if it becomes a nuisance.
 - `Transaction.isRecurring` is now written but never read. It was the (unreliable) proxy
   for "is a template"; templates are no longer transactions, so nothing filters on it.
   It stays user-settable via the API. Drop it when next touching that schema area.

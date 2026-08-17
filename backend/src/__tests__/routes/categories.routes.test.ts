@@ -17,6 +17,8 @@ vi.mock('../../config/prisma', () => {
   const prisma = {
     category: {
       findMany: vi.fn(),
+      findFirstOrThrow: vi.fn(),
+      updateMany: vi.fn(),
       create: vi.fn(),
       findFirst: vi.fn(),
       count: vi.fn(),
@@ -25,7 +27,14 @@ vi.mock('../../config/prisma', () => {
     },
     budget: {
       count: vi.fn(),
+      updateMany: vi.fn(),
     },
+    // The logic moved into categoryService, which reaches further: usage figures, the
+    // dependency counts behind safe delete, and the four tables a merge moves.
+    transaction: { groupBy: vi.fn(), count: vi.fn(), updateMany: vi.fn() },
+    categoryRule: { count: vi.fn(), updateMany: vi.fn() },
+    recurringRule: { count: vi.fn(), updateMany: vi.fn() },
+    $transaction: vi.fn(),
   };
   return { default: prisma, prisma };
 });
@@ -43,6 +52,12 @@ const DEFAULT_CAT = { id: 'cat-default', name: 'Salary', type: 'INCOME', userId:
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Nothing uses any category unless a test says so, and $transaction runs inline.
+  (prisma as any).transaction.groupBy.mockResolvedValue([]);
+  (prisma as any).transaction.count.mockResolvedValue(0);
+  (prisma as any).categoryRule.count.mockResolvedValue(0);
+  (prisma as any).recurringRule.count.mockResolvedValue(0);
+  (prisma as any).$transaction.mockImplementation(async (fn: any) => fn(prisma));
   catMock.findMany.mockResolvedValue([MOCK_CAT]);
   catMock.create.mockResolvedValue({ ...MOCK_CAT, id: 'cat-new' });
   catMock.findFirst.mockResolvedValue(MOCK_CAT);
@@ -369,5 +384,62 @@ describe('DELETE /api/categories/:id', () => {
     expect(res.status).toBe(409);
     expect(res.body.message).toContain('1 sub-category');
     expect(res.body.message).not.toContain('sub-categories');
+  });
+});
+
+describe('POST /api/categories/:id/merge', () => {
+  it('folds one category into another and returns the survivor', async () => {
+    const cat = (prisma as any).category;
+    cat.findFirst.mockImplementation(({ where }: any) =>
+      Promise.resolve(where.id === 'clxsource0000000000000000'
+        ? { id: 'clxsource0000000000000000', type: 'EXPENSE', isDefault: false, userId: null, parentId: null }
+        : { id: 'clxtarget0000000000000000', type: 'EXPENSE', isDefault: false, userId: null, parentId: null }));
+    cat.findFirstOrThrow.mockResolvedValue({ id: 'clxtarget0000000000000000', name: 'Kept' });
+
+    const res = await request(app)
+      .post('/api/categories/clxsource0000000000000000/merge')
+      .send({ targetId: 'clxtarget0000000000000000' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.name).toBe('Kept');
+  });
+
+  it('rejects a target that is not a cuid', async () => {
+    const res = await request(app)
+      .post('/api/categories/clxsource0000000000000000/merge')
+      .send({ targetId: 'not-an-id' });
+
+    expect(res.status).toBe(422);
+  });
+});
+
+describe('GET /api/categories/:id/dependencies', () => {
+  it('reports what points at the category', async () => {
+    (prisma as any).category.count.mockResolvedValue(1);
+    (prisma as any).transaction.count.mockResolvedValue(2);
+    (prisma as any).budget.count.mockResolvedValue(0);
+
+    const res = await request(app).get('/api/categories/c1/dependencies');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ children: 1, transactions: 2, budgets: 0 });
+  });
+});
+
+describe('DELETE /api/categories/:id?reassignTo=', () => {
+  it('accepts a reassignment target and records it', async () => {
+    const cat = (prisma as any).category;
+    cat.findFirst
+      .mockResolvedValueOnce({ id: 'c1', type: 'EXPENSE', isDefault: false, userId: null })
+      .mockResolvedValueOnce({ id: 'c1', type: 'EXPENSE', isDefault: false, userId: null })
+      .mockResolvedValueOnce({ id: 'clxtarget0000000000000000', type: 'EXPENSE', isDefault: false, userId: null });
+    (prisma as any).transaction.count.mockResolvedValue(3);
+    cat.delete.mockResolvedValue({ id: 'c1' });
+
+    const res = await request(app)
+      .delete('/api/categories/c1?reassignTo=clxtarget0000000000000000');
+
+    expect(res.status).toBe(204);
+    expect((prisma as any).transaction.updateMany).toHaveBeenCalled();
   });
 });
