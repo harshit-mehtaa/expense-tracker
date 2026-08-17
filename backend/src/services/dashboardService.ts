@@ -4,6 +4,7 @@ import { getFYRange, getCurrentFY, getPreviousFY, getMonthStart } from '../utils
 import { generateDueRecurringTransactions } from './recurringService';
 import { computeMonthlyPreEmi } from '../utils/loanMath';
 import { priceAsOf } from '../utils/subscriptionPricing';
+import { ownerShareMultiplier } from '../utils/ownerShares';
 import {
   getNetExpenseByUserCategory,
   getNetExpenseTotal,
@@ -600,11 +601,12 @@ async function fetchAssetBreakdown(userId?: string) {
 
   const realEstateItems = realestate
     .map((p) => {
-      const owners = p.owners ?? [];
-      const sharePercent = userId
-        ? Number(owners.find((owner) => owner.userId === userId)?.sharePercent ?? (p.userId === userId || owners.length === 0 ? 100 : 0))
-        : 100;
-      const shareMultiplier = sharePercent / 100;
+      // Same rule as investmentService, via the shared helper. The `p.userId === userId`
+      // fallback that used to be here double-counted a property across the family: the
+      // primary reported 100% while every co-owner also reported their share, and this
+      // figure feeds net worth directly.
+      const shareMultiplier = ownerShareMultiplier(p.owners, userId);
+      const sharePercent = shareMultiplier * 100;
       return {
         propertyName: p.propertyName,
         propertyType: p.propertyType,

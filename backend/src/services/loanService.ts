@@ -1,5 +1,6 @@
 import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
+import { normalizeOwnerShares, assertPrimaryOwnerRetained } from '../utils/ownerShares';
 import { computeEmi } from '../utils/loanMath';
 import type { Prisma, LoanType } from '@prisma/client';
 
@@ -43,36 +44,7 @@ function userLoanWriteWhere(id: string, requesterId: string, requesterRole: stri
 // ─── Owners ───────────────────────────────────────────────────────────────────
 
 function normalizeLoanOwners(defaultUserId: string, owners?: LoanOwnerInput[]) {
-  const rows = owners?.length ? owners : [{ userId: defaultUserId, sharePercent: 100 }];
-  const seen = new Set<string>();
-  let totalShare = 0;
-
-  const normalized = rows.map((owner) => {
-    const sharePercent = Number(owner.sharePercent);
-    if (!owner.userId) throw AppError.validationError('Loan owner is required');
-    if (seen.has(owner.userId)) throw AppError.validationError('A loan owner can only be added once');
-    if (!Number.isFinite(sharePercent)) {
-      throw AppError.validationError('Owner share must be greater than 0 and at most 100');
-    }
-
-    // Round BEFORE validating, not after. Validating the raw value let 0.001 pass the
-    // `> 0` check and then store as 0 — and since the visibility predicates key on
-    // owner membership alone, that 0% row still granted full view/edit/delete rights.
-    const roundedShare = Math.round(sharePercent * 100) / 100;
-    if (roundedShare <= 0 || roundedShare > 100) {
-      throw AppError.validationError('Owner share must be greater than 0 and at most 100');
-    }
-
-    seen.add(owner.userId);
-    totalShare += roundedShare;
-    return { userId: owner.userId, sharePercent: roundedShare };
-  });
-
-  if (Math.abs(totalShare - 100) > 0.01) {
-    throw AppError.validationError('Loan owner shares must add up to 100%');
-  }
-
-  return normalized;
+  return normalizeOwnerShares(defaultUserId, owners, 'Loan owner');
 }
 
 async function assertActiveLoanOwners(owners: LoanOwnerInput[]) {
@@ -207,16 +179,7 @@ export async function updateLoan(
 
   let ownerRows: ReturnType<typeof normalizeLoanOwners> | undefined;
   if (owners !== undefined) {
-    // The empty-array default below protects the primary owner only when the array is
-    // EMPTY. A non-empty array was taken as-is, so a 1% co-owner could PUT
-    // `owners: [{self, 100}]`, and the `deleteMany: {}` further down would remove the
-    // primary owner from their own loan. Only the primary owner or an admin may
-    // restructure ownership in a way that drops the primary.
-    if (owners.length > 0 && !owners.some((o) => o.userId === loan.userId)) {
-      if (requesterRole !== 'ADMIN' && requesterId !== loan.userId) {
-        throw AppError.forbidden('Only the loan owner or an admin can remove the primary owner');
-      }
-    }
+    assertPrimaryOwnerRetained(owners, loan.userId, requesterId, requesterRole, 'Loan owner');
     // Default from the ROW's owner, never the requester — otherwise a co-owner could
     // reassign the loan to themselves by sending an empty owners array.
     ownerRows = normalizeLoanOwners(loan.userId, owners);

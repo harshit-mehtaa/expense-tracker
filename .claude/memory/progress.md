@@ -2,25 +2,31 @@
 
 ## Status: idle
 
-Last completed: dd/mm/yyyy dates across the product.
+Last completed: real-estate co-owner security (4 bugs) + shared ownerShares extraction.
 
 ## QUEUED NEXT
 
-### 1. Debt from the loans review
-- **M2 (security)** `normalizeRealEstateOwners` validates the RAW share before rounding,
-  so 0.001 stores as 0 and — since `userRealEstateWhere` keys on membership alone — that
-  0% row grants full view/edit/delete. AND `updateRealEstate` takes a non-empty owners
-  array verbatim with `deleteMany: {}`, so a 1% co-owner can delete the primary owner.
-  Both VERIFIED by reading the code. Fix when extracting `utils/ownerShares.ts`.
-- **H3** MEMBER cannot add co-owners (no non-admin member-listing endpoint; product-wide)
-- **M1** `realEstateInclude` returns the whole Loan row to RealEstate co-owners
-- **M4** `Asset.value` never enters net worth
-- **H6** No P3009 / rollback runbook in DEPLOY.md
-
-### 2. Recurring-template ledger pollution (pre-existing)
+### 1. Recurring-template ledger pollution (pre-existing)
 Templates are ordinary EXPENSE rows with `isRecurring: true`; only the two subscription
 read paths exclude them. Reports, dashboard and listTransactions all count money that
 never moved. `createRecurringRule` has done this since before subscriptions existed.
+Wide blast radius: touches every aggregation.
+
+### 2. `Asset.value` never enters net worth
+A vehicle worth Rs 12L shows the AUTO loan as a liability with no offsetting asset.
+Needs dedup design vs RealEstate/Gold.
+
+### 3. MEMBER cannot add co-owners
+No non-admin member-listing endpoint. Affects loans AND real estate. Widens data
+exposure, so it is a product decision.
+
+### 4. No P3009 / rollback runbook in DEPLOY.md
+docker-compose.yml:41 blocks backend startup on migrate success; no documented recovery.
+
+### 5. Native date pickers in Firefox/Safari
+`lang="en-IN"` fixes Chromium only; Firefox and Safari read OS regional settings. The
+cross-browser fix is a custom picker across 26 inputs, which costs the native mobile
+date UI. Only worth doing if those browsers matter.
 
 ## Known Flakes (pre-existing)
 - `dashboard.routes.test.ts > returns empty array when no alerts` (backend) — order-dependent

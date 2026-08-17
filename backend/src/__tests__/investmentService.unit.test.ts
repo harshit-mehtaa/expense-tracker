@@ -1349,7 +1349,16 @@ describe('getRealEstate', () => {
     const result = await getRealEstate(undefined, 'admin-1', 'ADMIN');
     const call = reMock.findMany.mock.calls[0][0];
     expect(call.where).toEqual({ user: { isActive: true, deletedAt: null } });
-    expect(call.include).toMatchObject({ loan: true, owners: expect.any(Object), user: { select: { name: true } } });
+    // The linked loan is SELECTED, not included wholesale: a property is visible to its
+    // co-owners and the loan is not, so returning every Loan column handed a property
+    // co-owner a loan they have no stake in.
+    expect(call.include).toMatchObject({
+      loan: { select: expect.objectContaining({ lenderName: true }) },
+      owners: expect.any(Object),
+      user: { select: { name: true } },
+    });
+    expect(call.include.loan).not.toBe(true);
+    expect(call.include.loan.select.interestRate).toBeUndefined();
     expect((result.properties[0] as any).userName).toBe('Bob');
     expect((result.properties[0] as any).user).toBeUndefined();
   });
@@ -1421,6 +1430,49 @@ describe('createRealEstate / updateRealEstate / deleteRealEstate', () => {
     reMock.delete.mockResolvedValue({ id: 're-1' });
     await deleteRealEstate('u1', 're-1');
     expect(reMock.delete).toHaveBeenCalledWith({ where: { id: 're-1' } });
+  });
+
+  it('refuses a co-owner who drops the primary owner from the owners list', async () => {
+    // updateRealEstate writes owners with `deleteMany: {}`, so a non-empty array that
+    // omits the primary DELETES them from their own property. u2 holds 1% and tries to
+    // take the lot.
+    reMock.findFirst.mockResolvedValue({ id: 're-1', userId: 'u1' });
+
+    await expect(updateRealEstate('u2', 're-1', {
+      owners: [{ userId: 'u2', sharePercent: 100 }],
+    } as never)).rejects.toThrow(/only the property owner or an admin/i);
+
+    expect(reMock.update).not.toHaveBeenCalled();
+  });
+
+  it('lets the primary owner restructure ownership away from themselves', async () => {
+    reMock.findFirst.mockResolvedValue({ id: 're-1', userId: 'u1' });
+    userMock.findMany.mockResolvedValue([{ id: 'u2' }]);
+    reMock.update.mockResolvedValue({
+      id: 're-1', userId: 'u1', purchasePrice: 1, currentValue: 1,
+      rentalIncomeMonthly: null, owners: [],
+    });
+
+    await updateRealEstate('u1', 're-1', {
+      owners: [{ userId: 'u2', sharePercent: 100 }],
+    } as never);
+
+    expect(reMock.update).toHaveBeenCalled();
+  });
+
+  it('refuses an owner share that rounds to zero', async () => {
+    // A 0% row would still grant full view/edit/delete, because the visibility predicate
+    // keys on membership alone.
+    reMock.findFirst.mockResolvedValue({ id: 're-1', userId: 'u1' });
+
+    await expect(updateRealEstate('u1', 're-1', {
+      owners: [
+        { userId: 'u1', sharePercent: 99.999 },
+        { userId: 'u3', sharePercent: 0.001 },
+      ],
+    } as never)).rejects.toThrow(/greater than 0/i);
+
+    expect(reMock.update).not.toHaveBeenCalled();
   });
 
   it('updates real estate when found', async () => {
@@ -1835,12 +1887,30 @@ describe('getRealEstate — property decoration', () => {
     expect(Number(properties[0].currentValueShare)).toBeCloseTo(600_000, 2);
   });
 
-  it('gives the record owner 100% when they are not on the owners list', async () => {
+  it('gives the record owner 0% when the owners list omits them', async () => {
+    // Previously 100%, which double-counted the property: the primary reported the whole
+    // value while every co-owner also reported their share. Ownership is the owner rows,
+    // not the userId column — the two disagreeing means the rows are the truth.
     reMock.findMany.mockResolvedValue([propertyWith([
       { id: 'o2', userId: 'u2', sharePercent: 60, user: { name: 'B' } },
     ], { userId: 'u1' })]);
     const { properties } = await getRealEstate('u1', 'u1', 'MEMBER');
-    expect(properties[0].sharePercent).toBe(100);
+    expect(properties[0].sharePercent).toBe(0);
+  });
+
+  it('never lets the shares of two viewers exceed the whole property', async () => {
+    const owners = [
+      { id: 'o2', userId: 'u2', sharePercent: 60, user: { name: 'B' } },
+      { id: 'o3', userId: 'u3', sharePercent: 40, user: { name: 'C' } },
+    ];
+    reMock.findMany.mockResolvedValue([propertyWith(owners, { userId: 'u1' })]);
+    const primary = (await getRealEstate('u1', 'u1', 'MEMBER')).properties[0].sharePercent;
+    reMock.findMany.mockResolvedValue([propertyWith(owners, { userId: 'u1' })]);
+    const coOwner = (await getRealEstate('u2', 'u2', 'MEMBER')).properties[0].sharePercent;
+    reMock.findMany.mockResolvedValue([propertyWith(owners, { userId: 'u1' })]);
+    const other = (await getRealEstate('u3', 'u3', 'MEMBER')).properties[0].sharePercent;
+
+    expect(primary + coOwner + other).toBeLessThanOrEqual(100);
   });
 
   it('gives a non-owner viewer a 0% share', async () => {

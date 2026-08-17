@@ -1,5 +1,6 @@
 import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
+import { normalizeOwnerShares, assertPrimaryOwnerRetained } from '../utils/ownerShares';
 import { getFYRange } from '../utils/financialYear';
 import { ownerScopedWhere } from '../utils/resolveTargetUserId';
 import type { Prisma, InvestmentType, FDStatus, RDStatus, SIPStatus } from '@prisma/client';
@@ -595,7 +596,16 @@ type RealEstateUpdateInput = Prisma.RealEstateUncheckedUpdateInput & {
 };
 
 const realEstateInclude = {
-  loan: true,
+  // NOT `loan: true`. A property is visible to its co-owners, and the loan is not — that
+  // has its own owner set. Returning the whole row handed a property co-owner the
+  // lender, balance, rate, EMI and every field added to Loan since. Only what the
+  // property view actually renders.
+  loan: {
+    select: {
+      id: true, lenderName: true, loanType: true,
+      outstandingBalance: true, emiAmount: true, emiDate: true,
+    },
+  },
   owners: {
     include: {
       user: { select: { id: true, name: true, email: true, colorTag: true } },
@@ -604,29 +614,7 @@ const realEstateInclude = {
 } as const;
 
 function normalizeRealEstateOwners(defaultUserId: string, owners?: RealEstateOwnerInput[]) {
-  const rows = owners?.length ? owners : [{ userId: defaultUserId, sharePercent: 100 }];
-  const seen = new Set<string>();
-  let totalShare = 0;
-
-  const normalized = rows.map((owner) => {
-    const sharePercent = Number(owner.sharePercent);
-    if (!owner.userId) throw AppError.validationError('Property owner is required');
-    if (seen.has(owner.userId)) throw AppError.validationError('A property owner can only be added once');
-    if (!Number.isFinite(sharePercent) || sharePercent <= 0 || sharePercent > 100) {
-      throw AppError.validationError('Owner share must be greater than 0 and at most 100');
-    }
-
-    seen.add(owner.userId);
-    const roundedShare = Math.round(sharePercent * 100) / 100;
-    totalShare += roundedShare;
-    return { userId: owner.userId, sharePercent: roundedShare };
-  });
-
-  if (Math.abs(totalShare - 100) > 0.01) {
-    throw AppError.validationError('Property owner shares must add up to 100%');
-  }
-
-  return normalized;
+  return normalizeOwnerShares(defaultUserId, owners, 'Property owner');
 }
 
 async function assertActiveRealEstateOwners(owners: RealEstateOwnerInput[]) {
@@ -657,8 +645,12 @@ function decorateRealEstateProperty(row: any, scopedUserId?: string) {
   const currentValue = Number(property.currentValue);
   const rentalIncomeMonthly = property.rentalIncomeMonthly == null ? null : Number(property.rentalIncomeMonthly);
   const scopedOwner = scopedUserId ? owners.find((owner: any) => owner.userId === scopedUserId) : undefined;
+  // No `property.userId === scopedUserId` fallback: see ownerShareMultiplier. A record
+  // whose owner rows omit the primary would otherwise report the primary at 100% while
+  // every co-owner also reported their share — the same property counted twice across
+  // the family, in net worth and in any relief derived from it.
   const sharePercent = scopedUserId
-    ? scopedOwner?.sharePercent ?? (property.userId === scopedUserId || owners.length === 0 ? 100 : 0)
+    ? scopedOwner?.sharePercent ?? (owners.length === 0 ? 100 : 0)
     : 100;
   const shareMultiplier = sharePercent / 100;
 
@@ -754,6 +746,7 @@ export async function updateRealEstate(requesterId: string, id: string, data: Re
   const { owners, ...propertyData } = data as any;
   let ownerRows: ReturnType<typeof normalizeRealEstateOwners> | undefined;
   if (owners !== undefined) {
+    assertPrimaryOwnerRetained(owners, r.userId, requesterId, requesterRole, 'Property owner');
     ownerRows = normalizeRealEstateOwners(r.userId, owners);
     await assertActiveRealEstateOwners(ownerRows);
   }

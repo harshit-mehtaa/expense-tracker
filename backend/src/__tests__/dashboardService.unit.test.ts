@@ -453,12 +453,29 @@ describe('computeNetWorthStatement', () => {
     expect(r.assets.realEstate).toBe(1500000);
   });
 
-  it('gives the record owner a full share when the owners list omits them', async () => {
+  it('gives the record owner NO share when the owners list omits them', async () => {
+    // This figure feeds net worth. Reporting 100% here while u2 also reported 60% meant
+    // the family's combined net worth counted the same flat at 160% of its value.
     reMock.findMany.mockResolvedValue([
       {
         propertyName: 'Solo Flat', propertyType: 'RESIDENTIAL',
         purchasePrice: 1000000, currentValue: 2000000, userId: 'u1',
         owners: [{ userId: 'u2', sharePercent: 60 }],
+      },
+    ]);
+    const r = await computeNetWorthStatement('u1');
+    expect(r.realEstateItems[0].sharePercent).toBe(0);
+    expect(r.assets.realEstate).toBe(0);
+  });
+
+  it('still gives a full share when there are no owner rows at all', async () => {
+    // How properties created before co-ownership existed are represented — the only
+    // remaining reason to fall back to 100%.
+    reMock.findMany.mockResolvedValue([
+      {
+        propertyName: 'Legacy Flat', propertyType: 'RESIDENTIAL',
+        purchasePrice: 1000000, currentValue: 2000000, userId: 'u1',
+        owners: [],
       },
     ]);
     const r = await computeNetWorthStatement('u1');
