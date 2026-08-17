@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { loansApi, type Loan, type AmortizationRow } from '@/api/loans';
 import { assetsApi, ASSET_TYPES, type AssetType } from '@/api/assets';
+import { investmentsApi } from '@/api/investments';
 import { formatINRShort } from '@/lib/indianFormat';
 import { formatDate, formatNextOccurrence, toDateInputValue, addMonths } from '@/lib/dateFormat';
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, CustomTooltip } from '@/lib/chartUtils';
@@ -451,18 +452,44 @@ export default function LoansPage() {
   // what they want (a car loan is secured against a vehicle).
   const [showNewAsset, setShowNewAsset] = useState(false);
   const [newAsset, setNewAsset] = useState({ name: '', value: '', assetType: 'OTHER' as AssetType });
+  /**
+   * The detailed record this asset stands for, when one already exists.
+   *
+   * Without it the asset counts toward net worth in its own right — and if the same flat
+   * or gold is also tracked as a property or a holding, it is counted twice. The link is
+   * what tells net worth to defer to the detailed record.
+   */
+  const [newAssetLinkId, setNewAssetLinkId] = useState('');
+
+  const { data: linkableProperties = [] } = useQuery({
+    queryKey: ['real-estate', viewUserId],
+    queryFn: () => investmentsApi.getRealEstate(viewUserId ? { targetUserId: viewUserId } : undefined)
+      .then((r: any) => r.properties ?? []),
+    enabled: showNewAsset && newAsset.assetType === 'PROPERTY',
+  });
+
+  const { data: linkableGold = [] } = useQuery({
+    queryKey: ['gold', viewUserId],
+    queryFn: () => investmentsApi.getGold(viewUserId ? { targetUserId: viewUserId } : undefined)
+      .then((r) => r.holdings ?? []),
+    enabled: showNewAsset && newAsset.assetType === 'GOLD',
+  });
 
   const createAssetMutation = useMutation({
     mutationFn: () => assetsApi.create({
       assetType: newAsset.assetType,
       name: newAsset.name.trim(),
       value: Number(newAsset.value) || 0,
+      // Only one of these can apply, and only for the matching type.
+      ...(newAssetLinkId && newAsset.assetType === 'PROPERTY' ? { realEstateId: newAssetLinkId } : {}),
+      ...(newAssetLinkId && newAsset.assetType === 'GOLD' ? { goldHoldingId: newAssetLinkId } : {}),
     }, viewUserId ? { targetUserId: viewUserId } : undefined),
     onSuccess: (created) => {
       qc.invalidateQueries({ queryKey: ['assets'] });
       setValue('assetId', created.id, { shouldValidate: true });
       setShowNewAsset(false);
       setNewAsset({ name: '', value: '', assetType: 'OTHER' });
+      setNewAssetLinkId('');
     },
   });
 
@@ -822,6 +849,39 @@ export default function LoansPage() {
                             />
                           </div>
                         </div>
+
+                        {/* Without this link the asset counts toward net worth in its own
+                            right. If the same flat or gold is also tracked as a property or
+                            a holding, it is then counted twice — so say which record this
+                            stands for, or say it is new. */}
+                        {(newAsset.assetType === 'PROPERTY' || newAsset.assetType === 'GOLD') && (
+                          <div className="space-y-1">
+                            <Label htmlFor="new-asset-link">
+                              {newAsset.assetType === 'PROPERTY' ? 'Already tracked as a property?' : 'Already tracked as a gold holding?'}
+                            </Label>
+                            <select
+                              id="new-asset-link"
+                              value={newAssetLinkId}
+                              onChange={(e) => setNewAssetLinkId(e.target.value)}
+                              className="w-full h-9 rounded-md border bg-background px-3 text-sm"
+                            >
+                              <option value="">No — count it separately</option>
+                              {newAsset.assetType === 'PROPERTY'
+                                ? linkableProperties.map((prop: { id: string; propertyName: string }) => (
+                                  <option key={prop.id} value={prop.id}>{prop.propertyName}</option>
+                                ))
+                                : linkableGold.map((g: { id: string; description?: string; quantityGrams: number }) => (
+                                  <option key={g.id} value={g.id}>
+                                    {g.description || 'Gold'} — {g.quantityGrams}g
+                                  </option>
+                                ))}
+                            </select>
+                            <p className="text-xs text-muted-foreground">
+                              Linking it avoids counting the same thing twice in net worth.
+                            </p>
+                          </div>
+                        )}
+
                         <div className="flex gap-2">
                           <Button
                             type="button"

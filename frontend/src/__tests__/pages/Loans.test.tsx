@@ -619,3 +619,111 @@ describe('loanSchema — first EMI date must be a day that exists every month', 
     expect(result.success).toBe(false);
   });
 });
+
+// ─── Linking a new asset to the record that already tracks it ────────────────
+
+/**
+ * An asset with no link counts toward net worth on its own. If the same flat or gold is
+ * also tracked as a property or a holding, it is counted twice — so the inline creator
+ * has to be able to say which record it stands for.
+ */
+describe('Loans page — inline asset creation can defer to an existing record', () => {
+  const REAL_ESTATE = [{ id: 're-1', propertyName: 'Flat 3B', currentValue: 8500000 }];
+  const GOLD = [{ id: 'g-1', description: 'Chain', quantityGrams: 50 }];
+
+  const withInvestments = () => [
+    http.get(url('/investments/real-estate'), () => HttpResponse.json({ data: { properties: REAL_ESTATE } })),
+    http.get(url('/investments/gold'), () => HttpResponse.json({ data: { holdings: GOLD, summary: {} } })),
+    ...loanHandlers([]),
+  ];
+
+  async function openAssetCreator(user: ReturnType<typeof userEvent.setup>, type: string) {
+    await user.click(await screen.findByRole('button', { name: /add loan/i }));
+    await screen.findByRole('heading', { name: /^add loan$/i });
+    await user.click(screen.getByRole('button', { name: /add a new asset/i }));
+    await user.selectOptions(await screen.findByLabelText(/^type$/i), type);
+  }
+
+  it('sends realEstateId when the property is already tracked', async () => {
+    const user = userEvent.setup();
+    let body: any = null;
+
+    renderPage(<LoansPage />, {
+      route: '/loans',
+      user: MEMBER_USER,
+      handlers: [
+        http.post(url('/assets'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: { id: 'a-new' } }, { status: 201 });
+        }),
+        ...withInvestments(),
+      ],
+    });
+
+    await openAssetCreator(user, 'PROPERTY');
+    await user.type(screen.getByLabelText(/asset name/i), 'Flat 3B');
+    await user.selectOptions(await screen.findByLabelText(/already tracked as a property/i), 're-1');
+    await user.click(screen.getByRole('button', { name: /save asset/i }));
+
+    await waitFor(() => expect(body).not.toBeNull());
+    expect(body.realEstateId).toBe('re-1');
+  });
+
+  it('sends goldHoldingId when the gold is already tracked', async () => {
+    const user = userEvent.setup();
+    let body: any = null;
+
+    renderPage(<LoansPage />, {
+      route: '/loans',
+      user: MEMBER_USER,
+      handlers: [
+        http.post(url('/assets'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: { id: 'a-new' } }, { status: 201 });
+        }),
+        ...withInvestments(),
+      ],
+    });
+
+    await openAssetCreator(user, 'GOLD');
+    await user.type(screen.getByLabelText(/asset name/i), 'Chain');
+    await user.selectOptions(await screen.findByLabelText(/already tracked as a gold holding/i), 'g-1');
+    await user.click(screen.getByRole('button', { name: /save asset/i }));
+
+    await waitFor(() => expect(body).not.toBeNull());
+    expect(body.goldHoldingId).toBe('g-1');
+  });
+
+  it('sends no link when the asset is genuinely new, so it counts on its own', async () => {
+    const user = userEvent.setup();
+    let body: any = null;
+
+    renderPage(<LoansPage />, {
+      route: '/loans',
+      user: MEMBER_USER,
+      handlers: [
+        http.post(url('/assets'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: { id: 'a-new' } }, { status: 201 });
+        }),
+        ...withInvestments(),
+      ],
+    });
+
+    await openAssetCreator(user, 'VEHICLE');
+    await user.type(screen.getByLabelText(/asset name/i), 'Swift Dzire');
+    await user.click(screen.getByRole('button', { name: /save asset/i }));
+
+    await waitFor(() => expect(body).not.toBeNull());
+    expect(body.realEstateId).toBeUndefined();
+    expect(body.goldHoldingId).toBeUndefined();
+  });
+
+  it('offers no link picker for a vehicle, which nothing else tracks', async () => {
+    const user = userEvent.setup();
+    renderPage(<LoansPage />, { route: '/loans', user: MEMBER_USER, handlers: withInvestments() });
+
+    await openAssetCreator(user, 'VEHICLE');
+    expect(screen.queryByLabelText(/already tracked/i)).not.toBeInTheDocument();
+  });
+});
