@@ -72,7 +72,7 @@ describe('createSubscription', () => {
     subMock.findFirstOrThrow.mockResolvedValue(MOCK_SUB);
   });
 
-  it('creates subscription, opening price, template and rule in ONE transaction', async () => {
+  it('creates subscription, opening price and rule in ONE transaction', async () => {
     // A partial chain is worse than nothing: an orphaned rule keeps charging with
     // nothing on screen to explain why.
     await createSubscription('u1', {
@@ -82,8 +82,10 @@ describe('createSubscription', () => {
     expect((prisma as any).$transaction).toHaveBeenCalledTimes(1);
     expect(subMock.create).toHaveBeenCalled();
     expect(priceMock.create).toHaveBeenCalled();
-    expect(txnMock.create).toHaveBeenCalled();
     expect(ruleMock.create).toHaveBeenCalled();
+    // No template Transaction: a subscription no longer puts a charge that never
+    // happened into the ledger.
+    expect(txnMock.create).not.toHaveBeenCalled();
   });
 
   it('links the rule to the subscription so the guard can see it', async () => {
@@ -215,11 +217,11 @@ describe('recordPriceChange', () => {
     expect(Number(call.create.amount)).toBe(799);
   });
 
-  it('mirrors the new price onto the template', async () => {
+  it('mirrors the new price onto the rule', async () => {
     await recordPriceChange('u1', 'sub-1', 799, '2027-01-01');
 
-    expect(txnMock.update.mock.calls[0][0].where).toEqual({ id: 'tmpl-1' });
-    expect(Number(txnMock.update.mock.calls[0][0].data.amount)).toBe(799);
+    expect(ruleMock.update.mock.calls[0][0].where).toEqual({ id: 'rule-1' });
+    expect(Number(ruleMock.update.mock.calls[0][0].data.amount)).toBe(799);
   });
 });
 
@@ -246,10 +248,8 @@ describe('deleteSubscription', () => {
     await deleteSubscription('u1', 'sub-1');
 
     expect(ruleMock.update.mock.calls[0][0].data).toEqual({ isActive: false });
-    expect(txnMock.update.mock.calls[0][0]).toMatchObject({
-      where: { id: 'tmpl-1' },
-      data: expect.objectContaining({ isRecurring: false }),
-    });
+    // Nothing else to retire — the rule holds its own spec.
+    expect(txnMock.update).not.toHaveBeenCalled();
   });
 
   it('a soft-deleted subscription is invisible to reads', async () => {
@@ -315,7 +315,7 @@ describe('derived spend metrics', () => {
     expect(sub.usage).toMatchObject({ chargeCount: 0, totalPaid: 0, priceMismatch: null });
   });
 
-  it('excludes the template transaction from usage totals', async () => {
+  it('counts every real charge, with no template to exclude', async () => {
     // The template is scaffolding for the rule, not money that ever moved. Counting it
     // inflated every total by one and — because recordPriceChange mirrors the current
     // price onto a template that keeps its original date — produced a false
@@ -325,16 +325,20 @@ describe('derived spend metrics', () => {
 
     await listSubscriptions('u1');
 
-    expect(txnMock.findMany.mock.calls[0][0].where.isRecurring).toBe(false);
+    // The old `isRecurring: false` filter was a proxy for "not a template" — and a wrong
+    // one, since routes/transactions.ts lets a user set that flag on a real transaction.
+    expect(txnMock.findMany.mock.calls[0][0].where.isRecurring).toBeUndefined();
   });
 
-  it('excludes the template on the single-subscription path too', async () => {
+  it('counts every real charge on the single-subscription path too', async () => {
     subMock.findFirst.mockResolvedValue(MOCK_SUB);
     txnMock.findMany.mockResolvedValue([]);
 
     await getSubscription('u1', 'sub-1');
 
-    expect(txnMock.findMany.mock.calls[0][0].where.isRecurring).toBe(false);
+    // The old `isRecurring: false` filter was a proxy for "not a template" — and a wrong
+    // one, since routes/transactions.ts lets a user set that flag on a real transaction.
+    expect(txnMock.findMany.mock.calls[0][0].where.isRecurring).toBeUndefined();
   });
 
   it('does not query charges at all when there are no subscriptions', async () => {
@@ -465,7 +469,7 @@ describe('updateSubscription', () => {
     expect(subMock.create.mock.calls[0][0].data.startDate).toEqual(new Date('2020-01-01'));
   });
 
-  it('marks the template as not having moved money', async () => {
+  it('creates no template transaction at all', async () => {
     // Left at the schema default, soft-deleting the template would CREDIT the account
     // for an impact that was never applied.
     subMock.create.mockResolvedValue({ id: 'sub-1' });
@@ -477,7 +481,7 @@ describe('updateSubscription', () => {
       name: 'X', amount: 100, frequency: 'MONTHLY', startDate: '2025-01-01',
     } as never);
 
-    expect(txnMock.create.mock.calls[0][0].data.balanceImpactApplied).toBe(false);
+    expect(txnMock.create).not.toHaveBeenCalled();
   });
 
   it('clears the trial end date when explicitly set to null', async () => {

@@ -154,12 +154,10 @@ export async function listSubscriptions(userId?: string) {
     where: {
       subscriptionId: { in: subscriptions.map((s) => s.id) },
       deletedAt: null,
-      // EXCLUDE the template. It carries `isRecurring: true` and is scaffolding for the
-      // rule, not money that ever left an account. Counting it inflated every total by
-      // one — and because recordPriceChange mirrors the current price onto the template
-      // while the template keeps its original date, it also reported a false "charged
-      // more than expected" on every subscription that had ever changed price.
-      isRecurring: false,
+      // No template exclusion needed: a rule's spec lives on the rule itself now, so
+      // nothing scaffolding-shaped is in the ledger. The previous `isRecurring: false`
+      // filter was also subtly wrong — routes/transactions.ts lets a user set that flag
+      // on a genuine transaction, so it hid real charges.
     },
     select: { subscriptionId: true, amount: true, date: true },
   });
@@ -183,7 +181,7 @@ export async function getSubscription(requesterId: string, id: string, requester
   if (!subscription) return null;
 
   const charges = await prisma.transaction.findMany({
-    where: { subscriptionId: id, deletedAt: null, isRecurring: false },
+    where: { subscriptionId: id, deletedAt: null },
     select: { amount: true, date: true },
   });
 
@@ -249,33 +247,22 @@ export async function createSubscription(userId: string, data: CreateSubscriptio
       },
     });
 
-    const template = await tx.transaction.create({
-      data: {
-        userId,
-        bankAccountId: data.bankAccountId ?? null,
-        categoryId: data.categoryId ?? null,
-        amount: new Prisma.Decimal(data.amount),
-        type: 'EXPENSE' as TransactionType,
-        paymentMode: (data.paymentMode as PaymentMode | null) ?? null,
-        description: data.name,
-        date: firstRun,
-        isRecurring: true,
-        // The template is scaffolding for the rule, not money that moved. Left at the
-        // schema default of true, soft-deleting it would REVERSE a balance impact that
-        // was never applied and credit the account.
-        balanceImpactApplied: false,
-        subscriptionId: subscription.id,
-      },
-    });
 
+    // The rule carries its own spec now — no ledger-visible template row, so a
+    // subscription no longer puts a charge that never happened into the ledger.
     await tx.recurringRule.create({
       data: {
         userId,
-        templateTransactionId: template.id,
         frequency: data.frequency,
         nextRunDate: firstRun,
         isActive: true,
         subscriptionId: subscription.id,
+        amount: new Prisma.Decimal(data.amount),
+        type: 'EXPENSE' as TransactionType,
+        description: data.name,
+        categoryId: data.categoryId ?? null,
+        bankAccountId: data.bankAccountId ?? null,
+        paymentMode: (data.paymentMode as PaymentMode | null) ?? null,
       },
     });
 
@@ -372,7 +359,7 @@ export async function recordPriceChange(
 ) {
   const subscription = await prisma.subscription.findFirst({
     where: { ...ownerScopedWhere(id, requesterId, requesterRole), deletedAt: null },
-    include: { recurringRule: { select: { id: true, templateTransactionId: true } } },
+    include: { recurringRule: { select: { id: true } } },
   });
   if (!subscription) throw AppError.notFound('Subscription');
 
@@ -390,11 +377,12 @@ export async function recordPriceChange(
       },
     });
 
-    // Keep the template in step so anything reading it directly sees the current price.
-    // Generation resolves from history regardless, so this is a mirror, not the source.
+    // Keep the rule's own amount in step so anything reading it directly sees the
+    // current price. Generation resolves from the price history regardless, so this is
+    // a mirror, not the source.
     if (subscription.recurringRule) {
-      await tx.transaction.update({
-        where: { id: subscription.recurringRule.templateTransactionId },
+      await tx.recurringRule.update({
+        where: { id: subscription.recurringRule.id },
         data: { amount: new Prisma.Decimal(amount) },
       });
     }
@@ -486,7 +474,7 @@ export async function resumeSubscription(
 export async function deleteSubscription(requesterId: string, id: string, requesterRole = 'MEMBER') {
   const subscription = await prisma.subscription.findFirst({
     where: { ...ownerScopedWhere(id, requesterId, requesterRole), deletedAt: null },
-    include: { recurringRule: { select: { id: true, templateTransactionId: true } } },
+    include: { recurringRule: { select: { id: true } } },
   });
   if (!subscription) throw AppError.notFound('Subscription');
 
@@ -502,11 +490,6 @@ export async function deleteSubscription(requesterId: string, id: string, reques
       await tx.recurringRule.update({
         where: { id: subscription.recurringRule.id },
         data: { isActive: false },
-      });
-      // The template is scaffolding, never a real charge.
-      await tx.transaction.update({
-        where: { id: subscription.recurringRule.templateTransactionId },
-        data: { deletedAt: new Date(), isRecurring: false },
       });
     }
   });

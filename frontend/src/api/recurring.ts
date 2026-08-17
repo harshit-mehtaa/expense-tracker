@@ -5,7 +5,6 @@ export type RecurringFrequency = 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'QUARTERLY' | 
 export interface RecurringRule {
   id: string;
   userId: string;
-  templateTransactionId: string;
   frequency: RecurringFrequency;
   nextRunDate: string;
   isActive: boolean;
@@ -15,24 +14,31 @@ export interface RecurringRule {
   subscriptionId?: string | null;
   createdAt: string;
   updatedAt: string;
-  templateTransaction: {
+
+  /**
+   * The specification, flat on the rule.
+   *
+   * This used to be a nested `templateTransaction` — a real row in the ledger, which
+   * meant every aggregate in the app counted a charge that never happened. A rule is a
+   * specification, not money that moved, so it no longer has a Transaction at all.
+   */
+  amount: number;
+  type: 'INCOME' | 'EXPENSE' | 'TRANSFER';
+  description: string;
+  categoryId: string | null;
+  bankAccountId: string | null;
+  paymentMode?: string | null;
+  tags: string[];
+  gstAmount?: number | null;
+  category: {
     id: string;
-    amount: number;
-    type: 'INCOME' | 'EXPENSE' | 'TRANSFER';
-    description: string;
-    categoryId: string | null;
-    bankAccountId: string | null;
-    tags: string[];
-    category: {
-      id: string;
-      name: string;
-      color: string | null;
-      icon: string | null;
-      parentId?: string | null;
-      parent?: { id: string; name: string; icon?: string | null; parentId?: string | null } | null;
-    } | null;
-    bankAccount: { bankName: string; accountNumberLast4: string | null } | null;
-  };
+    name: string;
+    color: string | null;
+    icon: string | null;
+    parentId?: string | null;
+    parent?: { id: string; name: string; icon?: string | null; parentId?: string | null } | null;
+  } | null;
+  bankAccount: { bankName: string; accountNumberLast4: string | null } | null;
 }
 
 export interface CreateRecurringRuleInput {

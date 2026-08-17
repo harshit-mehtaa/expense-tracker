@@ -344,6 +344,7 @@ model BankAccount {
   sips              SIP[]
   loans             Loan[]
 
+  recurringRules RecurringRule[]
   @@index([userId])
 }
 
@@ -617,6 +618,7 @@ model Category {
   budgets       Budget[]
   categoryRules CategoryRule[]
 
+  recurringRules RecurringRule[]
   @@unique([name, type]) // family-shared: one category per name+type globally
   @@index([type])
   @@index([parentId])
@@ -664,7 +666,6 @@ model Transaction {
   refundFor       Transaction?     @relation("TransactionRefunds", fields: [refundForTransactionId], references: [id], onDelete: SetNull)
   refunds         Transaction[]    @relation("TransactionRefunds")
   sipTransaction  SIPTransaction?  @relation(fields: [sipTransactionId], references: [id], onDelete: SetNull)
-  recurringRule   RecurringRule?
 
   @@unique([importHash]) // Prisma enforces unique only when non-null; null values don't conflict
   @@index([userId])
@@ -683,13 +684,33 @@ model Transaction {
   @@index([sipTransactionId])
 }
 
+/// A recurring transaction SPECIFICATION.
+///
+/// The fields below used to live on a real Transaction row referenced by
+/// `templateTransactionId`. That made a specification masquerade as money: the template
+/// carried a date, an amount and a type, so every aggregate in the app — the ledger,
+/// monthly trends, category breakdowns, net worth — counted a charge that never happened.
+/// Excluding it would have meant remembering to filter at seventeen separate read sites,
+/// including three raw SQL aggregations, forever.
+///
+/// A template is not a transaction. It has no date that means anything and moves no
+/// money, so it does not belong in the ledger at all.
 model RecurringRule {
   id                    String             @id @default(cuid())
   userId                String
-  templateTransactionId String             @unique
   frequency             RecurringFrequency
   nextRunDate           DateTime
   isActive              Boolean            @default(true)
+
+  // ── The specification: what each generated transaction should look like ──────
+  amount                Decimal            @db.Decimal(15, 2)
+  type                  TransactionType
+  description           String
+  categoryId            String?
+  bankAccountId         String?
+  paymentMode           PaymentMode?
+  tags                  String[]           @default([])
+  gstAmount             Decimal?           @db.Decimal(15, 2)
   /// Set when this rule is OWNED by a Subscription. The FK lives here, not on
   /// Subscription, so deleting a subscription cascades to its rule — the reverse
   /// direction cannot cascade. recurringService refuses to mutate or delete a rule
@@ -698,13 +719,16 @@ model RecurringRule {
   createdAt             DateTime           @default(now())
   updatedAt             DateTime           @updatedAt
 
-  templateTransaction Transaction   @relation(fields: [templateTransactionId], references: [id])
-  user                User          @relation(fields: [userId], references: [id])
-  subscription        Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id])
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  category     Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  bankAccount  BankAccount?  @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([nextRunDate])
   @@index([isActive])
+  @@index([categoryId])
+  @@index([bankAccountId])
 }
 
 // ─── Budgets ──────────────────────────────────────────────────────────────────

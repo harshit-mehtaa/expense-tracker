@@ -104,15 +104,15 @@ describe('Transactions page — smoke', () => {
 });
 
 const SUBSCRIPTION_RULE = {
-  id: 'rule-sub', userId: 'u-member', templateTransactionId: 'tmpl-1',
+  id: 'rule-sub', userId: 'u-member',
   frequency: 'MONTHLY', nextRunDate: '2026-09-01T00:00:00.000Z', isActive: true,
   subscriptionId: 'sub-1',
   createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z',
-  templateTransaction: {
-    id: 'tmpl-1', amount: 649, type: 'EXPENSE', description: 'Netflix',
-    categoryId: null, category: null, bankAccountId: null, bankAccount: null,
-    paymentMode: null, tags: [], gstAmount: null,
-  },
+  // The spec is flat on the rule: it is a specification, not a Transaction, so it never
+  // appears in the ledger.
+  amount: 649, type: 'EXPENSE', description: 'Netflix',
+  categoryId: null, category: null, bankAccountId: null, bankAccount: null,
+  paymentMode: null, tags: [], gstAmount: null,
 };
 
 /**

@@ -144,22 +144,21 @@ export default function RecurringRulesPage() {
 
   const applyMutation = useMutation({
     mutationFn: (rule: RecurringRule) => {
-      const t = rule.templateTransaction as RecurringRule['templateTransaction'] & { paymentMode?: string };
       return api.post('/transactions', {
-        description: t.description,
-        amount: Number(t.amount),
-        type: t.type,
+        description: rule.description,
+        amount: Number(rule.amount),
+        type: rule.type,
         date: toDateInputValue(new Date()),
-        categoryId: t.categoryId ?? undefined,
-        bankAccountId: t.bankAccountId ?? undefined,
-        paymentMode: t.paymentMode ?? undefined,
-        tags: t.tags ?? [],
+        categoryId: rule.categoryId ?? undefined,
+        bankAccountId: rule.bankAccountId ?? undefined,
+        paymentMode: rule.paymentMode ?? undefined,
+        tags: rule.tags ?? [],
       }, {
         params: isAdmin ? { targetUserId: rule.userId } : {},
       });
     },
     onSuccess: (_, rule) => {
-      toast({ title: `Applied: ${rule.templateTransaction.description}`, variant: 'success' });
+      toast({ title: `Applied: ${rule.description}`, variant: 'success' });
       qc.invalidateQueries({ queryKey: ['transactions'] });
     },
     onError: (err: any) => {
@@ -187,13 +186,13 @@ export default function RecurringRulesPage() {
 
   const startEdit = (rule: RecurringRule) => {
     setEditingRule(rule);
-    setValue('description', rule.templateTransaction.description);
-    setValue('amount', Number(rule.templateTransaction.amount));
-    setValue('type', rule.templateTransaction.type);
+    setValue('description', rule.description);
+    setValue('amount', Number(rule.amount));
+    setValue('type', rule.type);
     setValue('frequency', rule.frequency);
     setValue('nextRunDate', rule.nextRunDate.slice(0, 10));
-    setValue('categoryId', rule.templateTransaction.categoryId ?? '');
-    setValue('bankAccountId', rule.templateTransaction.bankAccountId ?? '');
+    setValue('categoryId', rule.categoryId ?? '');
+    setValue('bankAccountId', rule.bankAccountId ?? '');
     setShowForm(true);
   };
 
@@ -330,17 +329,17 @@ export default function RecurringRulesPage() {
             <div key={rule.id} className="rounded-xl border border-border bg-card px-4 py-3 flex items-center justify-between gap-4">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm truncate">{rule.templateTransaction.description}</span>
+                  <span className="font-medium text-sm truncate">{rule.description}</span>
                   {!rule.isActive && (
                     <span className="text-xs bg-muted text-muted-foreground rounded px-1.5 py-0.5">Paused</span>
                   )}
                 </div>
                 <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                  <INRDisplay amount={Number(rule.templateTransaction.amount)} short className="inline font-medium text-foreground" />
-                  <span>{rule.templateTransaction.type}</span>
+                  <INRDisplay amount={Number(rule.amount)} short className="inline font-medium text-foreground" />
+                  <span>{rule.type}</span>
                   <span>{FREQUENCY_LABELS[rule.frequency]}</span>
-                  {rule.templateTransaction.category && (
-                    <span className="truncate">{getCategoryPath(rule.templateTransaction.category, categories)}</span>
+                  {rule.category && (
+                    <span className="truncate">{getCategoryPath(rule.category, categories)}</span>
                   )}
                   <span>Next: {formatDate(rule.nextRunDate)}</span>
                 </div>

@@ -2499,38 +2499,13 @@ describe('buildCsv', () => {
 });
 
 /**
- * A recurring rule's template is not an ordinary transaction — it is what the generator
- * copies from. Deleting it stops billing permanently and silently, and for a
- * subscription-owned rule the ownership guard blocks every repair path.
+ * The template delete-guard that used to live here is gone: a recurring rule carries its
+ * own specification now, so there is no template Transaction to protect. The guard was a
+ * workaround for templates being in the ledger at all.
  */
-describe('softDeleteTransaction — recurring templates', () => {
-  it('refuses to delete a subscription template, naming the right screen', async () => {
-    (prisma as any).recurringRule.findFirst.mockResolvedValue({
-      id: 'rule-1', subscriptionId: 'sub-1',
-    });
-
-    await expect(softDeleteTransaction('tx-1', 'u1', 'MEMBER'))
-      .rejects.toThrow(/template for a subscription/i);
-
-    expect(txMock.update).not.toHaveBeenCalled();
-  });
-
-  it('refuses to delete a plain recurring template, naming the right screen', async () => {
-    (prisma as any).recurringRule.findFirst.mockResolvedValue({
-      id: 'rule-1', subscriptionId: null,
-    });
-
-    await expect(softDeleteTransaction('tx-1', 'u1', 'MEMBER'))
-      .rejects.toThrow(/template for a recurring rule/i);
-
-    expect(txMock.update).not.toHaveBeenCalled();
-  });
-
-  it('still deletes an ordinary transaction', async () => {
-    (prisma as any).recurringRule.findFirst.mockResolvedValue(null);
-
+describe('softDeleteTransaction — ordinary transactions', () => {
+  it('deletes an ordinary transaction', async () => {
     await softDeleteTransaction('tx-1', 'u1', 'MEMBER');
-
     expect(txMock.update).toHaveBeenCalled();
   });
 });

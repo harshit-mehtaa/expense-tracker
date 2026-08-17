@@ -6,8 +6,13 @@ import { ownerScopedWhere } from '../utils/resolveTargetUserId';
 import { priceAsOf } from '../utils/subscriptionPricing';
 
 const MAX_CATCH_UP_PER_RULE = 366;
+
+const ruleInclude = {
+  category: { select: { id: true, name: true, color: true, icon: true, parentId: true, parent: { select: { id: true, name: true, icon: true, parentId: true } } } },
+  bankAccount: { select: { bankName: true, accountNumberLast4: true } },
+} as const;
 type DueRecurringRule = Prisma.RecurringRuleGetPayload<{
-  include: { templateTransaction: true; subscription: { include: { prices: true } } };
+  include: { subscription: { include: { prices: true } } };
 }>;
 
 function advanceDate(date: Date, frequency: RecurringFrequency): Date {
@@ -37,53 +42,31 @@ export interface CreateRecurringRuleInput {
 export async function createRecurringRule(userId: string, data: CreateRecurringRuleInput) {
   const nextRunDate = data.nextRunDate ? new Date(data.nextRunDate) : new Date();
 
-  return prisma.$transaction(async (tx) => {
-    const template = await tx.transaction.create({
-      data: {
-        userId,
-        bankAccountId: data.bankAccountId,
-        categoryId: data.categoryId,
-        amount: data.amount,
-        type: data.type as TransactionType,
-        paymentMode: data.paymentMode as PaymentMode | undefined,
-        description: data.description,
-        date: nextRunDate,
-        tags: data.tags ?? [],
-        isRecurring: true,
-        gstAmount: data.gstAmount,
-      },
-    });
-
-    const rule = await tx.recurringRule.create({
-      data: {
-        userId,
-        templateTransactionId: template.id,
-        frequency: data.frequency,
-        nextRunDate,
-        isActive: true,
-      },
-      include: {
-        templateTransaction: {
-          include: { category: { select: { id: true, name: true, color: true, icon: true, parentId: true, parent: { select: { id: true, name: true, icon: true, parentId: true } } } } },
-        },
-      },
-    });
-
-    return rule;
+  // One row. The spec used to be written as a Transaction as well, which put a charge
+  // that never happened into the ledger and every aggregate built on it.
+  return prisma.recurringRule.create({
+    data: {
+      userId,
+      frequency: data.frequency,
+      nextRunDate,
+      isActive: true,
+      amount: data.amount,
+      type: data.type as TransactionType,
+      description: data.description,
+      categoryId: data.categoryId ?? null,
+      bankAccountId: data.bankAccountId ?? null,
+      paymentMode: (data.paymentMode as PaymentMode | undefined) ?? null,
+      tags: data.tags ?? [],
+      gstAmount: data.gstAmount ?? null,
+    },
+    include: ruleInclude,
   });
 }
 
 export async function listRecurringRules(userId: string) {
   return prisma.recurringRule.findMany({
     where: { userId },
-    include: {
-      templateTransaction: {
-        include: {
-          category: { select: { id: true, name: true, color: true, icon: true, parentId: true, parent: { select: { id: true, name: true, icon: true, parentId: true } } } },
-          bankAccount: { select: { bankName: true, accountNumberLast4: true } },
-        },
-      },
-    },
+    include: ruleInclude,
     orderBy: { nextRunDate: 'asc' },
   });
 }
@@ -122,11 +105,7 @@ export async function updateRecurringRule(
       ...(data.nextRunDate !== undefined && { nextRunDate: new Date(data.nextRunDate) }),
       ...(data.isActive !== undefined && { isActive: data.isActive }),
     },
-    include: {
-      templateTransaction: {
-        include: { category: { select: { id: true, name: true, color: true, icon: true, parentId: true, parent: { select: { id: true, name: true, icon: true, parentId: true } } } } },
-      },
-    },
+    include: ruleInclude,
   });
 }
 
@@ -135,15 +114,9 @@ export async function deleteRecurringRule(ruleId: string, requesterId: string, r
   if (!rule) throw AppError.notFound('Recurring rule');
   assertNotSubscriptionOwned(rule);
 
-  await prisma.$transaction(async (tx) => {
-    // Delete rule first (FK constraint: rule references template transaction)
-    await tx.recurringRule.delete({ where: { id: ruleId } });
-    // Soft-delete the template transaction and clear the recurring flag
-    await tx.transaction.update({
-      where: { id: rule.templateTransactionId },
-      data: { deletedAt: new Date(), isRecurring: false },
-    });
-  });
+  // A single row now — there is no ledger-visible template to clean up, and no
+  // transaction wrapper needed to keep the two consistent.
+  await prisma.recurringRule.delete({ where: { id: ruleId } });
 }
 
 function transactionBalanceDelta(type: string, amount: Prisma.Decimal | number): number {
@@ -152,9 +125,6 @@ function transactionBalanceDelta(type: string, amount: Prisma.Decimal | number):
 }
 
 async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<number> {
-  const template = rule.templateTransaction;
-  if (template.deletedAt) return 0;
-
   const subscription = rule.subscription;
   const prices = subscription
     ? subscription.prices.map((p) => ({ amount: Number(p.amount), effectiveFrom: p.effectiveFrom }))
@@ -173,7 +143,7 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
     //
     // Resolution is a pure lookup over the already-loaded history, so nothing is added
     // inside the atomic block below.
-    let amount = template.amount;
+    let amount = rule.amount;
     if (subscription) {
       const resolved = priceAsOf(prices, dueDate);
       // Stop rather than guess. A subscription with no price covering this date is bad
@@ -206,17 +176,17 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
 
       await tx.transaction.create({
         data: {
-          userId: template.userId,
-          bankAccountId: template.bankAccountId,
-          categoryId: template.categoryId,
+          userId: rule.userId,
+          bankAccountId: rule.bankAccountId,
+          categoryId: rule.categoryId,
           amount,
-          type: template.type,
-          paymentMode: template.paymentMode,
-          description: template.description,
+          type: rule.type,
+          paymentMode: rule.paymentMode,
+          description: rule.description,
           date: dueDate,
-          tags: template.tags,
+          tags: rule.tags,
           isRecurring: false,
-          gstAmount: template.gstAmount,
+          gstAmount: rule.gstAmount,
           subscriptionId: rule.subscriptionId,
         },
       });
@@ -233,10 +203,10 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
         subscription.status = 'ACTIVE';
       }
 
-      if (template.bankAccountId) {
+      if (rule.bankAccountId) {
         await tx.bankAccount.update({
-          where: { id: template.bankAccountId },
-          data: { currentBalance: { increment: transactionBalanceDelta(template.type, amount) } },
+          where: { id: rule.bankAccountId },
+          data: { currentBalance: { increment: transactionBalanceDelta(rule.type, amount) } },
         });
       }
 
@@ -262,7 +232,7 @@ export async function generateDueRecurringTransactions(userId: string): Promise<
   // Find all potentially due rules (pre-filter; final guard is in the atomic update below)
   const dueRules = await prisma.recurringRule.findMany({
     where: { userId, isActive: true, nextRunDate: { lte: now } },
-    include: { templateTransaction: true, subscription: { include: { prices: true } } },
+    include: { subscription: { include: { prices: true } } },
   });
 
   let generated = 0;

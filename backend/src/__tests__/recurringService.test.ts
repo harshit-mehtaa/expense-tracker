@@ -75,21 +75,17 @@ const MOCK_RULE = {
   frequency: 'MONTHLY' as const,
   nextRunDate: new Date('2024-03-01'),
   isActive: true,
-  templateTransactionId: 'tmpl-1',
-  templateTransaction: {
-    id: 'tmpl-1',
-    userId: 'u1',
-    amount: 5000,
-    type: 'EXPENSE',
-    description: 'Rent',
-    bankAccountId: 'acct-1',
-    categoryId: 'cat-1',
-    paymentMode: 'BANK_TRANSFER',
-    date: new Date('2024-03-01'),
-    tags: [],
-    gstAmount: null,
-    deletedAt: null,
-  },
+  subscriptionId: null,
+  // The specification lives on the rule itself — it is not a Transaction, so it never
+  // appears in the ledger or in any aggregate built on it.
+  amount: 5000,
+  type: 'EXPENSE',
+  description: 'Rent',
+  bankAccountId: 'acct-1',
+  categoryId: 'cat-1',
+  paymentMode: 'BANK_TRANSFER',
+  tags: [],
+  gstAmount: null,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -115,10 +111,10 @@ describe('listRecurringRules', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('createRecurringRule', () => {
-  it('creates template transaction and rule inside $transaction', async () => {
-    const template = { id: 'tmpl-new', userId: 'u1' };
-    const rule = { id: 'rule-new', userId: 'u1', templateTransactionId: 'tmpl-new' };
-    txMock.create.mockResolvedValue(template);
+  it('creates the rule as a single row, with no ledger-visible template', async () => {
+    // The spec used to be written as a Transaction as well, putting a charge that never
+    // happened into the ledger and every aggregate built on it.
+    const rule = { id: 'rule-new', userId: 'u1' };
     ruleMock.create.mockResolvedValue(rule);
 
     const result = await createRecurringRule('u1', {
@@ -129,12 +125,12 @@ describe('createRecurringRule', () => {
       nextRunDate: '2024-04-01',
     });
 
-    expect((prisma as any).$transaction).toHaveBeenCalled();
-    expect(txMock.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ userId: 'u1', amount: 5000, isRecurring: true }),
-    }));
+    expect(txMock.create).not.toHaveBeenCalled();
     expect(ruleMock.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ userId: 'u1', frequency: 'MONTHLY' }),
+      data: expect.objectContaining({
+        userId: 'u1', frequency: 'MONTHLY', amount: 5000,
+        type: 'EXPENSE', description: 'Rent',
+      }),
     }));
     expect(result).toBe(rule);
   });
@@ -150,9 +146,10 @@ describe('createRecurringRule', () => {
       frequency: 'MONTHLY',
     });
 
-    // System time is pinned to 2024-01-01 via beforeAll → exact match
-    const createCall = txMock.create.mock.calls[0][0];
-    expect(createCall.data.date).toEqual(new Date('2024-01-01'));
+    // System time is pinned to 2024-01-01 via beforeAll → exact match. The date lives on
+    // the rule now; there is no template transaction to carry it.
+    const createCall = ruleMock.create.mock.calls[0][0];
+    expect(createCall.data.nextRunDate).toEqual(new Date('2024-01-01'));
   });
 });
 
@@ -208,23 +205,15 @@ describe('deleteRecurringRule', () => {
     await expect(deleteRecurringRule('rule-x', 'u1')).rejects.toThrow(/not found/i);
   });
 
-  it('deletes rule then soft-deletes template inside $transaction', async () => {
+  it('deletes the rule outright — there is no template to clean up', async () => {
     ruleMock.findFirst.mockResolvedValue(MOCK_RULE);
     ruleMock.delete.mockResolvedValue(MOCK_RULE);
-    txMock.update.mockResolvedValue({});
 
     await deleteRecurringRule('rule-1', 'u1');
 
-    expect((prisma as any).$transaction).toHaveBeenCalled();
-    // Rule deleted first (FK constraint: rule references template)
     expect(ruleMock.delete).toHaveBeenCalledWith({ where: { id: 'rule-1' } });
-    // Template soft-deleted after
-    expect(txMock.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'tmpl-1' },
-        data: expect.objectContaining({ isRecurring: false }),
-      }),
-    );
+    // No second write, and so no transaction needed to keep two rows consistent.
+    expect(txMock.update).not.toHaveBeenCalled();
   });
 });
 
@@ -260,11 +249,11 @@ describe('generateDueRecurringTransactions', () => {
     expect(txMock.create).not.toHaveBeenCalled();
   });
 
-  it('INCOME template credits the linked account (positive balance delta)', async () => {
+  it('INCOME spec credits the linked account (positive balance delta)', async () => {
     vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
     const incomeRule = {
       ...MOCK_RULE,
-      templateTransaction: { ...MOCK_RULE.templateTransaction, type: 'INCOME', amount: 5000 },
+      type: 'INCOME', amount: 5000,
     };
     ruleMock.findMany.mockResolvedValue([incomeRule]);
     ruleMock.updateMany.mockResolvedValue({ count: 1 });
@@ -278,7 +267,7 @@ describe('generateDueRecurringTransactions', () => {
     });
   });
 
-  it('EXPENSE template debits the linked account (negative balance delta)', async () => {
+  it('EXPENSE spec debits the linked account (negative balance delta)', async () => {
     vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
     ruleMock.findMany.mockResolvedValue([MOCK_RULE]); // type: 'EXPENSE'
     ruleMock.updateMany.mockResolvedValue({ count: 1 });
@@ -466,7 +455,8 @@ describe('generation for a subscription-owned rule', () => {
     id: 'rule-sub',
     subscriptionId: 'sub-1',
     nextRunDate: new Date('2024-01-01'),
-    templateTransaction: { ...MOCK_RULE.templateTransaction, amount: 649, description: 'Netflix' },
+    amount: 649,
+    description: 'Netflix',
     subscription: {
       id: 'sub-1',
       status: 'ACTIVE',
@@ -507,7 +497,7 @@ describe('generation for a subscription-owned rule', () => {
     }
   });
 
-  it('adjusts the account balance by the resolved price, not the template amount', async () => {
+  it('adjusts the account balance by the resolved price, not the stored amount', async () => {
     ruleMock.findMany.mockResolvedValue([SUBSCRIPTION_RULE]);
 
     await generateDueRecurringTransactions('u1');
@@ -573,7 +563,7 @@ describe('generation for a subscription-owned rule', () => {
     );
   });
 
-  it('leaves a plain recurring rule on its template amount', async () => {
+  it('leaves a plain recurring rule on its own amount', async () => {
     // The regression guard for every non-subscription rule in the system.
     ruleMock.findMany.mockResolvedValue([{ ...MOCK_RULE, subscriptionId: null, subscription: null }]);
 

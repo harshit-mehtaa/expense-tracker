@@ -1106,25 +1106,6 @@ export async function softDeleteTransaction(
       throw AppError.badRequest('Remove refund links before deleting the original expense');
     }
 
-    // A recurring rule's TEMPLATE is not an ordinary transaction — it is the record the
-    // generator copies from. `generateRuleCatchUp` returns 0 the moment the template has
-    // a `deletedAt`, so deleting it stops billing permanently and SILENTLY: the
-    // subscription still shows as ACTIVE with a next renewal date, and for a
-    // subscription-owned rule the ownership guard blocks every repair path through the
-    // recurring API. The template looks exactly like a duplicate of an imported bank
-    // line, which is what makes this easy to do by accident.
-    const owningRule = await ptx.recurringRule.findFirst({
-      where: { templateTransactionId: transactionId },
-      select: { id: true, subscriptionId: true },
-    });
-    if (owningRule) {
-      throw AppError.conflict(
-        owningRule.subscriptionId
-          ? 'This is the template for a subscription. Cancel or delete the subscription instead.'
-          : 'This is the template for a recurring rule. Delete the recurring rule instead.',
-      );
-    }
-
     const deleted = await ptx.transaction.update({
       where: { id: transactionId },
       data: { deletedAt: new Date() },
