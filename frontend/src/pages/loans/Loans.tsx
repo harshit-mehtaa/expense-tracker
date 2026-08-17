@@ -12,7 +12,7 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { loansApi, type Loan, type AmortizationRow } from '@/api/loans';
 import { assetsApi, ASSET_TYPES, type AssetType } from '@/api/assets';
 import { formatINRShort } from '@/lib/indianFormat';
-import { formatDate, formatNextOccurrence } from '@/lib/dateFormat';
+import { formatDate, formatNextOccurrence, toDateInputValue, addMonths } from '@/lib/dateFormat';
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, CustomTooltip } from '@/lib/chartUtils';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { useAuth } from '@/contexts/AuthContext';
@@ -56,7 +56,7 @@ const ownersSchema = z.array(ownerSchema).min(1, 'Add at least one owner').super
   }
 });
 
-const loanSchema = z.object({
+export const loanSchema = z.object({
   lenderName: z.string().min(1, 'Required'),
   loanAccountNumber: z.string().optional(),
   loanType: z.string(),
@@ -64,11 +64,15 @@ const loanSchema = z.object({
   outstandingBalance: z.coerce.number().min(0),
   interestRate: z.coerce.number().positive(),
   emiAmount: z.coerce.number().positive(),
+  // Derived from firstEmiDate rather than typed. Still validated: it is what actually
+  // gets stored as the recurring day-of-month.
   emiDate: z.coerce.number().int().min(1).max(28),
   tenureMonths: z.coerce.number().int().positive(),
-  disbursementDate: z.string(),
+  disbursementDate: z.string().min(1, 'Required'),
   endDate: z.string(),
-  firstEmiDate: z.string().optional(),
+  // Now a primary input. Every loan has a first EMI date, and making it explicit is what
+  // lets the form derive emiDate, the end date and the pre-EMI amount.
+  firstEmiDate: z.string().min(1, 'Required'),
   // NOT z.coerce.number(): that turns a cleared input's '' into 0, so editing a loan
   // with no pre-EMI wrote 0 over NULL and the dashboard then alerted "Pre-EMI ₹0 due".
   // Empty must stay empty.
@@ -82,6 +86,19 @@ const loanSchema = z.object({
   assetId: z.string().optional(),
   owners: ownersSchema,
 }).superRefine((val, ctx) => {
+  // emiDate is stored as a day-of-month capped at 28, because the 29th-31st do not exist
+  // in every month. Since it is now derived from firstEmiDate, that cap has to be
+  // explained at the field the user actually chose.
+  if (val.firstEmiDate) {
+    const day = new Date(val.firstEmiDate).getDate();
+    if (day > 28) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['firstEmiDate'],
+        message: `Pick a date on or before the 28th — not every month has a ${day}th, so the EMI could not recur.`,
+      });
+    }
+  }
   // Mirrors the backend rule so the user sees it inline rather than as a 422.
   if (isSecuredLoanType(val.loanType) && !val.assetId) {
     ctx.addIssue({
@@ -525,6 +542,22 @@ export default function LoansPage() {
     const disbursementDate = watch('disbursementDate');
     const firstEmiDate = watch('firstEmiDate');
 
+    // emiDate is the recurring day-of-month, and the first EMI is by definition on that
+    // day — so it is read off firstEmiDate rather than asked for a second time. Days past
+    // the 28th are rejected by the schema, so nothing is clamped or silently changed here.
+    if (firstEmiDate) {
+      const day = new Date(firstEmiDate).getDate();
+      if (day >= 1 && day <= 28) {
+        setValue('emiDate', day, { shouldValidate: true });
+      } else {
+        // Past the 28th this value is never saved — the schema's superRefine blocks the
+        // submit and explains why on the First EMI Date field. It still has to be a legal
+        // number, because zod skips refinements when the BASE parse fails: leaving emiDate
+        // unset would fail .max(28) first and swallow the explanation entirely.
+        setValue('emiDate', 28, { shouldValidate: false });
+      }
+    }
+
     try {
       const derived = await loansApi.derive({
         principalAmount,
@@ -592,7 +625,15 @@ export default function LoansPage() {
       tenureMonths: loan.tenureMonths,
       disbursementDate: loan.disbursementDate.slice(0, 10),
       endDate: loan.endDate.slice(0, 10),
-      firstEmiDate: loan.firstEmiDate ? loan.firstEmiDate.slice(0, 10) : '',
+      // Every loan predating the firstEmiDate column has NULL here, and the field is now
+      // required — so editing an old loan would be blocked by a field the user never had
+      // the chance to set. A null firstEmiDate already MEANS "one month after
+      // disbursement": that is exactly the branch deriveEndDate takes when it is absent.
+      // Filling it in makes the implicit value explicit and visible, rather than
+      // demanding the user reconstruct it.
+      firstEmiDate: loan.firstEmiDate
+        ? loan.firstEmiDate.slice(0, 10)
+        : toDateInputValue(addMonths(loan.disbursementDate, 1)),
       preEmiAmount: loan.preEmiAmount ?? undefined,
       isTaxDeductible: loan.isTaxDeductible,
       section24bEligible: loan.section24bEligible,
@@ -706,152 +747,181 @@ export default function LoansPage() {
           <div className="bg-background rounded-lg border shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
             <h2 className="text-xl font-semibold mb-4">{editing ? 'Edit Loan' : 'Add Loan'}</h2>
             <form onSubmit={handleSubmit((data) => editing ? updateMutation.mutate({ id: editing.id, data }) : createMutation.mutate(data))} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <Label required htmlFor="loan-loanType">Loan Type</Label>
-                  <select {...register('loanType')} id="loan-loanType" className="w-full rounded-md border bg-background px-3 py-2 text-sm">
-                    {Object.entries(LOAN_TYPES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <Label required htmlFor="loan-lenderName">Lender Name</Label>
-                  <Input {...register('lenderName')} id="loan-lenderName" placeholder="HDFC Bank, SBI…" />
-                  {errors.lenderName && <p className="text-xs text-destructive">{errors.lenderName.message}</p>}
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="loan-loanAccountNumber">Loan Account Number (optional)</Label>
-                  <Input {...register('loanAccountNumber')} id="loan-loanAccountNumber" placeholder="Optional" />
-                </div>
-                <div className="space-y-1">
-                  <Label required htmlFor="loan-principalAmount">Principal Amount (₹)</Label>
-                  <Input {...register('principalAmount', { onBlur: autoFill })} id="loan-principalAmount" type="number" />
-                </div>
-                <div className="space-y-1">
-                  <Label required htmlFor="loan-outstandingBalance">Outstanding Balance (₹)</Label>
-                  <Input {...register('outstandingBalance')} id="loan-outstandingBalance" type="number" />
-                  {!editing && (
-                    <p className="text-xs text-muted-foreground">Defaults to the principal — edit if the loan is already part-repaid.</p>
-                  )}
-                </div>
-                <div className="space-y-1">
-                  <Label required htmlFor="loan-interestRate">Interest Rate (% p.a.)</Label>
-                  <Input {...register('interestRate', { onBlur: autoFill })} id="loan-interestRate" type="number" step="0.01" />
-                </div>
-                <div className="space-y-1">
-                  <Label required htmlFor="loan-emiAmount">EMI Amount (₹)</Label>
-                  <Input {...register('emiAmount')} id="loan-emiAmount" type="number" />
-                </div>
-                <div className="space-y-1">
-                  <Label required htmlFor="loan-emiDate">EMI Date (1-28)</Label>
-                  <Input {...register('emiDate')} id="loan-emiDate" type="number" min="1" max="28" />
-                </div>
-                <div className="space-y-1">
-                  <Label required htmlFor="loan-tenureMonths">Tenure (months)</Label>
-                  <Input {...register('tenureMonths', { onBlur: autoFill })} id="loan-tenureMonths" type="number" />
-                </div>
-                <div className="space-y-1">
-                  <Label required htmlFor="loan-disbursementDate">Disbursement Date</Label>
-                  <Input {...register('disbursementDate', { onBlur: autoFill })} id="loan-disbursementDate" type="date" />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="loan-firstEmiDate">First EMI Date (optional)</Label>
-                  <Input {...register('firstEmiDate', { onBlur: autoFill })} id="loan-firstEmiDate" type="date" />
-                  <p className="text-xs text-muted-foreground">Leave blank if full EMIs start immediately.</p>
-                </div>
-                <div className="space-y-1">
-                  <Label required htmlFor="loan-endDate">End Date</Label>
-                  <Input {...register('endDate')} id="loan-endDate" type="date" />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="loan-preEmiAmount">Pre-EMI Amount (₹, optional)</Label>
-                  <Input {...register('preEmiAmount')} id="loan-preEmiAmount" type="number" step="0.01" />
-                  <p className="text-xs text-muted-foreground">Interest accruing between disbursement and the first EMI.</p>
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="loan-prepaymentChargesAmount">Prepayment Charges (₹, optional)</Label>
-                  <Input {...register('prepaymentChargesAmount')} id="loan-prepaymentChargesAmount" type="number" step="0.01" />
-                  <p className="text-xs text-muted-foreground">A flat fee, not a percentage.</p>
-                </div>
-                <div className="space-y-1">
-                  <Label required={isSecuredLoanType(watchedLoanType)} htmlFor="loan-assetId">Secured Against</Label>
-                  <select {...register('assetId')} id="loan-assetId" className="w-full rounded-md border bg-background px-3 py-2 text-sm">
-                    <option value="">
-                      {isSecuredLoanType(watchedLoanType) ? 'Select an asset…' : 'Not secured'}
-                    </option>
-                    {assetOptions.map((a) => (
-                      <option key={a.id} value={a.id}>{a.name} ({ASSET_TYPES[a.assetType as AssetType] ?? a.assetType})</option>
-                    ))}
-                  </select>
-                  {errors.assetId && <p className="text-xs text-destructive">{errors.assetId.message}</p>}
+              <div className="pt-2">
+                <p className="text-sm font-semibold">Loan basics</p>
+                <p className="text-xs text-muted-foreground mb-3">Who the loan is with, and what secures it.</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <Label required htmlFor="loan-loanType">Loan Type</Label>
+                    <select {...register('loanType')} id="loan-loanType" className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                      {Object.entries(LOAN_TYPES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label required htmlFor="loan-lenderName">Lender Name</Label>
+                    <Input {...register('lenderName')} id="loan-lenderName" placeholder="HDFC Bank, SBI…" />
+                    {errors.lenderName && <p className="text-xs text-destructive">{errors.lenderName.message}</p>}
+                  </div>
+                  <div className="space-y-1">
+                    <Label required={isSecuredLoanType(watchedLoanType)} htmlFor="loan-assetId">Secured Against</Label>
+                    <select {...register('assetId')} id="loan-assetId" className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                      <option value="">
+                        {isSecuredLoanType(watchedLoanType) ? 'Select an asset…' : 'Not secured'}
+                      </option>
+                      {assetOptions.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name} ({ASSET_TYPES[a.assetType as AssetType] ?? a.assetType})</option>
+                      ))}
+                    </select>
+                    {errors.assetId && <p className="text-xs text-destructive">{errors.assetId.message}</p>}
 
-                  {!showNewAsset && (
-                    <button
-                      type="button"
-                      className="text-xs text-primary underline"
-                      onClick={() => {
-                        setNewAsset((prev) => ({ ...prev, assetType: defaultAssetTypeFor(watchedLoanType) }));
-                        setShowNewAsset(true);
-                      }}
-                    >
-                      + Add a new asset
-                    </button>
-                  )}
+                    {!showNewAsset && (
+                      <button
+                        type="button"
+                        className="text-xs text-primary underline"
+                        onClick={() => {
+                          setNewAsset((prev) => ({ ...prev, assetType: defaultAssetTypeFor(watchedLoanType) }));
+                          setShowNewAsset(true);
+                        }}
+                      >
+                        + Add a new asset
+                      </button>
+                    )}
 
-                  {showNewAsset && (
-                    <div className="rounded-md border p-3 space-y-2">
-                      <div className="space-y-1">
-                        <Label htmlFor="new-asset-name" required>Asset name</Label>
-                        <Input
-                          id="new-asset-name"
-                          value={newAsset.name}
-                          placeholder="Honda City, Flat 3B…"
-                          onChange={(e) => setNewAsset((p) => ({ ...p, name: e.target.value }))}
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
+                    {showNewAsset && (
+                      <div className="rounded-md border p-3 space-y-2">
                         <div className="space-y-1">
-                          <Label htmlFor="new-asset-type">Type</Label>
-                          <select
-                            id="new-asset-type"
-                            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                            value={newAsset.assetType}
-                            onChange={(e) => setNewAsset((p) => ({ ...p, assetType: e.target.value as AssetType }))}
-                          >
-                            {Object.entries(ASSET_TYPES).map(([k, label]) => (
-                              <option key={k} value={k}>{label}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="space-y-1">
-                          <Label htmlFor="new-asset-value">Current value (₹)</Label>
+                          <Label htmlFor="new-asset-name" required>Asset name</Label>
                           <Input
-                            id="new-asset-value"
-                            type="number"
-                            value={newAsset.value}
-                            onChange={(e) => setNewAsset((p) => ({ ...p, value: e.target.value }))}
+                            id="new-asset-name"
+                            value={newAsset.name}
+                            placeholder="Honda City, Flat 3B…"
+                            onChange={(e) => setNewAsset((p) => ({ ...p, name: e.target.value }))}
                           />
                         </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <Label htmlFor="new-asset-type">Type</Label>
+                            <select
+                              id="new-asset-type"
+                              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                              value={newAsset.assetType}
+                              onChange={(e) => setNewAsset((p) => ({ ...p, assetType: e.target.value as AssetType }))}
+                            >
+                              {Object.entries(ASSET_TYPES).map(([k, label]) => (
+                                <option key={k} value={k}>{label}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <Label htmlFor="new-asset-value">Current value (₹)</Label>
+                            <Input
+                              id="new-asset-value"
+                              type="number"
+                              value={newAsset.value}
+                              onChange={(e) => setNewAsset((p) => ({ ...p, value: e.target.value }))}
+                            />
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={!newAsset.name.trim() || createAssetMutation.isPending}
+                            onClick={() => createAssetMutation.mutate()}
+                          >
+                            {createAssetMutation.isPending ? 'Saving…' : 'Save asset'}
+                          </Button>
+                          <Button type="button" size="sm" variant="outline" onClick={() => setShowNewAsset(false)}>
+                            Cancel
+                          </Button>
+                        </div>
+                        {createAssetMutation.isError && (
+                          <p className="text-xs text-destructive">Could not save the asset. Please try again.</p>
+                        )}
                       </div>
-                      <div className="flex gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          disabled={!newAsset.name.trim() || createAssetMutation.isPending}
-                          onClick={() => createAssetMutation.mutate()}
-                        >
-                          {createAssetMutation.isPending ? 'Saving…' : 'Save asset'}
-                        </Button>
-                        <Button type="button" size="sm" variant="outline" onClick={() => setShowNewAsset(false)}>
-                          Cancel
-                        </Button>
-                      </div>
-                      {createAssetMutation.isError && (
-                        <p className="text-xs text-destructive">Could not save the asset. Please try again.</p>
-                      )}
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
+
+              <div className="pt-2">
+                <p className="text-sm font-semibold">Loan terms</p>
+                <p className="text-xs text-muted-foreground mb-3">These five drive everything below — fill them in and the rest is worked out for you.</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <Label required htmlFor="loan-principalAmount">Principal Amount (₹)</Label>
+                    <Input {...register('principalAmount', { onBlur: autoFill })} id="loan-principalAmount" type="number" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label required htmlFor="loan-interestRate">Interest Rate (% p.a.)</Label>
+                    <Input {...register('interestRate', { onBlur: autoFill })} id="loan-interestRate" type="number" step="0.01" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label required htmlFor="loan-tenureMonths">Tenure (months)</Label>
+                    <Input {...register('tenureMonths', { onBlur: autoFill })} id="loan-tenureMonths" type="number" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label required htmlFor="loan-disbursementDate">Disbursement Date</Label>
+                    <Input {...register('disbursementDate', { onBlur: autoFill })} id="loan-disbursementDate" type="date" />
+                  </div>
+                    <div className="space-y-1">
+                      <Label required htmlFor="loan-firstEmiDate">First EMI Date</Label>
+                      <Input {...register('firstEmiDate', { onBlur: autoFill })} id="loan-firstEmiDate" type="date" />
+                      {/* Without this the 1-28 rule rejects the form with nothing on screen
+                          explaining why — the user would just find Save doing nothing. */}
+                      {errors.firstEmiDate && <p className="text-xs text-destructive">{errors.firstEmiDate.message}</p>}
+                      <p className="text-xs text-muted-foreground">Sets the day EMIs recur on. The gap from disbursement is the pre-EMI period.</p>
+                    </div>
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <p className="text-sm font-semibold">Calculated</p>
+                <p className="text-xs text-muted-foreground mb-3">Worked out from the terms above. Adjust any of them if your lender's figures differ — a real EMI is often a rupee or two off the textbook amount, and the outstanding balance will be lower than the principal on a loan you have already been paying.</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <Label required htmlFor="loan-emiAmount">EMI Amount (₹)</Label>
+                    <Input {...register('emiAmount')} id="loan-emiAmount" type="number" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label required htmlFor="loan-emiDate">EMI Date (1-28)</Label>
+                    <Input {...register('emiDate')} id="loan-emiDate" type="number" min="1" max="28" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label required htmlFor="loan-endDate">End Date</Label>
+                    <Input {...register('endDate')} id="loan-endDate" type="date" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label required htmlFor="loan-outstandingBalance">Outstanding Balance (₹)</Label>
+                    <Input {...register('outstandingBalance')} id="loan-outstandingBalance" type="number" />
+                    {!editing && (
+                      <p className="text-xs text-muted-foreground">Defaults to the principal — edit if the loan is already part-repaid.</p>
+                    )}
+                  </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="loan-preEmiAmount">Pre-EMI Amount (₹, optional)</Label>
+                      <Input {...register('preEmiAmount')} id="loan-preEmiAmount" type="number" step="0.01" />
+                      <p className="text-xs text-muted-foreground">Interest accruing between disbursement and the first EMI.</p>
+                    </div>
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <p className="text-sm font-semibold">Optional details</p>
+                <div className="mb-3" />
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <Label htmlFor="loan-loanAccountNumber">Loan Account Number (optional)</Label>
+                      <Input {...register('loanAccountNumber')} id="loan-loanAccountNumber" placeholder="Optional" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="loan-prepaymentChargesAmount">Prepayment Charges (₹, optional)</Label>
+                      <Input {...register('prepaymentChargesAmount')} id="loan-prepaymentChargesAmount" type="number" step="0.01" />
+                      <p className="text-xs text-muted-foreground">A flat fee, not a percentage.</p>
+                    </div>
+                </div>
+              </div>
+
 
               {/* Owners — mirrors the RealEstate co-ownership editor. */}
               <div className="space-y-2 border-t pt-4">

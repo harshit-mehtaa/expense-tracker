@@ -93,6 +93,24 @@ export function formatNextOccurrence(
   return d ? formatDate(d) : '—';
 }
 
+/**
+ * Add whole months, clamping the day to the target month's length.
+ *
+ * `Date.setMonth` overflows instead: 31 January + 1 month becomes 3 March, silently
+ * skipping February. Mirrors `backend/src/utils/loanMath.ts addMonths`.
+ */
+export function addMonths(value: Date | string | number, months: number): Date | null {
+  const d = toDate(value);
+  if (!d) return null;
+  const day = d.getDate();
+  const result = new Date(d.getTime());
+  result.setDate(1);
+  result.setMonth(result.getMonth() + months);
+  const daysInTarget = new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate();
+  result.setDate(Math.min(day, daysInTarget));
+  return result;
+}
+
 /** `<input type="date">` wants yyyy-mm-dd, and it must be LOCAL — `toISOString()` is UTC,
  *  so between 00:00 and 05:29 IST it yields yesterday. On a field that drives billing,
  *  yesterday means "charge now". */

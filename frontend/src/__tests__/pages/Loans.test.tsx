@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import LoansPage from '@/pages/loans/Loans';
+import LoansPage, { loanSchema } from '@/pages/loans/Loans';
 import { renderPage, failOnConsoleError } from '../support/renderPage';
 import { url } from '../support/handlers';
 import { MONEY_FORMATTED, MEMBER_USER } from '../support/fixtures';
@@ -453,7 +453,7 @@ describe('Loans — pre-EMI', () => {
 // Invalid Date and an FK matching no row.
 
 describe('Loans page — submitted payload', () => {
-  it('a legacy loan with every optional field empty can be saved', async () => {
+  it('a legacy loan with no stored first-EMI date is still editable', async () => {
     const user = userEvent.setup();
     let body: any = null;
 
@@ -480,10 +480,20 @@ describe('Loans page — submitted payload', () => {
 
     await waitFor(() => expect(body).not.toBeNull());
 
-    // The exact shapes that used to 500. A cleared field must go out as null, never as
-    // an empty string the backend would hand to `new Date()` or use as a foreign key.
-    expect(body.firstEmiDate).toBeNull();
     expect(body.emiAmount).toBe(46000);
+
+    // firstEmiDate is a required field now, and every loan predating the column has NULL.
+    // Rather than blocking the edit, the form makes the implicit value explicit: a null
+    // firstEmiDate already means "one month after disbursement", which is the branch
+    // deriveEndDate takes when it is absent. LOAN.disbursementDate is 2023-01-01.
+    expect(body.firstEmiDate).toBe('2023-02-01');
+
+    // The empty-string protection this test was written for still holds. LOAN has no
+    // pre-EMI, and that must go out as null/absent rather than '' — which the backend
+    // would coerce to 0, or 0 itself, which the dashboard reads back as "₹0 due".
+    expect(body.preEmiAmount ?? null).toBeNull();
+    // ...while a populated optional field is passed through untouched.
+    expect(body.loanAccountNumber).toBe('1234567890');
   });
 
   it('clearing the pre-EMI field does not write a zero over it', async () => {
@@ -542,5 +552,70 @@ describe('Loans page — dates render as dd/mm/yyyy', () => {
 
     expect(await screen.findByText(/^Next: \d{2}\/\d{2}\/\d{4}$/)).toBeInTheDocument();
     expect(screen.queryByText(/on 5th/)).not.toBeInTheDocument();
+  });
+});
+
+// ─── The five terms drive the rest ───────────────────────────────────────────
+
+describe('Loans page — derived fields', () => {
+  it('reads the recurring EMI day off the first-EMI date instead of asking twice', async () => {
+    const user = userEvent.setup();
+    renderPage(<LoansPage />, { route: '/loans', handlers: loanHandlers(), user: MEMBER_USER });
+
+    await screen.findByText('HDFC Home Loan');
+    await user.click(await screen.findByRole('button', { name: /add loan/i }));
+    await screen.findByRole('heading', { name: /^add loan$/i });
+
+    // The five terms are the only numbers typed; emiDate is not among them.
+    await user.type(screen.getByLabelText(/Principal Amount/i), '5000000');
+    await user.type(screen.getByLabelText(/Interest Rate/i), '8.5');
+    await user.type(screen.getByLabelText(/Tenure/i), '240');
+    await user.type(screen.getByLabelText(/Disbursement Date/i), '2026-01-15');
+    await user.type(screen.getByLabelText(/First EMI Date/i), '2026-02-12');
+    await user.tab();
+
+    await waitFor(() => expect(screen.getByLabelText(/^EMI Date/i)).toHaveValue(12));
+  });
+});
+
+/**
+ * The 1-28 rule tested against the schema directly rather than through the DOM.
+ *
+ * It is a validation rule, not a rendering concern, and asserting it here means it cannot
+ * be masked by form plumbing — react-hook-form's submit path swallowed it entirely in an
+ * earlier version of this test while the rule itself was working correctly.
+ */
+describe('loanSchema — first EMI date must be a day that exists every month', () => {
+  const base = {
+    lenderName: 'ICICI', loanType: 'PERSONAL',
+    principalAmount: 100000, outstandingBalance: 100000,
+    interestRate: 9, emiAmount: 8745, emiDate: 12, tenureMonths: 12,
+    disbursementDate: '2026-01-15', endDate: '2027-01-15',
+    owners: [{ userId: 'u-member', sharePercent: 100 }],
+  };
+
+  it.each([29, 30, 31])('rejects the %ith, naming the day', (day) => {
+    const result = loanSchema.safeParse({
+      ...base, firstEmiDate: `2026-03-${day}`, emiDate: 28,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.path[0] === 'firstEmiDate')!;
+      expect(issue.message).toMatch(/on or before the 28th/i);
+      expect(issue.message).toContain(String(day));
+    }
+  });
+
+  it('accepts the 28th, the last day that exists in every month', () => {
+    const result = loanSchema.safeParse({
+      ...base, firstEmiDate: '2026-03-28', emiDate: 28,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('requires a first EMI date at all — it is what derives emiDate', () => {
+    const result = loanSchema.safeParse({ ...base, firstEmiDate: '' });
+    expect(result.success).toBe(false);
   });
 });
