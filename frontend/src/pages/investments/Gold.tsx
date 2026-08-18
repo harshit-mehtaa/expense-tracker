@@ -75,6 +75,9 @@ export default function GoldPage() {
       qc.invalidateQueries({ queryKey: ['report-networth'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       qc.invalidateQueries({ queryKey: ['net-worth-history'] });
+      // recordGoldHoldingSale mirrors soldAt onto a linked Asset too (if this holding
+      // was ever manually linked as loan collateral) — must stop looking available.
+      qc.invalidateQueries({ queryKey: ['assets'] });
       setSellingHolding(null);
       setSellPrice('');
       toast({ title: 'Sale recorded', variant: 'success' });

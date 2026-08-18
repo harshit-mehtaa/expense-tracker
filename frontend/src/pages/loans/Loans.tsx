@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { loansApi, type Loan, type AmortizationRow, type LoanPrepayment } from '@/api/loans';
-import { assetsApi, ASSET_TYPES, type AssetType } from '@/api/assets';
+import { assetsApi, ASSET_TYPES, VEHICLE_TYPES, type AssetType } from '@/api/assets';
 import { investmentsApi } from '@/api/investments';
 import { formatINRShort } from '@/lib/indianFormat';
 import { formatDate, formatNextOccurrence, toDateInputValue, addMonths } from '@/lib/dateFormat';
@@ -659,27 +659,26 @@ export default function LoansPage() {
     queryFn: () => assetsApi.getAll(viewUserId),
   });
 
-  // Secured loans require an asset, and there is no Assets page yet — so without an
-  // inline way to create one, a user with no matching asset simply cannot create the
-  // loan. Defaults the new asset's type from the loan type, since that is almost always
-  // what they want (a car loan is secured against a vehicle).
+  // Secured loans require an asset. A property already gets its collateral Asset
+  // auto-created the moment it's added on the RealEstate page (createRealEstate), so
+  // this inline creator only needs to cover VEHICLE/GOLD/OTHER — the case where nothing
+  // detailed exists yet. Defaults the new asset's type from the loan type, since that is
+  // almost always what they want (a car loan is secured against a vehicle).
   const [showNewAsset, setShowNewAsset] = useState(false);
-  const [newAsset, setNewAsset] = useState({ name: '', value: '', assetType: 'OTHER' as AssetType });
+  const [newAsset, setNewAsset] = useState({
+    name: '', value: '', assetType: 'OTHER' as AssetType, purchaseDate: '', vehicleType: '',
+  });
   /**
-   * The detailed record this asset stands for, when one already exists.
+   * The detailed gold holding this asset stands for, when one already exists.
    *
-   * Without it the asset counts toward net worth in its own right — and if the same flat
-   * or gold is also tracked as a property or a holding, it is counted twice. The link is
-   * what tells net worth to defer to the detailed record.
+   * Without it the asset counts toward net worth in its own right — and if the same gold
+   * is also tracked as a holding, it is counted twice. The link is what tells net worth
+   * to defer to the detailed record. PROPERTY has no equivalent picker here: every
+   * RealEstate row already auto-links its own Asset on creation, so there is never an
+   * unlinked property to pick from — the redundant manual step this used to require is
+   * gone, not moved.
    */
   const [newAssetLinkId, setNewAssetLinkId] = useState('');
-
-  const { data: linkableProperties = [] } = useQuery({
-    queryKey: ['real-estate', viewUserId],
-    queryFn: () => investmentsApi.getRealEstate(viewUserId ? { targetUserId: viewUserId } : undefined)
-      .then((r: any) => r.properties ?? []),
-    enabled: showNewAsset && newAsset.assetType === 'PROPERTY',
-  });
 
   const { data: linkableGold = [] } = useQuery({
     queryKey: ['gold', viewUserId],
@@ -693,15 +692,15 @@ export default function LoansPage() {
       assetType: newAsset.assetType,
       name: newAsset.name.trim(),
       value: Number(newAsset.value) || 0,
-      // Only one of these can apply, and only for the matching type.
-      ...(newAssetLinkId && newAsset.assetType === 'PROPERTY' ? { realEstateId: newAssetLinkId } : {}),
+      ...(newAsset.purchaseDate ? { purchaseDate: newAsset.purchaseDate } : {}),
+      ...(newAsset.assetType === 'VEHICLE' ? { vehicleType: newAsset.vehicleType } : {}),
       ...(newAssetLinkId && newAsset.assetType === 'GOLD' ? { goldHoldingId: newAssetLinkId } : {}),
     }, viewUserId ? { targetUserId: viewUserId } : undefined),
     onSuccess: (created) => {
       qc.invalidateQueries({ queryKey: ['assets'] });
       setValue('assetId', created.id, { shouldValidate: true });
       setShowNewAsset(false);
-      setNewAsset({ name: '', value: '', assetType: 'OTHER' });
+      setNewAsset({ name: '', value: '', assetType: 'OTHER', purchaseDate: '', vehicleType: '' });
       setNewAssetLinkId('');
     },
   });
@@ -1066,15 +1065,48 @@ export default function LoansPage() {
                           </div>
                         </div>
 
-                        {/* Without this link the asset counts toward net worth in its own
-                            right. If the same flat or gold is also tracked as a property or
-                            a holding, it is then counted twice — so say which record this
-                            stands for, or say it is new. */}
-                        {(newAsset.assetType === 'PROPERTY' || newAsset.assetType === 'GOLD') && (
+                        {newAsset.assetType === 'PROPERTY' && (
+                          <p className="text-xs text-muted-foreground">
+                            Already added on the Real Estate page? It's already listed in
+                            "Secured Against" above — only add one here if this property
+                            isn't tracked there, or you'll end up with a duplicate that
+                            counts twice toward net worth.
+                          </p>
+                        )}
+
+                        {newAsset.assetType === 'VEHICLE' && (
                           <div className="space-y-1">
-                            <Label htmlFor="new-asset-link">
-                              {newAsset.assetType === 'PROPERTY' ? 'Already tracked as a property?' : 'Already tracked as a gold holding?'}
-                            </Label>
+                            <Label htmlFor="new-asset-vehicle-type" required>Vehicle type</Label>
+                            <select
+                              id="new-asset-vehicle-type"
+                              value={newAsset.vehicleType}
+                              onChange={(e) => setNewAsset((p) => ({ ...p, vehicleType: e.target.value }))}
+                              className="w-full h-9 rounded-md border bg-background px-3 text-sm"
+                            >
+                              <option value="">Select…</option>
+                              {Object.entries(VEHICLE_TYPES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                            </select>
+                          </div>
+                        )}
+
+                        <div className="space-y-1">
+                          <Label htmlFor="new-asset-purchase-date">Purchase date (optional)</Label>
+                          <Input
+                            id="new-asset-purchase-date"
+                            type="date"
+                            value={newAsset.purchaseDate}
+                            onChange={(e) => setNewAsset((p) => ({ ...p, purchaseDate: e.target.value }))}
+                          />
+                        </div>
+
+                        {/* Without this link the asset counts toward net worth in its own
+                            right. If the same gold is also tracked as a holding, it is
+                            then counted twice — so say which record this stands for, or
+                            say it is new. PROPERTY has no equivalent here: every
+                            RealEstate row auto-links its own Asset on creation now. */}
+                        {newAsset.assetType === 'GOLD' && (
+                          <div className="space-y-1">
+                            <Label htmlFor="new-asset-link">Already tracked as a gold holding?</Label>
                             <select
                               id="new-asset-link"
                               value={newAssetLinkId}
@@ -1082,15 +1114,11 @@ export default function LoansPage() {
                               className="w-full h-9 rounded-md border bg-background px-3 text-sm"
                             >
                               <option value="">No — count it separately</option>
-                              {newAsset.assetType === 'PROPERTY'
-                                ? linkableProperties.map((prop: { id: string; propertyName: string }) => (
-                                  <option key={prop.id} value={prop.id}>{prop.propertyName}</option>
-                                ))
-                                : linkableGold.map((g: { id: string; description?: string; quantityGrams: number }) => (
-                                  <option key={g.id} value={g.id}>
-                                    {g.description || 'Gold'} — {g.quantityGrams}g
-                                  </option>
-                                ))}
+                              {linkableGold.map((g: { id: string; description?: string; quantityGrams: number }) => (
+                                <option key={g.id} value={g.id}>
+                                  {g.description || 'Gold'} — {g.quantityGrams}g
+                                </option>
+                              ))}
                             </select>
                             <p className="text-xs text-muted-foreground">
                               Linking it avoids counting the same thing twice in net worth.
@@ -1102,7 +1130,11 @@ export default function LoansPage() {
                           <Button
                             type="button"
                             size="sm"
-                            disabled={!newAsset.name.trim() || createAssetMutation.isPending}
+                            disabled={
+                              !newAsset.name.trim()
+                              || (newAsset.assetType === 'VEHICLE' && !newAsset.vehicleType)
+                              || createAssetMutation.isPending
+                            }
                             onClick={() => createAssetMutation.mutate()}
                           >
                             {createAssetMutation.isPending ? 'Saving…' : 'Save asset'}

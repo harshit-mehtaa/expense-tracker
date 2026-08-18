@@ -1327,6 +1327,21 @@ describe('updateGoldHolding / deleteGoldHolding', () => {
     expect(loanMock.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { assetId: 'asset-1', closedAt: null } }));
   });
 
+  it('recordGoldHoldingSale: linked asset with no active loan — sale mirrors onto the asset too', async () => {
+    assetMock.findFirst.mockResolvedValue({ id: 'asset-1' });
+    loanMock.findFirst.mockResolvedValue(null);
+    goldMock.update.mockResolvedValue({ id: 'gold-1' });
+    await recordGoldHoldingSale('u1', 'gold-1', { salePrice: 60000, date: '2026-06-01' });
+    expect(goldMock.update).toHaveBeenCalledWith({
+      where: { id: 'gold-1' },
+      data: {
+        soldAt: new Date('2026-06-01'),
+        salePrice: 60000,
+        asset: { update: { soldAt: new Date('2026-06-01'), salePrice: 60000 } },
+      },
+    });
+  });
+
   it('recordGoldHoldingSale: no linked asset at all — sells with no loan check needed', async () => {
     assetMock.findFirst.mockResolvedValue(null);
     goldMock.update.mockResolvedValue({ id: 'gold-1' });
@@ -1467,6 +1482,28 @@ describe('createRealEstate / updateRealEstate / deleteRealEstate', () => {
     );
   });
 
+  it('auto-creates the linked collateral Asset in the same nested write', async () => {
+    reMock.create.mockResolvedValue({ id: 're-new', userId: 'u1', propertyName: 'Flat 3B', currentValue: 8500000, owners: [] });
+    await createRealEstate('u1', {
+      propertyName: 'Flat 3B', currentValue: 8500000, purchaseDate: new Date('2020-01-01'),
+    } as any);
+    expect(reMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          asset: {
+            create: {
+              userId: 'u1',
+              assetType: 'PROPERTY',
+              name: 'Flat 3B',
+              value: 8500000,
+              purchaseDate: new Date('2020-01-01'),
+            },
+          },
+        }),
+      }),
+    );
+  });
+
   it('rejects owner shares that do not total 100%', async () => {
     await expect(createRealEstate('u1', {
       purchasePrice: 5000000,
@@ -1486,6 +1523,23 @@ describe('createRealEstate / updateRealEstate / deleteRealEstate', () => {
 
   it('deletes real estate when found', async () => {
     reMock.delete.mockResolvedValue({ id: 're-1' });
+    await deleteRealEstate('u1', 're-1');
+    expect(reMock.delete).toHaveBeenCalledWith({ where: { id: 're-1' } });
+  });
+
+  it('blocks deletion while the linked asset secures a loan — open OR closed, since Loan.assetId is ON DELETE RESTRICT regardless', async () => {
+    reMock.findFirst.mockResolvedValue({
+      id: 're-1', userId: 'u1', asset: { id: 'asset-1', loans: [{ id: 'loan-1' }] },
+    });
+
+    await expect(deleteRealEstate('u1', 're-1')).rejects.toThrow(/secures 1 loan/i);
+    expect(reMock.delete).not.toHaveBeenCalled();
+  });
+
+  it('deletes once the linked asset secures no loans at all — the Asset cascade-deletes at the DB level', async () => {
+    reMock.findFirst.mockResolvedValue({ id: 're-1', userId: 'u1', asset: { id: 'asset-1', loans: [] } });
+    reMock.delete.mockResolvedValue({ id: 're-1' });
+
     await deleteRealEstate('u1', 're-1');
     expect(reMock.delete).toHaveBeenCalledWith({ where: { id: 're-1' } });
   });
@@ -1516,14 +1570,23 @@ describe('createRealEstate / updateRealEstate / deleteRealEstate', () => {
     expect(loanMock.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { assetId: 'asset-1', closedAt: null } }));
   });
 
-  it('allows the sale once the securing loan is closedAt-closed', async () => {
+  it('allows the sale once the securing loan is closedAt-closed, and mirrors the sale onto the linked asset', async () => {
     assetMock.findFirst.mockResolvedValue({ id: 'asset-1' });
     loanMock.findFirst.mockResolvedValue(null); // findActiveLoanSecuring already filters closedAt: null
     reMock.update.mockResolvedValue({ id: 're-1' });
     await expect(
       recordRealEstateSale('u1', 're-1', { salePrice: 9_500_000, date: '2026-06-01' }),
     ).resolves.toBeDefined();
-    expect(reMock.update).toHaveBeenCalled();
+    // Without this, the linked asset would keep looking available to secure a new loan —
+    // Loans.tsx's collateral picker filters on the asset's OWN soldAt, not a join.
+    expect(reMock.update).toHaveBeenCalledWith({
+      where: { id: 're-1' },
+      data: {
+        soldAt: new Date('2026-06-01'),
+        salePrice: 9_500_000,
+        asset: { update: { soldAt: new Date('2026-06-01'), salePrice: 9_500_000 } },
+      },
+    });
   });
 
   it('VQ6: a co-owner can record a sale — same write-scope every other RealEstate mutation uses', async () => {
@@ -2065,6 +2128,9 @@ describe('real-estate write scoping', () => {
     reMock.findFirst.mockResolvedValue({ id: 're-1', userId: 'u2' });
     reMock.delete.mockResolvedValue({ id: 're-1' });
     await deleteRealEstate('admin-1', 're-1', 'ADMIN');
-    expect(reMock.findFirst).toHaveBeenCalledWith({ where: { id: 're-1' } });
+    expect(reMock.findFirst).toHaveBeenCalledWith({
+      where: { id: 're-1' },
+      include: { asset: { select: { id: true, loans: { select: { id: true } } } } },
+    });
   });
 });

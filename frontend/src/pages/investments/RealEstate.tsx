@@ -122,6 +122,9 @@ export default function RealEstatePage() {
       qc.invalidateQueries({ queryKey: ['report-networth'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       qc.invalidateQueries({ queryKey: ['net-worth-history'] });
+      // recordRealEstateSale mirrors soldAt onto the linked Asset too, so the Loans
+      // collateral picker and the Assets page must stop showing it as available.
+      qc.invalidateQueries({ queryKey: ['assets'] });
       setSellingProperty(null);
       setSellPrice('');
       toast({ title: 'Sale recorded', variant: 'success' });
@@ -135,7 +138,15 @@ export default function RealEstatePage() {
 
   const createPropertyMutation = useMutation({
     mutationFn: (data: PropertyForm) => investmentsApi.createRealEstate(data, viewUserId ? { targetUserId: viewUserId } : undefined),
-    onSuccess: () => { invalidateRE(); setShowPropertyForm(false); setEditingProperty(null); propertyForm.reset(getDefaultPropertyValues()); },
+    onSuccess: () => {
+      invalidateRE();
+      // The property auto-links its own collateral Asset on creation (createRealEstate)
+      // — without this, Loans.tsx's picker stays stale until an unrelated refetch.
+      qc.invalidateQueries({ queryKey: ['assets'] });
+      setShowPropertyForm(false);
+      setEditingProperty(null);
+      propertyForm.reset(getDefaultPropertyValues());
+    },
   });
 
   const updatePropertyMutation = useMutation({

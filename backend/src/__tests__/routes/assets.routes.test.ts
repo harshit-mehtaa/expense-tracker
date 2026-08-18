@@ -110,7 +110,7 @@ describe('GET /api/assets/:id', () => {
 });
 
 describe('POST /api/assets', () => {
-  const VALID = { assetType: 'VEHICLE', name: 'Swift Dzire', value: 600_000 };
+  const VALID = { assetType: 'VEHICLE', name: 'Swift Dzire', value: 600_000, vehicleType: 'FOUR_WHEELER' };
 
   it('creates and records an audit entry', async () => {
     const res = await request(makeMemberApp()).post('/api/assets').send(VALID);
@@ -127,6 +127,37 @@ describe('POST /api/assets', () => {
   ])('rejects an invalid %s with 422', async (_field, body) => {
     const res = await request(makeMemberApp()).post('/api/assets').send(body);
     expect(res.status).toBe(422);
+  });
+
+  it('rejects a VEHICLE with no vehicleType', async () => {
+    const { vehicleType, ...withoutVehicleType } = VALID;
+    const res = await request(makeMemberApp()).post('/api/assets').send(withoutVehicleType);
+    expect(res.status).toBe(422);
+    expect(m(svc.createAsset)).not.toHaveBeenCalled();
+  });
+
+  it('accepts a valid, date-only purchaseDate and normalizes it to a real Date for the service', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets').send({ ...VALID, purchaseDate: '2022-05-01' });
+    expect(res.status).toBe(201);
+    expect(m(svc.createAsset)).toHaveBeenCalledWith('u1', expect.objectContaining({ purchaseDate: new Date('2022-05-01') }));
+  });
+
+  it('treats an empty-string purchaseDate as omitted, not a 500', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets').send({ ...VALID, purchaseDate: '' });
+    expect(res.status).toBe(201);
+    expect(m(svc.createAsset)).toHaveBeenCalledWith('u1', expect.objectContaining({ purchaseDate: null }));
+  });
+
+  it('rejects an unparseable purchaseDate with 422', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets').send({ ...VALID, purchaseDate: 'not-a-date' });
+    expect(res.status).toBe(422);
+  });
+
+  it('treats an empty-string vehicleType as omitted, not a raw enum-mismatch 422 — still requires a real one for VEHICLE though', async () => {
+    const { vehicleType, ...withoutVehicleType } = VALID;
+    const res = await request(makeMemberApp()).post('/api/assets').send({ ...withoutVehicleType, vehicleType: '' });
+    expect(res.status).toBe(422);
+    expect(res.body.errors.vehicleType[0]).toMatch(/vehicle type/i);
   });
 
   it.each(['PROPERTY', 'VEHICLE', 'GOLD', 'OTHER'])('accepts assetType %s', async (assetType) => {
@@ -161,6 +192,12 @@ describe('PUT /api/assets/:id', () => {
   it('still validates the fields it is given', async () => {
     const res = await request(makeMemberApp()).put('/api/assets/asset-1').send({ value: -5 });
     expect(res.status).toBe(422);
+  });
+
+  it('an untouched date input clearing to "" does not 422 or 500 an edit', async () => {
+    const res = await request(makeMemberApp()).put('/api/assets/asset-1').send({ purchaseDate: '', vehicleType: '' });
+    expect(res.status).toBe(200);
+    expect(m(svc.updateAsset)).toHaveBeenCalledWith('u1', 'asset-1', expect.objectContaining({ purchaseDate: null, vehicleType: undefined }), 'MEMBER');
   });
 });
 

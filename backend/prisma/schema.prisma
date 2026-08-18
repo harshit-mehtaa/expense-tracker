@@ -177,6 +177,12 @@ enum PropertyType {
   PLOT
 }
 
+enum VehicleType {
+  TWO_WHEELER
+  FOUR_WHEELER
+  OTHER
+}
+
 enum TaxSection {
   S80C
   S80D
@@ -852,16 +858,30 @@ model Asset {
   /// worth with nothing able to detect it.
   goldHoldingId String?  @unique
   notes        String?
-  /// See RealEstate.soldAt — same convention. Only meaningful for an UNLINKED asset
-  /// (realEstateId/goldHoldingId both null) — a linked asset's sale is recorded on the
-  /// RealEstate/GoldHolding row it represents, not duplicated here.
+  /// When this asset was bought. Optional for every type — often approximate or unknown,
+  /// unlike a picked-from-a-small-enum field such as vehicleType.
+  purchaseDate DateTime?
+  /// Only meaningful when assetType = VEHICLE (required by the route's Zod schema in
+  /// that case); null for every other type.
+  vehicleType  VehicleType?
+  /// See RealEstate.soldAt — same convention. For an UNLINKED asset (realEstateId/
+  /// goldHoldingId both null), this IS the sale record. For a LINKED asset, the primary
+  /// record is still the RealEstate/GoldHolding row — but recordRealEstateSale/
+  /// recordGoldHoldingSale ALSO mirror soldAt/salePrice here, because the collateral
+  /// picker (Loans.tsx) filters on THIS row's soldAt, not a join through the link. A
+  /// linked asset's soldAt is therefore a copy kept in sync at sale time, not a second
+  /// independent source of truth.
   soldAt       DateTime?
   salePrice    Decimal?  @db.Decimal(15, 2)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
   user        User         @relation(fields: [userId], references: [id])
-  realEstate  RealEstate?  @relation(fields: [realEstateId], references: [id])
+  /// Cascades: deleting the RealEstate row this asset represents deletes this row too
+  /// (deleteRealEstate blocks first if it secures an active loan) — an asset with no
+  /// realEstateId/goldHoldingId left over from a property that no longer exists would
+  /// silently start counting in net worth as a phantom, stale-valued item.
+  realEstate  RealEstate?  @relation(fields: [realEstateId], references: [id], onDelete: Cascade)
   goldHolding GoldHolding? @relation(fields: [goldHoldingId], references: [id])
   loans       Loan[]
 

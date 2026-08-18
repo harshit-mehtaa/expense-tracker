@@ -8,7 +8,7 @@
  * leg 3 waits on a data sentinel to prove the transition actually happened.
  * That indistinguishability is a real UX gap, flagged not fixed.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -160,6 +160,32 @@ describe('Gold page — recording a sale', () => {
     expect(body).toMatchObject({ salePrice: 130000 });
     await waitFor(() => {
       expect(screen.getByText(/sale recorded/i)).toBeInTheDocument();
+    });
+  });
+
+  it('invalidates the assets cache after a sale, so a linked holding stops looking like available collateral', async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderPage(<GoldPage />, {
+      route: '/gold',
+      user: MEMBER_USER,
+      handlers: [
+        ...goldHandlers(),
+        http.post(url('/investments/gold/g-1/sell'), () => HttpResponse.json({
+          data: { ...HOLDING, soldAt: '2026-06-01T00:00:00.000Z', salePrice: 130000 },
+        })),
+      ],
+    });
+    await screen.findByText('Wedding bangles');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(screen.getByRole('button', { name: /^sell$/i }));
+    const priceInput = await screen.findByLabelText(/sale price/i);
+    await user.clear(priceInput);
+    await user.type(priceInput, '130000');
+    await user.click(screen.getByRole('button', { name: /confirm sale/i }));
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['assets'] });
     });
   });
 

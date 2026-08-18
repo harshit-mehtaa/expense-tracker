@@ -93,12 +93,51 @@ describe('getAsset', () => {
 
 describe('createAsset', () => {
   it('merges the owner into the row', async () => {
-    await createAsset('u1', { assetType: 'VEHICLE', name: 'Swift', value: 600_000 } as never);
+    await createAsset('u1', { assetType: 'VEHICLE', name: 'Swift', value: 600_000, vehicleType: 'FOUR_WHEELER' } as never);
     expect(assetMock.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ userId: 'u1', assetType: 'VEHICLE', name: 'Swift' }),
       }),
     );
+  });
+
+  it('rejects a VEHICLE with no vehicleType', async () => {
+    await expect(
+      createAsset('u1', { assetType: 'VEHICLE', name: 'Swift', value: 600_000 } as never),
+    ).rejects.toThrow(/vehicle type/i);
+    expect(assetMock.create).not.toHaveBeenCalled();
+  });
+
+  it('does not require vehicleType for a non-VEHICLE asset', async () => {
+    await createAsset('u1', { assetType: 'OTHER', name: 'Boat', value: 100_000 } as never);
+    expect(assetMock.create).toHaveBeenCalled();
+  });
+
+  it('nulls a vehicleType sent on a non-VEHICLE create, even though it is not required there', async () => {
+    // A hidden form field can carry a stale value even when the visible type isn't
+    // VEHICLE (react-hook-form keeps unmounted-but-registered fields by default) — must
+    // not be trusted from the payload just because assetType says it's not needed.
+    await createAsset('u1', { assetType: 'OTHER', name: 'Boat', value: 100_000, vehicleType: 'FOUR_WHEELER' } as never);
+    expect(assetMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ vehicleType: null }) }),
+    );
+  });
+
+  it('translates a duplicate realEstateId/goldHoldingId link (P2002) into a clean conflict', async () => {
+    const { Prisma } = await import('@prisma/client');
+    assetMock.create.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '5.22.0' }),
+    );
+    await expect(
+      createAsset('u1', { assetType: 'OTHER', name: 'Boat', value: 100_000 } as never),
+    ).rejects.toThrow(/already linked/i);
+  });
+
+  it('re-throws a non-P2002 error from asset.create unchanged', async () => {
+    assetMock.create.mockRejectedValue(new Error('boom'));
+    await expect(
+      createAsset('u1', { assetType: 'OTHER', name: 'Boat', value: 100_000 } as never),
+    ).rejects.toThrow('boom');
   });
 });
 
@@ -114,6 +153,41 @@ describe('updateAsset', () => {
     assetMock.findFirst.mockResolvedValue(null);
     await expect(updateAsset('stranger', 'asset-1', {} as never)).rejects.toThrow(/not found/i);
     expect(assetMock.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects switching an asset to VEHICLE without also setting vehicleType', async () => {
+    // MOCK_ASSET is assetType PROPERTY with no vehicleType — changing only assetType
+    // must still be checked against the (missing) vehicleType already on the row.
+    await expect(
+      updateAsset('u1', 'asset-1', { assetType: 'VEHICLE' } as never),
+    ).rejects.toThrow(/vehicle type/i);
+    expect(assetMock.update).not.toHaveBeenCalled();
+  });
+
+  it('allows setting vehicleType on an existing VEHICLE without re-sending assetType', async () => {
+    assetMock.findFirst.mockResolvedValue({ ...MOCK_ASSET, assetType: 'VEHICLE', vehicleType: null });
+    await updateAsset('u1', 'asset-1', { vehicleType: 'TWO_WHEELER' } as never);
+    expect(assetMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { vehicleType: 'TWO_WHEELER' } }),
+    );
+  });
+
+  it('nulls a stale vehicleType when switching an existing VEHICLE to a different type', async () => {
+    assetMock.findFirst.mockResolvedValue({ ...MOCK_ASSET, assetType: 'VEHICLE', vehicleType: 'TWO_WHEELER' });
+    await updateAsset('u1', 'asset-1', { assetType: 'OTHER' } as never);
+    expect(assetMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { assetType: 'OTHER', vehicleType: null } }),
+    );
+  });
+
+  it('translates a duplicate realEstateId/goldHoldingId link (P2002) into a clean conflict on update too', async () => {
+    const { Prisma } = await import('@prisma/client');
+    assetMock.update.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '5.22.0' }),
+    );
+    await expect(
+      updateAsset('u1', 'asset-1', { value: 100 } as never),
+    ).rejects.toThrow(/already linked/i);
   });
 });
 
@@ -187,7 +261,7 @@ describe('a linked property must belong to the asset owner', () => {
   });
 
   it('skips the check when no property is linked', async () => {
-    await createAsset('u1', { assetType: 'VEHICLE', name: 'Swift', value: 100 } as never);
+    await createAsset('u1', { assetType: 'OTHER', name: 'Boat', value: 100 } as never);
 
     expect(realEstateMock.findFirst).not.toHaveBeenCalled();
     expect(assetMock.create).toHaveBeenCalled();
@@ -241,7 +315,7 @@ describe('a linked gold holding must belong to the asset owner', () => {
   });
 
   it('skips the check when no holding is linked', async () => {
-    await createAsset('u1', { assetType: 'VEHICLE', name: 'Swift', value: 100 } as never);
+    await createAsset('u1', { assetType: 'OTHER', name: 'Boat', value: 100 } as never);
 
     expect(goldMock.findFirst).not.toHaveBeenCalled();
     expect(assetMock.create).toHaveBeenCalled();

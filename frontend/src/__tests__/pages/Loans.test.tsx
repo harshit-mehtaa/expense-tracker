@@ -668,7 +668,22 @@ describe('Loans page — inline asset creation can defer to an existing record',
     await user.selectOptions(await screen.findByLabelText(/^type$/i), type);
   }
 
-  it('sends realEstateId when the property is already tracked', async () => {
+  // createRealEstate now auto-links its own collateral Asset — every property already
+  // has one the moment it's added on the RealEstate page. Picking one to relink here
+  // would always fail (the realEstateId is already claimed), so the picker is gone for
+  // PROPERTY specifically. GOLD retains it below — auto-linking wasn't extended there.
+  it('offers no relink picker for PROPERTY — every property already auto-links its own asset', async () => {
+    const user = userEvent.setup();
+    renderPage(<LoansPage />, { route: '/loans', user: MEMBER_USER, handlers: withInvestments() });
+
+    await openAssetCreator(user, 'PROPERTY');
+    expect(screen.queryByLabelText(/already tracked/i)).not.toBeInTheDocument();
+    // The picker's replacement: a hint pointing at the already-auto-linked collateral
+    // dropdown, so a user doesn't silently duplicate a property that's already listed.
+    expect(screen.getByText(/counts twice toward net worth/i)).toBeInTheDocument();
+  });
+
+  it('PROPERTY still creates a plain, unlinked asset for a property never entered as RealEstate', async () => {
     const user = userEvent.setup();
     let body: any = null;
 
@@ -685,12 +700,12 @@ describe('Loans page — inline asset creation can defer to an existing record',
     });
 
     await openAssetCreator(user, 'PROPERTY');
-    await user.type(screen.getByLabelText(/asset name/i), 'Flat 3B');
-    await user.selectOptions(await screen.findByLabelText(/already tracked as a property/i), 're-1');
+    await user.type(screen.getByLabelText(/asset name/i), 'Plot behind the school');
     await user.click(screen.getByRole('button', { name: /save asset/i }));
 
     await waitFor(() => expect(body).not.toBeNull());
-    expect(body.realEstateId).toBe('re-1');
+    expect(body.realEstateId).toBeUndefined();
+    expect(body.goldHoldingId).toBeUndefined();
   });
 
   it('sends goldHoldingId when the gold is already tracked', async () => {
@@ -736,11 +751,40 @@ describe('Loans page — inline asset creation can defer to an existing record',
 
     await openAssetCreator(user, 'VEHICLE');
     await user.type(screen.getByLabelText(/asset name/i), 'Swift Dzire');
+    await user.selectOptions(await screen.findByLabelText(/vehicle type/i), 'FOUR_WHEELER');
     await user.click(screen.getByRole('button', { name: /save asset/i }));
 
     await waitFor(() => expect(body).not.toBeNull());
     expect(body.realEstateId).toBeUndefined();
     expect(body.goldHoldingId).toBeUndefined();
+  });
+
+  it('a VEHICLE requires a vehicle type before it can be saved, and sends purchaseDate/vehicleType', async () => {
+    const user = userEvent.setup();
+    let body: any = null;
+
+    renderPage(<LoansPage />, {
+      route: '/loans',
+      user: MEMBER_USER,
+      handlers: [
+        http.post(url('/assets'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: { id: 'a-new' } }, { status: 201 });
+        }),
+        ...withInvestments(),
+      ],
+    });
+
+    await openAssetCreator(user, 'VEHICLE');
+    await user.type(screen.getByLabelText(/asset name/i), 'Honda Activa');
+    expect(screen.getByRole('button', { name: /save asset/i })).toBeDisabled();
+
+    await user.type(screen.getByLabelText(/purchase date/i), '2022-05-01');
+    await user.selectOptions(await screen.findByLabelText(/vehicle type/i), 'TWO_WHEELER');
+    await user.click(screen.getByRole('button', { name: /save asset/i }));
+
+    await waitFor(() => expect(body).not.toBeNull());
+    expect(body).toMatchObject({ vehicleType: 'TWO_WHEELER', purchaseDate: '2022-05-01' });
   });
 
   it('offers no link picker for a vehicle, which nothing else tracks', async () => {

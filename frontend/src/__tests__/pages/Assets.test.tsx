@@ -84,10 +84,95 @@ describe('Assets page — smoke', () => {
     await user.click(screen.getByRole('button', { name: /add asset/i }));
     await user.type(await screen.findByLabelText(/^name/i), 'Royal Enfield');
     await user.type(screen.getByLabelText(/current value/i), '250000');
+    // Defaults to VEHICLE (see AssetsPage's defaultValues), which now requires a
+    // vehicle type before it can be saved.
+    await user.selectOptions(screen.getByLabelText(/vehicle type/i), 'TWO_WHEELER');
     await user.click(screen.getByRole('button', { name: /^add$/i }));
 
     await waitFor(() => expect(body).toBeDefined());
-    expect(body).toMatchObject({ name: 'Royal Enfield', value: 250000 });
+    expect(body).toMatchObject({ name: 'Royal Enfield', value: 250000, vehicleType: 'TWO_WHEELER' });
+  });
+
+  it('cannot save a VEHICLE without a vehicle type', async () => {
+    const user = userEvent.setup();
+    renderPage(<AssetsPage />, { route: '/assets', user: MEMBER_USER, handlers: assetHandlers() });
+    await screen.findByText('Honda City');
+
+    await user.click(screen.getByRole('button', { name: /add asset/i }));
+    await user.type(await screen.findByLabelText(/^name/i), 'Royal Enfield');
+    await user.click(screen.getByRole('button', { name: /^add$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/required for a vehicle/i)).toBeInTheDocument();
+    });
+  });
+
+  it('shows purchase date and vehicle type on the card', async () => {
+    const vehicleWithDetail = { ...VEHICLE, purchaseDate: '2022-05-01T00:00:00.000Z', vehicleType: 'FOUR_WHEELER' };
+    renderPage(<AssetsPage />, { route: '/assets', handlers: assetHandlers([vehicleWithDetail]) });
+    await screen.findByText('Honda City');
+
+    expect(screen.getByText(/4-wheeler/i)).toBeInTheDocument();
+    expect(screen.getByText('Bought 01/05/2022')).toBeInTheDocument();
+  });
+
+  it('edit form repopulates purchase date and vehicle type, and saves changes to both', async () => {
+    const user = userEvent.setup();
+    const vehicleWithDetail = { ...VEHICLE, purchaseDate: '2022-05-01T00:00:00.000Z', vehicleType: 'FOUR_WHEELER' };
+    let body: any;
+    renderPage(<AssetsPage />, {
+      route: '/assets',
+      user: MEMBER_USER,
+      handlers: [
+        ...assetHandlers([vehicleWithDetail]),
+        http.put(url('/assets/a-1'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: { ...vehicleWithDetail, ...body } });
+        }),
+      ],
+    });
+    await screen.findByText('Honda City');
+
+    await user.click(screen.getByTitle(/edit asset/i));
+
+    const dateInput = (await screen.findByLabelText(/purchase date/i)) as HTMLInputElement;
+    expect(dateInput.value).toBe('2022-05-01');
+    const vehicleTypeSelect = screen.getByLabelText(/vehicle type/i) as HTMLSelectElement;
+    expect(vehicleTypeSelect.value).toBe('FOUR_WHEELER');
+
+    await user.selectOptions(vehicleTypeSelect, 'TWO_WHEELER');
+    await user.clear(dateInput);
+    await user.type(dateInput, '2023-08-15');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body).toMatchObject({ vehicleType: 'TWO_WHEELER', purchaseDate: '2023-08-15' });
+  });
+
+  it('clearing the purchase date on edit actually clears it, not silently ignored', async () => {
+    const user = userEvent.setup();
+    const vehicleWithDetail = { ...VEHICLE, purchaseDate: '2022-05-01T00:00:00.000Z', vehicleType: 'FOUR_WHEELER' };
+    let body: any;
+    renderPage(<AssetsPage />, {
+      route: '/assets',
+      user: MEMBER_USER,
+      handlers: [
+        ...assetHandlers([vehicleWithDetail]),
+        http.put(url('/assets/a-1'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: { ...vehicleWithDetail, ...body } });
+        }),
+      ],
+    });
+    await screen.findByText('Honda City');
+    await user.click(screen.getByTitle(/edit asset/i));
+
+    const dateInput = (await screen.findByLabelText(/purchase date/i)) as HTMLInputElement;
+    await user.clear(dateInput);
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body.purchaseDate).toBe('');
   });
 
   it('records a sale — stops counting toward net worth, stays on the record', async () => {

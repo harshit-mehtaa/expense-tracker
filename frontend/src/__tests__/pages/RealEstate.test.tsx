@@ -7,7 +7,7 @@
  * Leg 2 asserts that empty-looking first paint; leg 3 proves the transition with a
  * data sentinel. The indistinguishability is a real UX gap, flagged not fixed.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -106,6 +106,40 @@ describe('Real Estate page — smoke', () => {
     expect(await screen.findByRole('heading', { name: /add property/i })).toBeInTheDocument();
   });
 
+  // The property auto-links its own collateral Asset on creation (createRealEstate) —
+  // without invalidating ['assets'] too, Loans.tsx's picker would stay stale until an
+  // unrelated refetch.
+  it('invalidates the assets cache after creating a property, so Loans.tsx sees the auto-linked asset', async () => {
+    const user = userEvent.setup();
+    const { queryClient, container } = renderPage(<RealEstatePage />, {
+      route: '/real-estate',
+      user: MEMBER_USER,
+      handlers: [
+        ...reHandlers(),
+        http.post(url('/investments/real-estate'), () => HttpResponse.json({ data: { id: 're-new' } }, { status: 201 })),
+      ],
+    });
+    await screen.findByText('Koramangala Flat');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(await screen.findByRole('button', { name: /add property/i }));
+    await screen.findByRole('heading', { name: /add property/i });
+    await user.type(screen.getByPlaceholderText(/flat 4b/i), 'New Flat');
+    await user.type(screen.getByPlaceholderText(/city, state/i), 'Pune');
+    const numberInputs = screen.getAllByRole('spinbutton');
+    await user.type(numberInputs[0], '5000000'); // Purchase Price
+    await user.type(numberInputs[1], '5500000'); // Current Value
+    const dateInput = container.querySelector('input[type="date"]') as HTMLInputElement;
+    await user.type(dateInput, '2024-01-01');
+
+    const submitButtons = screen.getAllByRole('button', { name: /^add property$/i });
+    await user.click(submitButtons[submitButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['assets'] });
+    });
+  });
+
   it('surfaces an error toast when the real-estate request fails', async () => {
     renderPage(<RealEstatePage />, {
       route: '/real-estate',
@@ -167,6 +201,32 @@ describe('Real Estate page — recording a sale', () => {
     expect(body).toMatchObject({ salePrice: 9500000 });
     await waitFor(() => {
       expect(screen.getByText(/sale recorded/i)).toBeInTheDocument();
+    });
+  });
+
+  it('invalidates the assets cache after a sale, so the sold property stops looking like available collateral', async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderPage(<RealEstatePage />, {
+      route: '/real-estate',
+      user: MEMBER_USER,
+      handlers: [
+        ...reHandlers(),
+        http.post(url('/investments/real-estate/re-1/sell'), () => HttpResponse.json({
+          data: { ...PROPERTY, soldAt: '2026-06-01T00:00:00.000Z', salePrice: 9500000 },
+        })),
+      ],
+    });
+    await screen.findByText('Koramangala Flat');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(screen.getByRole('button', { name: /^sell$/i }));
+    const priceInput = await screen.findByLabelText(/sale price/i);
+    await user.clear(priceInput);
+    await user.type(priceInput, '9500000');
+    await user.click(screen.getByRole('button', { name: /confirm sale/i }));
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['assets'] });
     });
   });
 

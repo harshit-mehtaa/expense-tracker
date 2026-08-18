@@ -9,6 +9,14 @@ export const ASSET_TYPES: Record<AssetType, string> = {
   OTHER: 'Other',
 };
 
+export type VehicleType = 'TWO_WHEELER' | 'FOUR_WHEELER' | 'OTHER';
+
+export const VEHICLE_TYPES: Record<VehicleType, string> = {
+  TWO_WHEELER: '2-Wheeler',
+  FOUR_WHEELER: '4-Wheeler',
+  OTHER: 'Other',
+};
+
 export interface AssetLoanRef {
   id: string;
   lenderName: string;
@@ -25,11 +33,16 @@ export interface Asset {
   realEstateId?: string | null;
   goldHoldingId?: string | null;
   notes?: string | null;
+  purchaseDate?: string | null;
+  /** Meaningful only when assetType === 'VEHICLE'; required by the backend in that case. */
+  vehicleType?: VehicleType | null;
   /** Loans this asset secures — a non-empty list blocks deletion (409). */
   loans?: AssetLoanRef[];
-  /** Set once, by recording a sale. Null means still owned. Only meaningful for an
-   *  UNLINKED asset — one representing a property or gold holding records its sale on
-   *  that row instead, so this stays null for those even after they're sold. */
+  /** Set once, by recording a sale. Null means still owned. For a property/gold-linked
+   *  asset, the primary sale record is the RealEstate/GoldHolding row, but this field is
+   *  mirrored at sale time too — the "Secured Against" picker filters on THIS field, not
+   *  a join through the link, so a sold property/holding's asset stops looking
+   *  available for a new loan. */
   soldAt?: string | null;
   salePrice?: number | null;
 }

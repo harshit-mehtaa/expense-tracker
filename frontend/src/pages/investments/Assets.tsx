@@ -11,7 +11,7 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { useToast } from '@/contexts/ToastContext';
 import { toDateInputValue, formatDate } from '@/lib/dateFormat';
-import { assetsApi, ASSET_TYPES, type Asset } from '@/api/assets';
+import { assetsApi, ASSET_TYPES, VEHICLE_TYPES, type Asset } from '@/api/assets';
 
 /**
  * Vehicles and other unsecured items — the one asset kind with no dedicated page before
@@ -31,6 +31,12 @@ const assetSchema = z.object({
   name: z.string().min(1, 'Required'),
   value: z.coerce.number().nonnegative(),
   notes: z.string().optional(),
+  purchaseDate: z.string().optional(),
+  vehicleType: z.string().optional(),
+}).superRefine((val, ctx) => {
+  if (val.assetType === 'VEHICLE' && !val.vehicleType) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['vehicleType'], message: 'Required for a vehicle' });
+  }
 });
 
 type AssetForm = z.infer<typeof assetSchema>;
@@ -54,6 +60,7 @@ export default function AssetsPage() {
   const assets = allAssets.filter((a) => !a.realEstateId && !a.goldHoldingId);
 
   const form = useForm<AssetForm>({ resolver: zodResolver(assetSchema), defaultValues: { assetType: 'VEHICLE', value: 0 } });
+  const watchedAssetType = form.watch('assetType');
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['assets'] });
@@ -98,7 +105,14 @@ export default function AssetsPage() {
 
   const openEdit = (a: Asset) => {
     setEditingAsset(a);
-    form.reset({ assetType: a.assetType, name: a.name, value: a.value, notes: a.notes ?? '' });
+    form.reset({
+      assetType: a.assetType,
+      name: a.name,
+      value: a.value,
+      notes: a.notes ?? '',
+      purchaseDate: a.purchaseDate ? toDateInputValue(new Date(a.purchaseDate)) : '',
+      vehicleType: a.vehicleType ?? '',
+    });
     setShowForm(true);
   };
 
@@ -143,6 +157,11 @@ export default function AssetsPage() {
                   <span className="text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 px-2 py-0.5 rounded-full">
                     {ASSET_TYPES[a.assetType] ?? a.assetType}
                   </span>
+                  {a.assetType === 'VEHICLE' && a.vehicleType && (
+                    <span className="text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 px-2 py-0.5 rounded-full">
+                      {VEHICLE_TYPES[a.vehicleType]}
+                    </span>
+                  )}
                   {a.soldAt && (
                     <span className="text-xs font-medium bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300 px-2 py-0.5 rounded-full">
                       Sold {formatDate(a.soldAt)}
@@ -150,6 +169,9 @@ export default function AssetsPage() {
                   )}
                 </div>
                 <h3 className="font-semibold mt-1">{a.name}</h3>
+                {a.purchaseDate && (
+                  <p className="text-xs text-muted-foreground">Bought {formatDate(a.purchaseDate)}</p>
+                )}
               </div>
               <div className="flex items-center gap-1">
                 <Button variant="ghost" size="icon" onClick={() => openEdit(a)} title="Edit asset">
@@ -244,6 +266,20 @@ export default function AssetsPage() {
               <div className="space-y-1">
                 <Label htmlFor="asset-value" required>Current Value (₹)</Label>
                 <Input id="asset-value" {...form.register('value')} type="number" step="1000" />
+              </div>
+              {watchedAssetType === 'VEHICLE' && (
+                <div className="space-y-1">
+                  <Label htmlFor="asset-vehicle-type" required>Vehicle Type</Label>
+                  <select id="asset-vehicle-type" {...form.register('vehicleType')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                    <option value="">Select…</option>
+                    {Object.entries(VEHICLE_TYPES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select>
+                  {form.formState.errors.vehicleType && <p className="text-xs text-destructive">{form.formState.errors.vehicleType.message}</p>}
+                </div>
+              )}
+              <div className="space-y-1">
+                <Label htmlFor="asset-purchase-date">Purchase Date (optional)</Label>
+                <Input id="asset-purchase-date" {...form.register('purchaseDate')} type="date" />
               </div>
               <div className="space-y-1">
                 <Label htmlFor="asset-notes">Notes (optional)</Label>

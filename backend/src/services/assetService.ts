@@ -1,7 +1,7 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import { ownerScopedWhere } from '../utils/resolveTargetUserId';
-import type { Prisma } from '@prisma/client';
 
 /**
  * Assets are what secured loans are held against — a property, a vehicle, gold.
@@ -58,13 +58,58 @@ async function assertGoldHoldingOwned(userId: string, goldHoldingId: string | nu
   if (!holding) throw AppError.notFound('Gold holding');
 }
 
+/** Mirrors loanService's assertAssetRequired — same "cheap-to-require enum pick, checked
+ *  against the merged state on update" shape. */
+export function assertVehicleTypeRequired(assetType: string, vehicleType: string | null | undefined) {
+  if (assetType === 'VEHICLE' && !vehicleType) {
+    throw AppError.badRequest('A vehicle asset must have a vehicle type');
+  }
+}
+
+/**
+ * A realEstateId/goldHoldingId conflict (the property/holding already has a linked
+ * asset — createRealEstate auto-creates one for every property now) is caught here
+ * rather than pre-checked: a pre-check-then-insert has a TOCTOU race under concurrent
+ * requests that would still let a raw P2002 through. Matches categoryRuleService's
+ * existing try/catch-on-P2002 pattern. Shared by createAsset and updateAsset — a PUT
+ * accepts the same two link fields and writes through the same unique indexes, so it
+ * carries an identical conflict risk now that every property auto-links on creation.
+ */
+function translateLinkConflict(err: unknown): never {
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+    throw AppError.conflict('This property or gold holding is already linked to another asset.');
+  }
+  throw err;
+}
+
+/**
+ * A non-VEHICLE asset must never carry a vehicleType — enforced unconditionally, not
+ * just when a type CHANGES away from VEHICLE, since a client could send
+ * `{assetType: 'OTHER', vehicleType: 'FOUR_WHEELER'}` on create, or send vehicleType on
+ * an update alongside an unrelated field while a hidden form input still holds a stale
+ * value (react-hook-form keeps unmounted-but-registered fields by default).
+ */
+function normalizeVehicleType(assetType: string, vehicleType: string | null | undefined) {
+  return assetType === 'VEHICLE' ? vehicleType : null;
+}
+
 export async function createAsset(userId: string, data: Omit<Prisma.AssetCreateInput, 'user'>) {
+  const assetType = (data as any).assetType as string;
+  assertVehicleTypeRequired(assetType, (data as any).vehicleType);
   await assertRealEstateOwned(userId, (data as any).realEstateId);
   await assertGoldHoldingOwned(userId, (data as any).goldHoldingId);
-  return prisma.asset.create({
-    data: { ...data, userId } as Prisma.AssetUncheckedCreateInput,
-    include: assetInclude,
-  });
+  try {
+    return await prisma.asset.create({
+      data: {
+        ...data,
+        userId,
+        vehicleType: normalizeVehicleType(assetType, (data as any).vehicleType),
+      } as Prisma.AssetUncheckedCreateInput,
+      include: assetInclude,
+    });
+  } catch (err) {
+    return translateLinkConflict(err);
+  }
 }
 
 export async function updateAsset(
@@ -77,9 +122,23 @@ export async function updateAsset(
     where: ownerScopedWhere(id, requesterId, requesterRole),
   });
   if (!asset) throw AppError.notFound('Asset');
+  // Validate against the MERGED state: a partial update changing only vehicleType (or
+  // only assetType) must still be checked against whichever field the request didn't
+  // touch — same reasoning as loanService.updateLoan's nextAssetId merge.
+  const nextAssetType = ('assetType' in data ? (data as any).assetType : asset.assetType) as string;
+  const nextVehicleType = 'vehicleType' in data ? (data as any).vehicleType : asset.vehicleType;
+  assertVehicleTypeRequired(nextAssetType, nextVehicleType as string | null | undefined);
   if ('realEstateId' in data) await assertRealEstateOwned(asset.userId, (data as any).realEstateId);
   if ('goldHoldingId' in data) await assertGoldHoldingOwned(asset.userId, (data as any).goldHoldingId);
-  return prisma.asset.update({ where: { id }, data, include: assetInclude });
+  const writeData = {
+    ...data,
+    vehicleType: normalizeVehicleType(nextAssetType, nextVehicleType as string | null | undefined),
+  } as Prisma.AssetUpdateInput;
+  try {
+    return await prisma.asset.update({ where: { id }, data: writeData, include: assetInclude });
+  } catch (err) {
+    return translateLinkConflict(err);
+  }
 }
 
 /**
@@ -145,11 +204,12 @@ export async function deleteAsset(requesterId: string, id: string, requesterRole
   if (!asset) throw AppError.notFound('Asset');
 
   // A secured loan must always name its collateral, so deleting an asset out from under
-  // one would leave that loan violating the rule it was created against. The FK is
-  // ON DELETE SET NULL, which would silently produce exactly that state.
+  // one would leave that loan violating the rule it was created against. Loan.assetId is
+  // ON DELETE RESTRICT, so an unguarded delete would fail with a raw FK violation instead
+  // of this clean 409 — same shape as deleteRealEstate's guard, which mirrors this check.
   if (asset.loans.length > 0) {
     throw AppError.conflict(
-      `This asset secures ${asset.loans.length} loan(s). Unlink or delete them first.`,
+      `This asset secures ${asset.loans.length} loan(s). Delete those loans first, or record a sale instead.`,
     );
   }
 

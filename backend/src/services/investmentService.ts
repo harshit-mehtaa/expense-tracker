@@ -602,9 +602,17 @@ export async function recordGoldHoldingSale(
     }
   }
 
+  const soldAt = new Date(input.date);
   return prisma.goldHolding.update({
     where: { id },
-    data: { soldAt: new Date(input.date), salePrice: input.salePrice },
+    data: {
+      soldAt,
+      salePrice: input.salePrice,
+      // Mirrors recordRealEstateSale — same reason: the Loans.tsx collateral picker
+      // filters on the ASSET's own soldAt, not a join through goldHolding, so a linked
+      // asset must be marked sold too or it keeps looking available for a new loan.
+      ...(linkedAsset ? { asset: { update: { soldAt, salePrice: input.salePrice } } } : {}),
+    },
   });
 }
 
@@ -755,6 +763,13 @@ export async function getRealEstate(userId: string | undefined, requesterId: str
   return { properties, summary: { totalPurchase, totalCurrent, unrealisedGain: totalCurrent - totalPurchase, totalMonthlyRental: totalRental } };
 }
 
+/**
+ * Creating a property auto-creates its collateral Asset in the same nested write — no
+ * separate "add an asset, then link it to this property" step. Name/value/purchaseDate
+ * are copied once, at creation; a later rename or revaluation does NOT propagate (see
+ * the Asset relation's own comment) — net worth reads RealEstate directly regardless, so
+ * the only cost of that drift is a stale label on the rare collateral-picker option.
+ */
 export async function createRealEstate(userId: string, data: RealEstateWriteInput) {
   const { owners, ...propertyData } = data as any;
   const ownerRows = normalizeRealEstateOwners(userId, owners);
@@ -765,6 +780,15 @@ export async function createRealEstate(userId: string, data: RealEstateWriteInpu
       ...propertyData,
       userId,
       owners: { create: ownerRows.map((owner) => ({ userId: owner.userId, sharePercent: owner.sharePercent })) },
+      asset: {
+        create: {
+          userId,
+          assetType: 'PROPERTY',
+          name: propertyData.propertyName,
+          value: propertyData.currentValue,
+          purchaseDate: propertyData.purchaseDate,
+        },
+      },
     } as any,
     include: realEstateInclude,
   });
@@ -794,9 +818,32 @@ export async function updateRealEstate(requesterId: string, id: string, data: Re
   return decorateRealEstateProperty(property);
 }
 
+/**
+ * The linked Asset (every property has one — see createRealEstate) cascade-deletes with
+ * this row at the DB level. The check below guards against a raw foreign-key violation
+ * from a DIFFERENT direction: Loan.assetId -> Asset is ON DELETE RESTRICT, and that FK
+ * is never relaxed by closing a loan — a closed loan still keeps its historical assetId
+ * so its record can still say what secured it. So unlike recordRealEstateSale's guard
+ * (which only cares about OPEN loans, because a sale never touches this FK), a delete
+ * must block on ANY loan referencing the asset, open or closed — mirrors
+ * assetService.deleteAsset's own `asset.loans.length > 0` check exactly, for the same
+ * reason. Found live: an "active-loan-only" version of this check let a CLOSED loan's
+ * asset reach prisma.realEstate.delete() and fail with a raw P2003 instead of a 409.
+ */
 export async function deleteRealEstate(requesterId: string, id: string, requesterRole = 'MEMBER') {
-  const r = await prisma.realEstate.findFirst({ where: userRealEstateWriteWhere(id, requesterId, requesterRole) });
+  const r = await prisma.realEstate.findFirst({
+    where: userRealEstateWriteWhere(id, requesterId, requesterRole),
+    include: { asset: { select: { id: true, loans: { select: { id: true } } } } },
+  });
   if (!r) throw AppError.notFound('Property');
+
+  if (r.asset && r.asset.loans.length > 0) {
+    throw AppError.conflict(
+      `This property secures ${r.asset.loans.length} loan(s), including closed ones whose records still reference it. `
+      + 'Delete those loans first if you really want to remove this property, or record a sale instead to keep the history.',
+    );
+  }
+
   return prisma.realEstate.delete({ where: { id } });
 }
 
@@ -829,9 +876,18 @@ export async function recordRealEstateSale(
     }
   }
 
+  const soldAt = new Date(input.date);
   return prisma.realEstate.update({
     where: { id },
-    data: { soldAt: new Date(input.date), salePrice: input.salePrice },
+    data: {
+      soldAt,
+      salePrice: input.salePrice,
+      // Every property auto-links its own Asset now, and Loans.tsx's collateral picker
+      // filters on the ASSET's own soldAt (not a join through realEstate) — without
+      // mirroring the sale here, a sold property's asset would keep looking available to
+      // secure a brand-new loan.
+      ...(linkedAsset ? { asset: { update: { soldAt, salePrice: input.salePrice } } } : {}),
+    },
   });
 }
 
