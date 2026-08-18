@@ -4,6 +4,7 @@ import { Search, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { formatDate } from '@/lib/dateFormat';
+import { useDebounced } from '@/hooks/useDebounced';
 import { INRDisplay } from './INRDisplay';
 
 interface Props {
@@ -18,15 +19,6 @@ interface TxResult {
   type: 'INCOME' | 'EXPENSE' | 'TRANSFER';
   date: string;
   categoryName?: string;
-}
-
-function useDebounced<T>(value: T, delay: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(value), delay);
-    return () => clearTimeout(t);
-  }, [value, delay]);
-  return debounced;
 }
 
 export function CommandPalette({ open, onClose }: Props) {

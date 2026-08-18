@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import api from '@/lib/api';
 import { formatDate, formatNextOccurrence, toDateInputValue } from '@/lib/dateFormat';
+import { useDebounced } from '@/hooks/useDebounced';
 import { investmentsApi } from '@/api/investments';
 import { insuranceApi, type InsurancePolicy } from '@/api/insurance';
 import { loansApi } from '@/api/loans';
@@ -2477,6 +2478,17 @@ export default function TransactionsPage() {
   const { data: categories = [] } = useCategories();
   const { data: budgetActuals = [] } = useBudgetsVsActuals(selectedFY, viewUserId);
 
+  // Typed text is debounced before it reaches the query — search is server-side (it goes
+  // over the wire in fetchTransactions), so every keystroke would otherwise fire its own
+  // request. The chip and date filters are NOT routed through this: they change on click,
+  // not on every keystroke, so they stay instant.
+  const debouncedSearch = useDebounced(filters.search, 300);
+  const isSearchPending = filters.search !== debouncedSearch;
+  const queryFilters = useMemo(
+    () => ({ ...filters, search: debouncedSearch }),
+    [filters, debouncedSearch],
+  );
+
   const {
     data,
     isLoading,
@@ -2484,10 +2496,16 @@ export default function TransactionsPage() {
     fetchNextPage,
     hasNextPage,
   } = useInfiniteQuery({
-    queryKey: ['transactions', selectedFY, filters, viewUserId],
-    queryFn: ({ pageParam }) => fetchTransactions(selectedFY, filters, pageParam as string | undefined, viewUserId),
+    queryKey: ['transactions', selectedFY, queryFilters, viewUserId],
+    queryFn: ({ pageParam }) => fetchTransactions(selectedFY, queryFilters, pageParam as string | undefined, viewUserId),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.pagination.hasMore ? lastPage.pagination.nextCursor : undefined,
+    // The actual cursor fix: on a query-key change, keep showing the previous page's
+    // data instead of going straight to `pending`. Without this, EVERY keystroke changed
+    // the key, isLoading flipped true, and `if (isLoading) return <PageLoader />` threw
+    // away the entire page — search input included — so the input lost focus after one
+    // letter and a fresh, unfocused one mounted when the new results landed.
+    placeholderData: keepPreviousData,
   });
 
   // Avatar colour per member, keyed by user id and assigned by position in the family
@@ -2598,11 +2616,21 @@ export default function TransactionsPage() {
       {activeTab === 'transactions' && showFilters && (
         <div className="rounded-xl border border-border bg-card p-4 space-y-4">
           {/* Row 1: Search */}
-          <Input
-            placeholder="Search description or remark…"
-            value={filters.search}
-            onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
-          />
+          <div className="relative">
+            <Input
+              placeholder="Search description or remark…"
+              value={filters.search}
+              onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
+            />
+            {/* The list below is still showing the PREVIOUS term's results while this one
+                settles — keepPreviousData is what keeps the input mounted, and that is
+                the trade it makes. Say so, rather than let stale rows look current. */}
+            {isSearchPending && (
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                Searching…
+              </span>
+            )}
+          </div>
 
           {/* Row 2: Type chips */}
           <div className="space-y-1.5">
@@ -3033,7 +3061,14 @@ export default function TransactionsPage() {
 
       {activeTab === 'transactions' && hasNextPage && (
         <div className="flex justify-center pt-2">
-          <Button variant="outline" onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+          {/* Disabled while a new search is settling: hasNextPage/total here still
+              describe the PREVIOUS term (keepPreviousData), so paging further would
+              append results that do not belong to what is about to be shown. */}
+          <Button
+            variant="outline"
+            onClick={() => fetchNextPage()}
+            disabled={isFetchingNextPage || isSearchPending}
+          >
             {isFetchingNextPage ? 'Loading…' : `Load more (${transactions.length} of ${total} shown)`}
           </Button>
         </div>

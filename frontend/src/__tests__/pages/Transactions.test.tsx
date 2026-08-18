@@ -16,6 +16,7 @@
  * page three ways and stops there.
  */
 import { describe, it, expect } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import { screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import TransactionsPage from '@/pages/Transactions';
@@ -262,5 +263,125 @@ describe('Transactions — the category picker is a tree', () => {
     expect(cab.textContent).toContain('└');
     // Non-breaking, because browsers collapse ordinary leading spaces in an <option>.
     expect(cab.textContent!.startsWith('\u00A0')).toBe(true);
+  });
+});
+
+// ─── Search: the cursor bug ───────────────────────────────────────────────────
+
+/**
+ * `search` is server-side (fetchTransactions sends it as a query param) and it sat
+ * inside the useInfiniteQuery key, so every keystroke produced a NEW key. With no
+ * placeholderData, a new key has no cached data — status is `pending`, isLoading flips
+ * true, and `if (isLoading) return <PageLoader />` replaced the WHOLE page, search input
+ * included. A fresh, unfocused input mounted once the new results landed. One letter,
+ * cursor gone.
+ *
+ * Real timers throughout — 300ms debounce, well inside findBy*'s default 1000ms budget.
+ * See CommandPalette.test.tsx for the same call.
+ */
+describe('Transactions page — search', () => {
+  const openFilters = async (user: ReturnType<typeof userEvent.setup>) => {
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+    await user.click(screen.getByRole('button', { name: /filters/i }));
+    return screen.findByPlaceholderText(/search description or remark/i);
+  };
+
+  it('VQ1: keeps focus across a whole word, not just the second letter', async () => {
+    const user = userEvent.setup();
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers() });
+
+    const search = await openFilters(user);
+    await user.type(search, 'grocer');
+
+    // The old bug: the SECOND keystroke unmounted this element and a new one took its
+    // place, unfocused. Asserting focus after typing more than one letter is the point.
+    await waitFor(() => expect(search).toHaveFocus());
+    expect(search).toHaveValue('grocer');
+  });
+
+  it('VQ2: fires exactly one request, for the settled term, not one per keystroke', async () => {
+    const user = userEvent.setup();
+    const seenSearchParams: string[] = [];
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [
+        http.get(url('/transactions'), ({ request }) => {
+          seenSearchParams.push(new URL(request.url).searchParams.get('search') ?? '');
+          return HttpResponse.json({ data: [TX], pagination: PAGINATION });
+        }),
+        ...txHandlers().slice(1),
+      ],
+    });
+
+    const search = await openFilters(user);
+    await user.type(search, 'grocery');
+
+    // Wait for the debounced request to land, then confirm nothing further arrives.
+    await waitFor(() => expect(seenSearchParams).toContain('grocery'));
+    await new Promise((r) => setTimeout(r, 350));
+
+    // One request on mount (search=''), one for the settled term. Not one per letter.
+    expect(seenSearchParams).toEqual(['', 'grocery']);
+  });
+
+  it('VQ3: a genuine first load still shows PageLoader (the guard is not dead)', async () => {
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers() });
+    // Queried synchronously, same as the smoke test above — this is the transition, not
+    // the settled state.
+    expect(screen.getByRole('status')).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+  });
+
+  it('VQ4: a chip filter still refetches correctly alongside a debounced search', async () => {
+    const user = userEvent.setup();
+    const seenTypeParams: Array<string | null> = [];
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [
+        http.get(url('/transactions'), ({ request }) => {
+          seenTypeParams.push(new URL(request.url).searchParams.get('type'));
+          return HttpResponse.json({ data: [TX], pagination: PAGINATION });
+        }),
+        ...txHandlers().slice(1),
+      ],
+    });
+
+    await openFilters(user);
+    // Chips are click-driven, not typed — they must not be debounced.
+    await user.click(screen.getByRole('button', { name: /^expense$/i }));
+
+    await waitFor(() => expect(seenTypeParams).toContain('EXPENSE'));
+  });
+
+  it('VQ5: infinite scroll still works after a search settles', async () => {
+    const user = userEvent.setup();
+    const PAGE_1 = { total: 2, hasMore: true, nextCursor: 'cursor-2' };
+    const PAGE_2 = { total: 2, hasMore: false, nextCursor: null };
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [
+        http.get(url('/transactions'), ({ request }) => {
+          const cursor = new URL(request.url).searchParams.get('cursor');
+          return HttpResponse.json(
+            cursor === 'cursor-2'
+              ? { data: [{ ...TX, id: 'tx-2', description: 'Grocery run 2' }], pagination: PAGE_2 }
+              : { data: [TX], pagination: PAGE_1 },
+          );
+        }),
+        ...txHandlers().slice(1),
+      ],
+    });
+
+    const search = await openFilters(user);
+    await user.type(search, 'grocery');
+    await waitFor(() => expect(screen.getAllByText('Grocery run').length).toBeGreaterThan(0));
+    // The debounce has to settle — Load-more is deliberately disabled while it has not
+    // (VQ5 continued: paging a stale term must not append results for the new one).
+    await waitFor(() => expect(screen.getByRole('button', { name: /load more/i })).toBeEnabled());
+
+    await user.click(screen.getByRole('button', { name: /load more/i }));
+    await waitFor(() => {
+      expect(screen.getAllByText('Grocery run 2').length).toBeGreaterThan(0);
+    });
   });
 });
