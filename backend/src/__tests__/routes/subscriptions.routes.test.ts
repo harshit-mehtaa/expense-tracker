@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
+import { AppError } from '../../utils/AppError';
 
 const MEMBER_USER = { userId: 'u1', email: 'a@b.com', role: 'MEMBER' as const };
 
@@ -171,7 +172,31 @@ describe('empty-string form fields are normalized at the API boundary', () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  it('a partial PUT leaves omitted fields ALONE rather than nulling them', async () => {
+  it('lets a subscription\'s start date be edited', async () => {
+    const res = await request(app).put('/api/subscriptions/sub-1').send({ startDate: '2024-06-01' });
+
+    expect(res.status).toBe(200);
+    expect(updateMock.mock.calls[0][2]).toMatchObject({ startDate: '2024-06-01' });
+  });
+
+  it('422s an unparseable start date rather than reaching the service', async () => {
+    const res = await request(app).put('/api/subscriptions/sub-1').send({ startDate: 'nonsense' });
+    expect(res.status).toBe(422);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('leaves startDate undefined (absent) when the PUT does not mention it', async () => {
+    await request(app).put('/api/subscriptions/sub-1').send({ name: 'Renamed' });
+    expect(updateMock.mock.calls[0][2].startDate).toBeUndefined();
+  });
+
+  it('propagates the service\'s "before the next price change" rejection', async () => {
+    updateMock.mockRejectedValue(AppError.badRequest('Start date must be before the next recorded price change on 2026-07-01'));
+    const res = await request(app).put('/api/subscriptions/sub-1').send({ startDate: '2026-08-01' });
+    expect(res.status).toBe(400);
+  });
+
+    it('a partial PUT leaves omitted fields ALONE rather than nulling them', async () => {
     // The mirror image of the empty-string bug: chaining .transform() after .optional()
     // ran the transform on an ABSENT key too, so PUT {name} arrived as an explicit null
     // for vendor/notes/cancellationUrl/trialEndDate and wiped all four. The field it

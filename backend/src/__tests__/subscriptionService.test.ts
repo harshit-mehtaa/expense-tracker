@@ -13,7 +13,7 @@ vi.mock('../config/prisma', () => {
       findMany: vi.fn(), findFirst: vi.fn(), findFirstOrThrow: vi.fn(),
       create: vi.fn(), update: vi.fn(), delete: vi.fn(),
     },
-    subscriptionPrice: { create: vi.fn(), upsert: vi.fn() },
+    subscriptionPrice: { create: vi.fn(), upsert: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     recurringRule: { create: vi.fn(), update: vi.fn() },
     transaction: { create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     bankAccount: { findFirst: vi.fn() },
@@ -395,6 +395,7 @@ describe('updateSubscription', () => {
   beforeEach(() => {
     subMock.findFirst.mockResolvedValue({ ...MOCK_SUB, recurringRule: { id: 'rule-1' } });
     subMock.findFirstOrThrow.mockResolvedValue(MOCK_SUB);
+    priceMock.findMany.mockResolvedValue([]);
   });
 
   it('touches the rule only when the schedule actually changed', async () => {
@@ -410,6 +411,90 @@ describe('updateSubscription', () => {
   it('404s for someone else\'s subscription', async () => {
     subMock.findFirst.mockResolvedValue(null);
     await expect(updateSubscription('u2', 'sub-1', { name: 'x' })).rejects.toThrow(/not found/i);
+  });
+
+  // ── Editing the start date ──────────────────────────────────────────────────
+  // startDate is metadata (never feeds billing — see createSubscription's own comment on
+  // the incident this schema separation prevents), but it seeded the OPENING
+  // SubscriptionPrice row's effectiveFrom at creation. Left behind on an edit, the two
+  // disagree and priceAsOf() returns null for the gap — early charges look unexplained.
+
+  it('VQ1: moves the opening price row\'s effectiveFrom, leaving amount and note untouched', async () => {
+    const opening = { id: 'p-1', amount: 499, effectiveFrom: new Date('2025-01-01'), note: 'Launch price' };
+    priceMock.findMany.mockResolvedValue([opening]);
+
+    await updateSubscription('u1', 'sub-1', { startDate: '2024-12-15' });
+
+    expect(priceMock.update).toHaveBeenCalledWith({
+      where: { id: 'p-1' },
+      data: { effectiveFrom: new Date('2024-12-15') },
+    });
+    // amount/note are simply absent from the update payload — proving they were never
+    // touched, not merely unchanged by coincidence.
+    const { data } = priceMock.update.mock.calls[0][0];
+    expect(data).not.toHaveProperty('amount');
+    expect(data).not.toHaveProperty('note');
+  });
+
+  it('also updates Subscription.startDate itself', async () => {
+    priceMock.findMany.mockResolvedValue([{ id: 'p-1', amount: 499, effectiveFrom: new Date('2025-01-01') }]);
+    await updateSubscription('u1', 'sub-1', { startDate: '2024-12-15' });
+    expect(subMock.update.mock.calls[0][0].data).toMatchObject({ startDate: new Date('2024-12-15') });
+  });
+
+  it('VQ2: a second, real price row is never moved or overwritten', async () => {
+    const opening = { id: 'p-1', amount: 499, effectiveFrom: new Date('2025-01-01') };
+    const priceRise = { id: 'p-2', amount: 649, effectiveFrom: new Date('2026-07-01') };
+    priceMock.findMany.mockResolvedValue([opening, priceRise]);
+
+    await updateSubscription('u1', 'sub-1', { startDate: '2024-12-15' });
+
+    expect(priceMock.update).toHaveBeenCalledTimes(1);
+    expect(priceMock.update).toHaveBeenCalledWith({
+      where: { id: 'p-1' },
+      data: { effectiveFrom: new Date('2024-12-15') },
+    });
+  });
+
+  it('VQ3: refuses a start date on/after the next recorded price change, without touching anything', async () => {
+    const opening = { id: 'p-1', amount: 499, effectiveFrom: new Date('2025-01-01') };
+    const priceRise = { id: 'p-2', amount: 649, effectiveFrom: new Date('2026-07-01') };
+    priceMock.findMany.mockResolvedValue([opening, priceRise]);
+
+    await expect(
+      updateSubscription('u1', 'sub-1', { startDate: '2026-07-01' }), // exactly on the boundary
+    ).rejects.toThrow(/before the next recorded price change/i);
+    expect(priceMock.update).not.toHaveBeenCalled();
+    expect(subMock.update).not.toHaveBeenCalled();
+
+    await expect(
+      updateSubscription('u1', 'sub-1', { startDate: '2026-08-01' }), // past it
+    ).rejects.toThrow(/before the next recorded price change/i);
+  });
+
+  it('VQ4: does not touch the recurring rule\'s schedule — the exact incident startDate handling exists to prevent', async () => {
+    priceMock.findMany.mockResolvedValue([{ id: 'p-1', amount: 499, effectiveFrom: new Date('2025-01-01') }]);
+    await updateSubscription('u1', 'sub-1', { startDate: '2020-01-01' });
+    expect(ruleMock.update).not.toHaveBeenCalled();
+  });
+
+  it('VQ6: a subscription with only one price row (the common case) updates cleanly', async () => {
+    priceMock.findMany.mockResolvedValue([{ id: 'p-1', amount: 499, effectiveFrom: new Date('2025-01-01') }]);
+    await expect(updateSubscription('u1', 'sub-1', { startDate: '2024-06-01' })).resolves.toBeDefined();
+    expect(priceMock.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('defensive: zero price rows updates startDate alone rather than crashing', async () => {
+    priceMock.findMany.mockResolvedValue([]);
+    await expect(updateSubscription('u1', 'sub-1', { startDate: '2024-06-01' })).resolves.toBeDefined();
+    expect(priceMock.update).not.toHaveBeenCalled();
+    expect(subMock.update.mock.calls[0][0].data).toMatchObject({ startDate: new Date('2024-06-01') });
+  });
+
+  it('leaves price rows alone entirely when startDate is not part of the update', async () => {
+    await updateSubscription('u1', 'sub-1', { name: 'Renamed' });
+    expect(priceMock.findMany).not.toHaveBeenCalled();
+    expect(priceMock.update).not.toHaveBeenCalled();
   });
 
   // ── How it is paid ──────────────────────────────────────────────────────────

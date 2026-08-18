@@ -511,14 +511,12 @@ export default function SubscriptionsPage() {
                     {...register('startDate')}
                     id="sub-startDate"
                     type="date"
-                    disabled={editing !== null}
-                    readOnly={editing !== null}
                   />
-                  {!editing && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      When you started paying. Billing begins today — this is for your records.
-                    </p>
-                  )}
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {editing
+                      ? 'Metadata only — correcting it never changes billing or what you were charged.'
+                      : 'When you started paying. Billing begins today — this is for your records.'}
+                  </p>
                   {errors.startDate && <p className="text-xs text-destructive">{errors.startDate.message}</p>}
                 </div>
                 <div>
@@ -605,9 +603,8 @@ export default function SubscriptionsPage() {
 
               {editing && (
                 <p className="text-xs text-muted-foreground">
-                  Amount and start date are fixed here on purpose. Use “Price change” to
-                  record a new price from a date, so past charges keep the price you
-                  actually paid.
+                  Amount is fixed here on purpose. Use “Price change” to record a new
+                  price from a date, so past charges keep the price you actually paid.
                 </p>
               )}
 

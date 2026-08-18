@@ -310,7 +310,8 @@ describe('Subscriptions page — destructive and misleading actions', () => {
 
   it('does not let the edit form pretend the amount is editable', async () => {
     // It renders Amount, but updateSchema has no `amount` — Zod strips it, so the user
-    // typed a new price, saw a success, and nothing changed.
+    // typed a new price, saw a success, and nothing changed. Start date is NOT the same
+    // case — it is metadata, now genuinely editable; see "editing the start date" below.
     const user = userEvent.setup();
 
     renderPage(<SubscriptionsPage />, {
@@ -322,7 +323,6 @@ describe('Subscriptions page — destructive and misleading actions', () => {
     await screen.findByRole('heading', { name: /edit subscription/i });
 
     expect(screen.getByLabelText(/^Amount/i)).toBeDisabled();
-    expect(screen.getByLabelText(/Start date/i)).toBeDisabled();
   });
 
   it('resumes from tomorrow, so it does not bill the instant you click', async () => {
@@ -543,5 +543,97 @@ describe('Subscriptions page — payment method', () => {
     expect(await screen.findByLabelText(/payment type/i)).toHaveValue('UPI');
     expect(await screen.findByLabelText(/paid from/i)).toHaveValue('acct-1');
     expect(await screen.findByLabelText(/^category$/i)).toHaveValue('cat-1');
+  });
+});
+
+// ─── Editing the start date ──────────────────────────────────────────────────
+
+/**
+ * The date input was hard-disabled during edit, grouped with amount under "fixed here on
+ * purpose" — but the reason (protecting price history) only actually applies to amount.
+ * startDate is metadata; the backend now moves the opening price row's date along with
+ * it, so unlocking the field here does not weaken that guarantee.
+ */
+describe('Subscriptions page — editing the start date', () => {
+  it('is editable when editing an existing subscription', async () => {
+    const user = userEvent.setup();
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
+    });
+
+    await screen.findByText('Netflix');
+    await user.click(screen.getByRole('button', { name: /edit/i }));
+
+    const startDate = await screen.findByLabelText(/start date/i);
+    expect(startDate).not.toBeDisabled();
+    expect(startDate).not.toHaveAttribute('readonly');
+  });
+
+  it('amount stays locked, unlike start date', async () => {
+    const user = userEvent.setup();
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
+    });
+
+    await screen.findByText('Netflix');
+    await user.click(screen.getByRole('button', { name: /edit/i }));
+
+    expect(await screen.findByLabelText(/amount/i)).toBeDisabled();
+    // The old copy said BOTH were fixed — now only amount should read that way.
+    expect(screen.getByText(/amount is fixed here on purpose/i)).toBeInTheDocument();
+    expect(screen.queryByText(/amount and start date are fixed/i)).not.toBeInTheDocument();
+  });
+
+  it('sends the edited start date on save', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions',
+      user: MEMBER_USER,
+      handlers: [
+        ...handlers(),
+        http.put(url('/subscriptions/sub-1'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: NETFLIX });
+        }),
+      ],
+    });
+
+    await screen.findByText('Netflix');
+    await user.click(screen.getByRole('button', { name: /edit/i }));
+
+    const startDate = await screen.findByLabelText(/start date/i);
+    await user.clear(startDate);
+    await user.type(startDate, '2024-06-01');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body.startDate).toBe('2024-06-01');
+  });
+
+  it('surfaces the backend\'s "before the next price change" rejection as a toast', async () => {
+    const user = userEvent.setup();
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions',
+      user: MEMBER_USER,
+      handlers: [
+        ...handlers(),
+        http.put(url('/subscriptions/sub-1'), () => HttpResponse.json(
+          { message: 'Start date must be before the next recorded price change on 2026-07-01' },
+          { status: 400 },
+        )),
+      ],
+    });
+
+    await screen.findByText('Netflix');
+    await user.click(screen.getByRole('button', { name: /edit/i }));
+    const startDate = await screen.findByLabelText(/start date/i);
+    await user.clear(startDate);
+    await user.type(startDate, '2026-08-01');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/before the next recorded price change/i).length).toBeGreaterThan(0);
+    });
   });
 });

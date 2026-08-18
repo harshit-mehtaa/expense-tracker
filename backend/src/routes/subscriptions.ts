@@ -93,6 +93,10 @@ const updateSchema = z.object({
   trialEndDate: optionalDateString,
   frequency: FREQUENCY.optional(),
   nextRunDate: optionalDateString,
+  // Metadata only — never NULL in the DB, so `optionalDateString`'s clear-to-null
+  // behavior would be wrong here. Absent means "leave alone"; a bad string 422s instead
+  // of reaching Prisma as an Invalid Date.
+  startDate: z.string().refine((v) => !Number.isNaN(new Date(v).getTime()), 'Invalid date').optional(),
   // Omitted here originally, so the form could set a payment method once and never
   // correct it — a silent read-only field is worse than no field.
   paymentMode: PAYMENT_MODE.nullable().optional(),

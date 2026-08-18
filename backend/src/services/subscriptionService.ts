@@ -295,6 +295,11 @@ export interface UpdateSubscriptionInput {
   paymentMode?: string | null;
   bankAccountId?: string | null;
   categoryId?: string | null;
+  /** Metadata — when the user actually started paying. Moves the OPENING price row's
+   *  effectiveFrom with it (amount and note untouched), so the two never disagree. Never
+   *  feeds billing: `createSubscription` clamps the first real charge to today regardless
+   *  of this value, and nothing here changes that. */
+  startDate?: string;
 }
 
 /**
@@ -327,6 +332,38 @@ export async function updateSubscription(
   }
 
   await prisma.$transaction(async (tx) => {
+    // startDate is metadata (see UpdateSubscriptionInput) but it seeded the OPENING
+    // SubscriptionPrice row at creation — `effectiveFrom: startDate`
+    // (createSubscription, above). Left behind, the two disagree and priceAsOf() returns
+    // null for the gap between them, silently making early charges "unexplained." The
+    // opening row is identified by being the EARLIEST effectiveFrom, not by insertion
+    // order — recordPriceChange has no guard against backdating before startDate, so
+    // "first created" would be the wrong row to trust.
+    if (data.startDate !== undefined) {
+      const newStartDate = new Date(data.startDate);
+      const prices = await tx.subscriptionPrice.findMany({
+        where: { subscriptionId: id },
+        orderBy: { effectiveFrom: 'asc' },
+      });
+      const [opening, nextPrice] = prices;
+      if (nextPrice && newStartDate.getTime() >= nextPrice.effectiveFrom.getTime()) {
+        throw AppError.badRequest(
+          `Start date must be before the next recorded price change on ${nextPrice.effectiveFrom.toISOString().slice(0, 10)}`,
+        );
+      }
+      if (opening) {
+        // Only `effectiveFrom` moves — `amount`/`note` are never in this payload. Does
+        // not contradict recordPriceChange's "never edits an existing row": that
+        // invariant is about the recorded PRICE (what was actually paid), which this
+        // never touches. Correcting when it started is not the same claim as correcting
+        // what it cost.
+        await tx.subscriptionPrice.update({
+          where: { id: opening.id },
+          data: { effectiveFrom: newStartDate },
+        });
+      }
+    }
+
     await tx.subscription.update({
       where: { id },
       data: {
@@ -337,6 +374,7 @@ export async function updateSubscription(
         ...(data.trialEndDate !== undefined && {
           trialEndDate: data.trialEndDate ? new Date(data.trialEndDate) : null,
         }),
+        ...(data.startDate !== undefined && { startDate: new Date(data.startDate) }),
       },
     });
 
