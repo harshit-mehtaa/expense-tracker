@@ -15,6 +15,10 @@ import { ownerScopedWhere } from '../utils/resolveTargetUserId';
 const assetInclude = {
   realEstate: { select: { id: true, propertyName: true, currentValue: true } },
   goldHolding: { select: { id: true, description: true, quantityGrams: true } },
+  // Deliberately minimal — sumAssured, premiumAmount, premiumFrequency, nomineeName,
+  // agentName, agentContact, policyNumber, and the tax-eligibility flags are financially
+  // sensitive and belong to the Insurance page, not every asset fetch.
+  insurancePolicy: { select: { id: true, policyType: true, providerName: true, policyName: true, endDate: true } },
   loans: { select: { id: true, lenderName: true, loanType: true, outstandingBalance: true } },
 } as const;
 
@@ -67,6 +71,25 @@ export function assertVehicleTypeRequired(assetType: string, vehicleType: string
 }
 
 /**
+ * A linked policy must (a) belong to the asset's owner and (b) actually be a VEHICLE
+ * policy — `assetInclude` returns the provider and policy name, so an unvalidated id
+ * would leak another member's insurance details through the asset. Two separate checks
+ * on purpose: a single combined-WHERE query can't distinguish "not yours" (404) from
+ * "not a vehicle policy" (400), and both need to be independently reachable to satisfy
+ * this repo's 100%-branch coverage gate.
+ */
+async function assertInsurancePolicyOwned(userId: string, insurancePolicyId: string | null | undefined) {
+  if (!insurancePolicyId) return;
+  const policy = await prisma.insurancePolicy.findFirst({
+    where: { id: insurancePolicyId, userId }, select: { id: true, policyType: true },
+  });
+  if (!policy) throw AppError.notFound('Insurance policy');
+  if (policy.policyType !== 'VEHICLE') {
+    throw AppError.badRequest('Only a vehicle insurance policy can be linked to a vehicle asset');
+  }
+}
+
+/**
  * A realEstateId/goldHoldingId conflict (the property/holding already has a linked
  * asset — createRealEstate auto-creates one for every property now) is caught here
  * rather than pre-checked: a pre-check-then-insert has a TOCTOU race under concurrent
@@ -83,14 +106,18 @@ function translateLinkConflict(err: unknown): never {
 }
 
 /**
- * A non-VEHICLE asset must never carry a vehicleType — enforced unconditionally, not
- * just when a type CHANGES away from VEHICLE, since a client could send
- * `{assetType: 'OTHER', vehicleType: 'FOUR_WHEELER'}` on create, or send vehicleType on
- * an update alongside an unrelated field while a hidden form input still holds a stale
- * value (react-hook-form keeps unmounted-but-registered fields by default).
+ * Vehicle-only fields must never survive on a non-VEHICLE asset — enforced
+ * unconditionally, not just when a type CHANGES away from VEHICLE, since a client could
+ * send `{assetType: 'OTHER', vehicleType: 'FOUR_WHEELER', ...}` on create, or send any
+ * of these on an update alongside an unrelated field while a hidden form input still
+ * holds a stale value (react-hook-form keeps unmounted-but-registered fields by
+ * default). Keep this list in sync with routes/assets.ts's Zod schema field list.
  */
-function normalizeVehicleType(assetType: string, vehicleType: string | null | undefined) {
-  return assetType === 'VEHICLE' ? vehicleType : null;
+const VEHICLE_ONLY_FIELDS = ['vehicleType', 'registrationNumber', 'make', 'model', 'fuelType', 'insurancePolicyId'] as const;
+
+function clearVehicleOnlyFields(assetType: string): Record<string, null> {
+  if (assetType === 'VEHICLE') return {};
+  return Object.fromEntries(VEHICLE_ONLY_FIELDS.map((field) => [field, null]));
 }
 
 export async function createAsset(userId: string, data: Omit<Prisma.AssetCreateInput, 'user'>) {
@@ -98,12 +125,16 @@ export async function createAsset(userId: string, data: Omit<Prisma.AssetCreateI
   assertVehicleTypeRequired(assetType, (data as any).vehicleType);
   await assertRealEstateOwned(userId, (data as any).realEstateId);
   await assertGoldHoldingOwned(userId, (data as any).goldHoldingId);
+  // Only validate for a VEHICLE asset — a non-VEHICLE create's insurancePolicyId (stale
+  // or otherwise) is about to be nulled by clearVehicleOnlyFields regardless, so there is
+  // nothing to check it against.
+  if (assetType === 'VEHICLE') await assertInsurancePolicyOwned(userId, (data as any).insurancePolicyId);
   try {
     return await prisma.asset.create({
       data: {
         ...data,
         userId,
-        vehicleType: normalizeVehicleType(assetType, (data as any).vehicleType),
+        ...clearVehicleOnlyFields(assetType),
       } as Prisma.AssetUncheckedCreateInput,
       include: assetInclude,
     });
@@ -130,9 +161,15 @@ export async function updateAsset(
   assertVehicleTypeRequired(nextAssetType, nextVehicleType as string | null | undefined);
   if ('realEstateId' in data) await assertRealEstateOwned(asset.userId, (data as any).realEstateId);
   if ('goldHoldingId' in data) await assertGoldHoldingOwned(asset.userId, (data as any).goldHoldingId);
+  // Same skip-when-not-VEHICLE reasoning as createAsset — a switch away from VEHICLE (or
+  // an unrelated edit to an asset that already isn't one) must silently null a stale
+  // insurancePolicyId rather than validate it against a policy that may no longer exist.
+  if (nextAssetType === 'VEHICLE' && 'insurancePolicyId' in data) {
+    await assertInsurancePolicyOwned(asset.userId, (data as any).insurancePolicyId);
+  }
   const writeData = {
     ...data,
-    vehicleType: normalizeVehicleType(nextAssetType, nextVehicleType as string | null | undefined),
+    ...clearVehicleOnlyFields(nextAssetType),
   } as Prisma.AssetUpdateInput;
   try {
     return await prisma.asset.update({ where: { id }, data: writeData, include: assetInclude });

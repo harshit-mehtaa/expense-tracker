@@ -10,8 +10,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { loansApi, type Loan, type AmortizationRow, type LoanPrepayment } from '@/api/loans';
-import { assetsApi, ASSET_TYPES, VEHICLE_TYPES, type AssetType } from '@/api/assets';
+import { assetsApi, ASSET_TYPES, VEHICLE_TYPES, FUEL_TYPES, type AssetType } from '@/api/assets';
 import { investmentsApi } from '@/api/investments';
+import { insuranceApi } from '@/api/insurance';
 import { formatINRShort } from '@/lib/indianFormat';
 import { formatDate, formatNextOccurrence, toDateInputValue, addMonths } from '@/lib/dateFormat';
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, CustomTooltip } from '@/lib/chartUtils';
@@ -667,6 +668,7 @@ export default function LoansPage() {
   const [showNewAsset, setShowNewAsset] = useState(false);
   const [newAsset, setNewAsset] = useState({
     name: '', value: '', assetType: 'OTHER' as AssetType, purchaseDate: '', vehicleType: '',
+    registrationNumber: '', make: '', model: '', fuelType: '', insurancePolicyId: '',
   });
   /**
    * The detailed gold holding this asset stands for, when one already exists.
@@ -687,20 +689,52 @@ export default function LoansPage() {
     enabled: showNewAsset && newAsset.assetType === 'GOLD',
   });
 
+  // Same server-side-scoped pattern as linkableGold above — never an unscoped
+  // family-wide fetch filtered client-side (see Assets.tsx's identical query for the
+  // full reasoning: it would ship other members' sumAssured/policyNumber/nomineeName
+  // into the browser just to filter it away).
+  //
+  // The VEHICLE filter happens AFTER the query, not inside queryFn: Insurance.tsx caches
+  // the full, unfiltered list under this exact same key (['insurance', viewUserId]) —
+  // reshaping the data inside queryFn would poison that shared cache entry with a
+  // VEHICLE-only list for up to staleTime, silently dropping the user's other policies
+  // from the Insurance page.
+  // `?? user?.id`, not just `viewUserId`: an ADMIN with no member selected must not fall
+  // through to an unscoped fetch (getInsurancePolicies returns EVERY family member's
+  // policies for that case) — this form is already hidden in family-wide view
+  // elsewhere, but the query itself shouldn't depend on that UI guard to stay scoped.
+  const insurancePolicyOwnerId = viewUserId ?? user?.id;
+  const { data: allInsurance = [], isError: isInsuranceError } = useQuery({
+    queryKey: ['insurance', insurancePolicyOwnerId],
+    queryFn: () => insuranceApi.getAll(insurancePolicyOwnerId ? { targetUserId: insurancePolicyOwnerId } : undefined),
+    enabled: showNewAsset && newAsset.assetType === 'VEHICLE',
+  });
+  const linkableInsurance = allInsurance.filter((p) => p.policyType === 'VEHICLE');
+
   const createAssetMutation = useMutation({
     mutationFn: () => assetsApi.create({
       assetType: newAsset.assetType,
       name: newAsset.name.trim(),
       value: Number(newAsset.value) || 0,
       ...(newAsset.purchaseDate ? { purchaseDate: newAsset.purchaseDate } : {}),
-      ...(newAsset.assetType === 'VEHICLE' ? { vehicleType: newAsset.vehicleType } : {}),
+      ...(newAsset.assetType === 'VEHICLE' ? {
+        vehicleType: newAsset.vehicleType,
+        ...(newAsset.registrationNumber ? { registrationNumber: newAsset.registrationNumber } : {}),
+        ...(newAsset.make ? { make: newAsset.make } : {}),
+        ...(newAsset.model ? { model: newAsset.model } : {}),
+        ...(newAsset.fuelType ? { fuelType: newAsset.fuelType } : {}),
+        ...(newAsset.insurancePolicyId ? { insurancePolicyId: newAsset.insurancePolicyId } : {}),
+      } : {}),
       ...(newAssetLinkId && newAsset.assetType === 'GOLD' ? { goldHoldingId: newAssetLinkId } : {}),
     }, viewUserId ? { targetUserId: viewUserId } : undefined),
     onSuccess: (created) => {
       qc.invalidateQueries({ queryKey: ['assets'] });
       setValue('assetId', created.id, { shouldValidate: true });
       setShowNewAsset(false);
-      setNewAsset({ name: '', value: '', assetType: 'OTHER', purchaseDate: '', vehicleType: '' });
+      setNewAsset({
+        name: '', value: '', assetType: 'OTHER', purchaseDate: '', vehicleType: '',
+        registrationNumber: '', make: '', model: '', fuelType: '', insurancePolicyId: '',
+      });
       setNewAssetLinkId('');
     },
   });
@@ -1087,6 +1121,66 @@ export default function LoansPage() {
                               {Object.entries(VEHICLE_TYPES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                             </select>
                           </div>
+                        )}
+
+                        {newAsset.assetType === 'VEHICLE' && (
+                          <>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="space-y-1">
+                                <Label htmlFor="new-asset-make">Make (optional)</Label>
+                                <Input
+                                  id="new-asset-make"
+                                  value={newAsset.make}
+                                  onChange={(e) => setNewAsset((p) => ({ ...p, make: e.target.value }))}
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <Label htmlFor="new-asset-model">Model (optional)</Label>
+                                <Input
+                                  id="new-asset-model"
+                                  value={newAsset.model}
+                                  onChange={(e) => setNewAsset((p) => ({ ...p, model: e.target.value }))}
+                                />
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <Label htmlFor="new-asset-registration">Registration number (optional)</Label>
+                              <Input
+                                id="new-asset-registration"
+                                value={newAsset.registrationNumber}
+                                onChange={(e) => setNewAsset((p) => ({ ...p, registrationNumber: e.target.value }))}
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label htmlFor="new-asset-fuel-type">Fuel type (optional)</Label>
+                              <select
+                                id="new-asset-fuel-type"
+                                value={newAsset.fuelType}
+                                onChange={(e) => setNewAsset((p) => ({ ...p, fuelType: e.target.value }))}
+                                className="w-full h-9 rounded-md border bg-background px-3 text-sm"
+                              >
+                                <option value="">Select…</option>
+                                {Object.entries(FUEL_TYPES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                              </select>
+                            </div>
+                            <div className="space-y-1">
+                              <Label htmlFor="new-asset-insurance">Insurance policy (optional)</Label>
+                              <select
+                                id="new-asset-insurance"
+                                value={newAsset.insurancePolicyId}
+                                onChange={(e) => setNewAsset((p) => ({ ...p, insurancePolicyId: e.target.value }))}
+                                className="w-full h-9 rounded-md border bg-background px-3 text-sm"
+                              >
+                                <option value="">Not linked</option>
+                                {linkableInsurance.map((p) => (
+                                  <option key={p.id} value={p.id}>{p.providerName} · {p.policyName}</option>
+                                ))}
+                              </select>
+                              {isInsuranceError && (
+                                <p className="text-xs text-destructive">Couldn't load insurance policies.</p>
+                              )}
+                            </div>
+                          </>
                         )}
 
                         <div className="space-y-1">

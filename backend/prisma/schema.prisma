@@ -183,6 +183,15 @@ enum VehicleType {
   OTHER
 }
 
+enum FuelType {
+  PETROL
+  DIESEL
+  ELECTRIC
+  HYBRID
+  CNG
+  OTHER
+}
+
 enum TaxSection {
   S80C
   S80D
@@ -609,6 +618,7 @@ model InsurancePolicy {
 
   user         User          @relation(fields: [userId], references: [id])
   transactions Transaction[]
+  assets       Asset[]
 
   @@index([userId])
   @@index([endDate])
@@ -864,6 +874,22 @@ model Asset {
   /// Only meaningful when assetType = VEHICLE (required by the route's Zod schema in
   /// that case); null for every other type.
   vehicleType  VehicleType?
+  /// Vehicle-only detail, same "meaningful only for VEHICLE" convention as vehicleType
+  /// but none of these are required — no backfill source exists for any pre-existing
+  /// vehicle, so requiring one would break editing every vehicle added before it.
+  /// Cleared server-side by assetService's clearVehicleOnlyFields whenever assetType
+  /// isn't VEHICLE — keep this list and routes/assets.ts's Zod fields in sync.
+  registrationNumber String?
+  make               String?
+  model              String?
+  fuelType           FuelType?
+  /// Optional link to an existing VEHICLE-type InsurancePolicy. Deliberately NOT
+  /// @unique, unlike realEstateId/goldHoldingId: those are identity links that gate
+  /// net-worth double-counting (two assets claiming the same property/holding would be
+  /// ambiguous); InsurancePolicy never participates in net worth, so no such invariant
+  /// applies, and two vehicles legitimately sharing one policy is a real case. The
+  /// correct analogue is Loan.assetId — a reference FK, not an identity FK.
+  insurancePolicyId  String?
   /// See RealEstate.soldAt — same convention. For an UNLINKED asset (realEstateId/
   /// goldHoldingId both null), this IS the sale record. For a LINKED asset, the primary
   /// record is still the RealEstate/GoldHolding row — but recordRealEstateSale/
@@ -883,10 +909,15 @@ model Asset {
   /// silently start counting in net worth as a phantom, stale-valued item.
   realEstate  RealEstate?  @relation(fields: [realEstateId], references: [id], onDelete: Cascade)
   goldHolding GoldHolding? @relation(fields: [goldHoldingId], references: [id])
+  /// SetNull, not Cascade: unlike realEstate, this Asset is not the policy's own
+  /// wrapper — it's an independent record the policy merely annotates. Deleting a
+  /// lapsed motor policy must never delete the vehicle it once insured.
+  insurancePolicy InsurancePolicy? @relation(fields: [insurancePolicyId], references: [id], onDelete: SetNull)
   loans       Loan[]
 
   @@index([userId])
   @@index([assetType])
+  @@index([insurancePolicyId])
 }
 
 /// Per-user share of a loan. Mirrors RealEstateOwner: shares must total 100%.

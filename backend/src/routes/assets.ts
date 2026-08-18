@@ -30,23 +30,64 @@ const optionalDate = z
 // `""`, which z.enum(...).optional() rejects outright (only `undefined` is skipped) —
 // every edit of a non-VEHICLE asset, and every pre-existing VEHICLE asset (vehicleType
 // is null in the DB, the form falls back to `?? ''`), 422'd on save.
+//
+// `'' -> undefined` is the right shape ONLY because vehicleType is required for VEHICLE
+// (assertVehicleTypeRequired re-rejects an undefined value there) — it must NOT be
+// reused for an optional enum like fuelType below: because the key was already present
+// pre-transform, zod keeps `key: undefined` in the output rather than omitting it, so
+// Prisma reads "no change" and the field could never be cleared once set.
 const optionalVehicleType = z
   .union([z.enum(['TWO_WHEELER', 'FOUR_WHEELER', 'OTHER']), z.literal(''), z.null()])
   .optional()
   .transform((v) => (v === '' || v == null ? undefined : v));
 
+// For a genuinely optional field (unlike vehicleType): `'' -> null` is an explicit
+// clear, not "no change". A key that's absent from the input never reaches the
+// transform on a `.partial()` schema (zod short-circuits `.optional()` on a missing key
+// before running it), so PUT omitting the field leaves it untouched either way.
+const optionalFuelType = z
+  .union([z.enum(['PETROL', 'DIESEL', 'ELECTRIC', 'HYBRID', 'CNG', 'OTHER']), z.literal(''), z.null()])
+  .optional()
+  .transform((v) => (v === '' || v == null ? null : v));
+
+// Same '' -> null clear semantics as optionalFuelType, for an id field. Also retrofitted
+// onto realEstateId/goldHoldingId below: those were plain z.string().optional(), so an
+// empty string reached Prisma as a raw FK violation (P2003) -> unhandled 500 — same bug
+// class as the one fixed above, just never hit until every asset field started getting
+// cleared through a shared form.
+const optionalLinkId = z
+  .union([z.string().min(1), z.literal(''), z.null()])
+  .optional()
+  .transform((v) => (v === '' || v == null ? null : v));
+
+// registrationNumber/make/model are cleared server-side to NULL for a non-VEHICLE asset
+// (assetService.clearVehicleOnlyFields) — without this transform, a cleared VEHICLE
+// field would store '' instead, leaving two different representations of "not set" in
+// the same column depending only on which code path cleared it.
+const optionalText = (max: number) => z
+  .union([z.string().max(max), z.literal(''), z.null()])
+  .optional()
+  .transform((v) => (v == null || v.trim() === '' ? null : v.trim()));
+
 const assetSchema = z.object({
   assetType: z.enum(['PROPERTY', 'VEHICLE', 'GOLD', 'OTHER']),
   name: z.string().min(1).max(120),
   value: z.number().nonnegative(),
-  realEstateId: z.string().optional(),
+  realEstateId: optionalLinkId,
   // Links a gold asset to the holding that already tracks it, so net worth counts it once.
-  goldHoldingId: z.string().optional(),
+  goldHoldingId: optionalLinkId,
   notes: z.string().max(1000).optional(),
   // Often approximate or unknown — kept optional for every asset type, unlike
   // vehicleType below (a pick from a small enum, cheap to require).
   purchaseDate: optionalDate,
   vehicleType: optionalVehicleType,
+  // Vehicle-only detail (assetService.clearVehicleOnlyFields nulls these server-side for
+  // any non-VEHICLE asset — keep this field list in sync with that one).
+  registrationNumber: optionalText(20),
+  make: optionalText(60),
+  model: optionalText(60),
+  fuelType: optionalFuelType,
+  insurancePolicyId: optionalLinkId,
 });
 
 // `.superRefine()` returns a ZodEffects, which has no `.partial()` — chaining them would

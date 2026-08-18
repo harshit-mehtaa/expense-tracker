@@ -54,6 +54,7 @@ const MOCK_POLICY = {
   is80dEligible: true,
   is80cEligible: false,
   isForParents: false,
+  assets: [],
 };
 
 beforeEach(() => {
@@ -156,6 +157,26 @@ describe('updateInsurancePolicy', () => {
   it('throws NotFound when policy does not exist', async () => {
     policyMock.findFirst.mockResolvedValue(null);
     await expect(updateInsurancePolicy('u1', 'pol-x', {})).rejects.toThrow(/not found/i);
+  });
+
+  it('blocks changing policyType away from VEHICLE while a vehicle asset still links to it', async () => {
+    policyMock.findFirst.mockResolvedValue({ ...MOCK_POLICY, policyType: 'VEHICLE', assets: [{ id: 'a-1' }] });
+    await expect(
+      updateInsurancePolicy('u1', 'pol-1', { policyType: 'HEALTH' } as never),
+    ).rejects.toThrow(/linked to 1 vehicle/i);
+    expect(policyMock.update).not.toHaveBeenCalled();
+  });
+
+  it('allows changing policyType away from VEHICLE once nothing links to it', async () => {
+    policyMock.findFirst.mockResolvedValue({ ...MOCK_POLICY, policyType: 'VEHICLE', assets: [] });
+    await updateInsurancePolicy('u1', 'pol-1', { policyType: 'HEALTH' } as never);
+    expect(policyMock.update).toHaveBeenCalled();
+  });
+
+  it('allows an unrelated field update on a linked VEHICLE policy without touching policyType', async () => {
+    policyMock.findFirst.mockResolvedValue({ ...MOCK_POLICY, policyType: 'VEHICLE', assets: [{ id: 'a-1' }] });
+    await updateInsurancePolicy('u1', 'pol-1', { premiumAmount: 3000 } as never);
+    expect(policyMock.update).toHaveBeenCalledWith({ where: { id: 'pol-1' }, data: { premiumAmount: 3000 } });
   });
 });
 

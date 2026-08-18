@@ -17,11 +17,33 @@ export const VEHICLE_TYPES: Record<VehicleType, string> = {
   OTHER: 'Other',
 };
 
+export type FuelType = 'PETROL' | 'DIESEL' | 'ELECTRIC' | 'HYBRID' | 'CNG' | 'OTHER';
+
+export const FUEL_TYPES: Record<FuelType, string> = {
+  PETROL: 'Petrol',
+  DIESEL: 'Diesel',
+  ELECTRIC: 'Electric',
+  HYBRID: 'Hybrid',
+  CNG: 'CNG',
+  OTHER: 'Other',
+};
+
 export interface AssetLoanRef {
   id: string;
   lenderName: string;
   loanType: string;
   outstandingBalance: number;
+}
+
+/** Deliberately minimal — matches assetService's assetInclude on the backend. Financially
+ *  sensitive fields (sumAssured, premiumAmount, policyNumber, nomineeName, ...) belong to
+ *  the Insurance page, not every asset fetch. */
+export interface AssetInsuranceRef {
+  id: string;
+  policyType: string;
+  providerName: string;
+  policyName: string;
+  endDate?: string | null;
 }
 
 export interface Asset {
@@ -36,6 +58,15 @@ export interface Asset {
   purchaseDate?: string | null;
   /** Meaningful only when assetType === 'VEHICLE'; required by the backend in that case. */
   vehicleType?: VehicleType | null;
+  /** Vehicle-only detail — same convention as vehicleType but none of these are
+   *  required; the backend nulls all of them server-side whenever assetType isn't
+   *  VEHICLE. */
+  registrationNumber?: string | null;
+  make?: string | null;
+  model?: string | null;
+  fuelType?: FuelType | null;
+  insurancePolicyId?: string | null;
+  insurancePolicy?: AssetInsuranceRef | null;
   /** Loans this asset secures — a non-empty list blocks deletion (409). */
   loans?: AssetLoanRef[];
   /** Set once, by recording a sale. Null means still owned. For a property/gold-linked

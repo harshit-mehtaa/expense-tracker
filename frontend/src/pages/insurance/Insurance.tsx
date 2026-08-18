@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { insuranceApi, type InsurancePolicy } from '@/api/insurance';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
+import { useToast } from '@/contexts/ToastContext';
 import { cn } from '@/lib/utils';
 import { formatDate, formatNextOccurrence } from '@/lib/dateFormat';
 
@@ -65,6 +66,7 @@ function policyColor(type: string): string {
 
 export default function InsurancePage() {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<InsurancePolicy | null>(null);
 
@@ -86,7 +88,13 @@ export default function InsurancePage() {
     defaultValues: { policyType: 'TERM_LIFE', premiumFrequency: 'ANNUALLY', is80cEligible: false, is80dEligible: false, isForParents: false },
   });
 
-  const invalidateInsurance = () => qc.invalidateQueries({ queryKey: ['insurance'] });
+  // A create/update/delete here can each change what a linked vehicle asset shows
+  // (provider/policy name on update, the link itself on delete) — every mutation
+  // invalidates ['assets'] too, not just delete, so the Assets page never lags.
+  const invalidateInsurance = () => {
+    qc.invalidateQueries({ queryKey: ['insurance'] });
+    qc.invalidateQueries({ queryKey: ['assets'] });
+  };
 
   const createMutation = useMutation({
     mutationFn: (data: PolicyForm) => insuranceApi.create(data, viewUserId ? { targetUserId: viewUserId } : undefined),
@@ -96,11 +104,14 @@ export default function InsurancePage() {
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: PolicyForm }) => insuranceApi.update(id, data),
     onSuccess: () => { invalidateInsurance(); setEditing(null); setShowForm(false); reset(); },
+    onError: (err: any) => toast({ title: err?.response?.data?.message ?? 'Failed to update policy', variant: 'error' }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: insuranceApi.delete,
-    onSuccess: () => invalidateInsurance(),
+    onSuccess: () => {
+      invalidateInsurance();
+    },
   });
 
   function startEdit(policy: InsurancePolicy) {

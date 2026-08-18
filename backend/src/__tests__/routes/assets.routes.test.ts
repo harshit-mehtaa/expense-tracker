@@ -165,6 +165,69 @@ describe('POST /api/assets', () => {
     expect(res.status).toBe(201);
   });
 
+  it('accepts registrationNumber/make/model as plain optional strings', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets').send({
+      ...VALID, registrationNumber: 'KA01AB1234', make: 'Honda', model: 'City',
+    });
+    expect(res.status).toBe(201);
+    expect(m(svc.createAsset)).toHaveBeenCalledWith('u1', expect.objectContaining({
+      registrationNumber: 'KA01AB1234', make: 'Honda', model: 'City',
+    }));
+  });
+
+  it('treats empty-string or whitespace-only registrationNumber/make/model as null, not a stored blank', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets').send({
+      ...VALID, registrationNumber: '', make: '   ', model: null,
+    });
+    expect(res.status).toBe(201);
+    expect(m(svc.createAsset)).toHaveBeenCalledWith('u1', expect.objectContaining({
+      registrationNumber: null, make: null, model: null,
+    }));
+  });
+
+  it('trims registrationNumber/make/model', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets').send({
+      ...VALID, registrationNumber: '  KA01AB1234  ',
+    });
+    expect(res.status).toBe(201);
+    expect(m(svc.createAsset)).toHaveBeenCalledWith('u1', expect.objectContaining({ registrationNumber: 'KA01AB1234' }));
+  });
+
+  it('treats an empty-string fuelType as omitted, not a raw enum-mismatch 422 (fuelType is optional even for VEHICLE)', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets').send({ ...VALID, fuelType: '' });
+    expect(res.status).toBe(201);
+    expect(m(svc.createAsset)).toHaveBeenCalledWith('u1', expect.objectContaining({ fuelType: null }));
+  });
+
+  it('rejects an invalid fuelType enum value with 422', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets').send({ ...VALID, fuelType: 'LPG' });
+    expect(res.status).toBe(422);
+  });
+
+  it('treats an empty-string insurancePolicyId as omitted, not a raw FK-violation 500', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets').send({ ...VALID, insurancePolicyId: '' });
+    expect(res.status).toBe(201);
+    expect(m(svc.createAsset)).toHaveBeenCalledWith('u1', expect.objectContaining({ insurancePolicyId: null }));
+  });
+
+  it('treats a literal null fuelType/insurancePolicyId the same as empty-string', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets').send({ ...VALID, fuelType: null, insurancePolicyId: null });
+    expect(res.status).toBe(201);
+    expect(m(svc.createAsset)).toHaveBeenCalledWith('u1', expect.objectContaining({ fuelType: null, insurancePolicyId: null }));
+  });
+
+  it('passes a real fuelType/insurancePolicyId value through unchanged', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets').send({ ...VALID, fuelType: 'PETROL', insurancePolicyId: 'ip-1' });
+    expect(res.status).toBe(201);
+    expect(m(svc.createAsset)).toHaveBeenCalledWith('u1', expect.objectContaining({ fuelType: 'PETROL', insurancePolicyId: 'ip-1' }));
+  });
+
+  it('treats an empty-string realEstateId/goldHoldingId as omitted, not a raw FK-violation 500 (retrofitted fix)', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets').send({ ...VALID, realEstateId: '', goldHoldingId: '' });
+    expect(res.status).toBe(201);
+    expect(m(svc.createAsset)).toHaveBeenCalledWith('u1', expect.objectContaining({ realEstateId: null, goldHoldingId: null }));
+  });
+
   it('an ADMIN can create on a member\'s behalf', async () => {
     await request(makeAdminApp()).post(`/api/assets?targetUserId=${VALID_TARGET_ID}`).send(VALID);
     expect(m(svc.createAsset)).toHaveBeenCalledWith(VALID_TARGET_ID, expect.any(Object));
@@ -198,6 +261,24 @@ describe('PUT /api/assets/:id', () => {
     const res = await request(makeMemberApp()).put('/api/assets/asset-1').send({ purchaseDate: '', vehicleType: '' });
     expect(res.status).toBe(200);
     expect(m(svc.updateAsset)).toHaveBeenCalledWith('u1', 'asset-1', expect.objectContaining({ purchaseDate: null, vehicleType: undefined }), 'MEMBER');
+  });
+
+  it('an empty-string insurancePolicyId explicitly unlinks (null), not a raw 500', async () => {
+    const res = await request(makeMemberApp()).put('/api/assets/asset-1').send({ insurancePolicyId: '' });
+    expect(res.status).toBe(200);
+    expect(m(svc.updateAsset)).toHaveBeenCalledWith('u1', 'asset-1', { insurancePolicyId: null }, 'MEMBER');
+  });
+
+  it('omitting insurancePolicyId entirely leaves the field untouched (key absent, not forced null)', async () => {
+    const res = await request(makeMemberApp()).put('/api/assets/asset-1').send({ name: 'Renamed' });
+    expect(res.status).toBe(200);
+    const [, , body] = m(svc.updateAsset).mock.calls[0];
+    expect('insurancePolicyId' in body).toBe(false);
+  });
+
+  it('rejects an invalid fuelType enum value on update with 422', async () => {
+    const res = await request(makeMemberApp()).put('/api/assets/asset-1').send({ fuelType: 'LPG' });
+    expect(res.status).toBe(422);
   });
 });
 

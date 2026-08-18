@@ -88,8 +88,24 @@ export async function updateInsurancePolicy(
   data: Prisma.InsurancePolicyUpdateInput,
   requesterRole = 'MEMBER',
 ) {
-  const policy = await prisma.insurancePolicy.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
+  const policy = await prisma.insurancePolicy.findFirst({
+    where: ownerScopedWhere(id, requesterId, requesterRole),
+    include: { assets: { select: { id: true } } },
+  });
   if (!policy) throw AppError.notFound('Insurance policy');
+
+  // A vehicle asset can only link to a VEHICLE policy (assetService's
+  // assertInsurancePolicyOwned enforces this on the write side) — changing this policy's
+  // type out from under an asset that already references it would silently violate that
+  // invariant with no path back to consistency. Same "block, don't silently orphan"
+  // shape as assetService.deleteAsset's loan guard.
+  const nextPolicyType = 'policyType' in data ? (data as any).policyType : policy.policyType;
+  if (nextPolicyType !== 'VEHICLE' && policy.assets.length > 0) {
+    throw AppError.conflict(
+      `This policy is linked to ${policy.assets.length} vehicle(s). Unlink them first before changing the policy type.`,
+    );
+  }
+
   return prisma.insurancePolicy.update({ where: { id }, data });
 }
 

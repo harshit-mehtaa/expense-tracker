@@ -2,6 +2,7 @@ import api from '@/lib/api';
 
 export interface InsurancePolicy {
   id: string;
+  userId: string;
   policyType: string;
   providerName: string;
   policyNumber: string;

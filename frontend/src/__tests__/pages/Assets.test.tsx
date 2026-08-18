@@ -46,6 +46,16 @@ const assetHandlers = (assets: unknown[] = [VEHICLE, LINKED_PROPERTY_ASSET]) => 
   http.get(url('/assets'), () => HttpResponse.json({ data: assets })),
 ];
 
+const VEHICLE_POLICY = {
+  id: 'ip-1', userId: 'u-member', policyType: 'VEHICLE',
+  providerName: 'HDFC Ergo', policyName: 'Honda City Cover', endDate: '2027-05-01T00:00:00.000Z',
+};
+const HEALTH_POLICY = { id: 'ip-2', userId: 'u-member', policyType: 'HEALTH', providerName: 'Star Health', policyName: 'Family Floater' };
+
+const insuranceHandlers = (policies: unknown[] = [VEHICLE_POLICY, HEALTH_POLICY]) => [
+  http.get(url('/insurance'), () => HttpResponse.json({ data: policies })),
+];
+
 describe('Assets page — smoke', () => {
   it('renders the page heading', async () => {
     renderPage(<AssetsPage />, { route: '/assets', handlers: assetHandlers() });
@@ -73,6 +83,7 @@ describe('Assets page — smoke', () => {
       user: MEMBER_USER,
       handlers: [
         ...assetHandlers(),
+        ...insuranceHandlers(),
         http.post(url('/assets'), async ({ request }) => {
           body = await request.json();
           return HttpResponse.json({ data: { ...VEHICLE, id: 'a-new', name: body.name } }, { status: 201 });
@@ -93,9 +104,43 @@ describe('Assets page — smoke', () => {
     expect(body).toMatchObject({ name: 'Royal Enfield', value: 250000, vehicleType: 'TWO_WHEELER' });
   });
 
+  it('the insurance picker lists only VEHICLE-type policies, and posts the selected one', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    renderPage(<AssetsPage />, {
+      route: '/assets',
+      user: MEMBER_USER,
+      handlers: [
+        ...assetHandlers(),
+        ...insuranceHandlers(),
+        http.post(url('/assets'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: { ...VEHICLE, id: 'a-new' } }, { status: 201 });
+        }),
+      ],
+    });
+    await screen.findByText('Honda City');
+
+    await user.click(screen.getByRole('button', { name: /add asset/i }));
+    await user.type(await screen.findByLabelText(/^name/i), 'Royal Enfield');
+    await user.type(screen.getByLabelText(/current value/i), '250000');
+    await user.selectOptions(screen.getByLabelText(/vehicle type/i), 'TWO_WHEELER');
+
+    const insuranceSelect = await screen.findByLabelText(/insurance policy/i);
+    expect(screen.getByText(/HDFC Ergo/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Star Health/i)).not.toBeInTheDocument();
+    await user.selectOptions(insuranceSelect, 'ip-1');
+    await user.click(screen.getByRole('button', { name: /^add$/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body).toMatchObject({ insurancePolicyId: 'ip-1' });
+  });
+
   it('cannot save a VEHICLE without a vehicle type', async () => {
     const user = userEvent.setup();
-    renderPage(<AssetsPage />, { route: '/assets', user: MEMBER_USER, handlers: assetHandlers() });
+    renderPage(<AssetsPage />, {
+      route: '/assets', user: MEMBER_USER, handlers: [...assetHandlers(), ...insuranceHandlers()],
+    });
     await screen.findByText('Honda City');
 
     await user.click(screen.getByRole('button', { name: /add asset/i }));
@@ -125,6 +170,7 @@ describe('Assets page — smoke', () => {
       user: MEMBER_USER,
       handlers: [
         ...assetHandlers([vehicleWithDetail]),
+        ...insuranceHandlers(),
         http.put(url('/assets/a-1'), async ({ request }) => {
           body = await request.json();
           return HttpResponse.json({ data: { ...vehicleWithDetail, ...body } });
@@ -149,6 +195,40 @@ describe('Assets page — smoke', () => {
     expect(body).toMatchObject({ vehicleType: 'TWO_WHEELER', purchaseDate: '2023-08-15' });
   });
 
+  it('edit form pre-selects an already-linked insurance policy once the async picker loads, not "Not linked"', async () => {
+    const user = userEvent.setup();
+    const linkedVehicle = {
+      ...VEHICLE, vehicleType: 'FOUR_WHEELER', insurancePolicyId: 'ip-1',
+      insurancePolicy: { id: 'ip-1', policyType: 'VEHICLE', providerName: 'HDFC Ergo', policyName: 'Honda City Cover' },
+    };
+    let body: any;
+    renderPage(<AssetsPage />, {
+      route: '/assets',
+      user: MEMBER_USER,
+      handlers: [
+        ...assetHandlers([linkedVehicle]),
+        ...insuranceHandlers(),
+        http.put(url('/assets/a-1'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: { ...linkedVehicle, ...body } });
+        }),
+      ],
+    });
+    await screen.findByText('Honda City');
+    await user.click(screen.getByTitle(/edit asset/i));
+
+    const insuranceSelect = (await screen.findByLabelText(/insurance policy/i)) as HTMLSelectElement;
+    // The regression this guards: the picker's options arrive from an async query gated
+    // on the form being open, so an uncontrolled select applies the reset value before
+    // the matching <option> exists and silently settles on "Not linked" once it does.
+    await waitFor(() => expect(insuranceSelect.value).toBe('ip-1'));
+
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(body).toBeDefined());
+    // Untouched by the user — the pre-selected link must round-trip, not silently drop.
+    expect(body).toMatchObject({ insurancePolicyId: 'ip-1' });
+  });
+
   it('clearing the purchase date on edit actually clears it, not silently ignored', async () => {
     const user = userEvent.setup();
     const vehicleWithDetail = { ...VEHICLE, purchaseDate: '2022-05-01T00:00:00.000Z', vehicleType: 'FOUR_WHEELER' };
@@ -158,6 +238,7 @@ describe('Assets page — smoke', () => {
       user: MEMBER_USER,
       handlers: [
         ...assetHandlers([vehicleWithDetail]),
+        ...insuranceHandlers(),
         http.put(url('/assets/a-1'), async ({ request }) => {
           body = await request.json();
           return HttpResponse.json({ data: { ...vehicleWithDetail, ...body } });

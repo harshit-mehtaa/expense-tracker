@@ -654,10 +654,14 @@ describe('loanSchema — first EMI date must be a day that exists every month', 
 describe('Loans page — inline asset creation can defer to an existing record', () => {
   const REAL_ESTATE = [{ id: 're-1', propertyName: 'Flat 3B', currentValue: 8500000 }];
   const GOLD = [{ id: 'g-1', description: 'Chain', quantityGrams: 50 }];
+  const VEHICLE_POLICY = {
+    id: 'ip-1', userId: 'u-member', policyType: 'VEHICLE', providerName: 'HDFC Ergo', policyName: 'Two Wheeler Cover',
+  };
 
   const withInvestments = () => [
     http.get(url('/investments/real-estate'), () => HttpResponse.json({ data: { properties: REAL_ESTATE } })),
     http.get(url('/investments/gold'), () => HttpResponse.json({ data: { holdings: GOLD, summary: {} } })),
+    http.get(url('/insurance'), () => HttpResponse.json({ data: [VEHICLE_POLICY] })),
     ...loanHandlers([]),
   ];
 
@@ -793,6 +797,39 @@ describe('Loans page — inline asset creation can defer to an existing record',
 
     await openAssetCreator(user, 'VEHICLE');
     expect(screen.queryByLabelText(/already tracked/i)).not.toBeInTheDocument();
+  });
+
+  it('sends make/model/registration/fuelType/insurancePolicyId for a new vehicle', async () => {
+    const user = userEvent.setup();
+    let body: any = null;
+
+    renderPage(<LoansPage />, {
+      route: '/loans',
+      user: MEMBER_USER,
+      handlers: [
+        http.post(url('/assets'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: { id: 'a-new' } }, { status: 201 });
+        }),
+        ...withInvestments(),
+      ],
+    });
+
+    await openAssetCreator(user, 'VEHICLE');
+    await user.type(screen.getByLabelText(/asset name/i), 'Honda Activa');
+    await user.selectOptions(await screen.findByLabelText(/vehicle type/i), 'TWO_WHEELER');
+    await user.type(screen.getByLabelText(/^make/i), 'Honda');
+    await user.type(screen.getByLabelText(/^model/i), 'Activa');
+    await user.type(screen.getByLabelText(/registration number/i), 'KA01AB1234');
+    await user.selectOptions(screen.getByLabelText(/fuel type/i), 'PETROL');
+    await user.selectOptions(await screen.findByLabelText(/insurance policy/i), 'ip-1');
+    await user.click(screen.getByRole('button', { name: /save asset/i }));
+
+    await waitFor(() => expect(body).not.toBeNull());
+    expect(body).toMatchObject({
+      make: 'Honda', model: 'Activa', registrationNumber: 'KA01AB1234',
+      fuelType: 'PETROL', insurancePolicyId: 'ip-1',
+    });
   });
 });
 

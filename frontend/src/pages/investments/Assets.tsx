@@ -9,9 +9,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
+import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import { toDateInputValue, formatDate } from '@/lib/dateFormat';
-import { assetsApi, ASSET_TYPES, VEHICLE_TYPES, type Asset } from '@/api/assets';
+import { assetsApi, ASSET_TYPES, VEHICLE_TYPES, FUEL_TYPES, type Asset } from '@/api/assets';
+import { insuranceApi } from '@/api/insurance';
 
 /**
  * Vehicles and other unsecured items — the one asset kind with no dedicated page before
@@ -33,6 +35,13 @@ const assetSchema = z.object({
   notes: z.string().optional(),
   purchaseDate: z.string().optional(),
   vehicleType: z.string().optional(),
+  registrationNumber: z.string().optional(),
+  make: z.string().optional(),
+  model: z.string().optional(),
+  // Not required, unlike vehicleType — no pre-existing vehicle has a fuelType to
+  // backfill from, so requiring it would break editing every vehicle added before it.
+  fuelType: z.string().optional(),
+  insurancePolicyId: z.string().optional(),
 }).superRefine((val, ctx) => {
   if (val.assetType === 'VEHICLE' && !val.vehicleType) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['vehicleType'], message: 'Required for a vehicle' });
@@ -50,6 +59,7 @@ export default function AssetsPage() {
   const [sellPrice, setSellPrice] = useState('');
   const [sellDate, setSellDate] = useState(toDateInputValue(new Date()));
 
+  const { user } = useAuth();
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
   const isViewingFamilyWide = isAdmin && !viewUserId;
 
@@ -61,6 +71,28 @@ export default function AssetsPage() {
 
   const form = useForm<AssetForm>({ resolver: zodResolver(assetSchema), defaultValues: { assetType: 'VEHICLE', value: 0 } });
   const watchedAssetType = form.watch('assetType');
+
+  // Who the linked policy must belong to — the asset's actual owner when editing (not
+  // necessarily the requester, e.g. an ADMIN editing a member's asset), else whoever the
+  // member selector is currently scoped to, else the current user. Fetched server-side
+  // scoped via targetUserId (mirroring the gold-holding picker in Loans.tsx) rather than
+  // an unscoped family-wide fetch filtered client-side — the latter would ship every
+  // other member's sumAssured/policyNumber/nomineeName into the browser just to filter
+  // it away, and an admin editing one member's vehicle in family-wide view would see a
+  // DIFFERENT member's policies in the picker.
+  const policyOwnerId = editingAsset?.userId ?? viewUserId ?? user?.id;
+  // Cached under the SAME key Insurance.tsx uses for the full list ['insurance', X] —
+  // deliberately fetching and caching the unfiltered list here too (VEHICLE-filtering
+  // happens below, after the query, not inside queryFn) so this entry stays consistent
+  // with what Insurance.tsx itself caches, rather than poisoning a shared key with a
+  // narrowed list (see Loans.tsx's identical insurance query for the bug this avoids).
+  const { data: allPolicies = [], isError: isPoliciesError } = useQuery({
+    queryKey: ['insurance', policyOwnerId],
+    queryFn: () => insuranceApi.getAll(policyOwnerId ? { targetUserId: policyOwnerId } : undefined),
+    enabled: showForm && watchedAssetType === 'VEHICLE',
+  });
+  const vehiclePolicies = allPolicies.filter((p) => p.policyType === 'VEHICLE');
+  const watchedInsurancePolicyId = form.watch('insurancePolicyId');
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['assets'] });
@@ -112,6 +144,11 @@ export default function AssetsPage() {
       notes: a.notes ?? '',
       purchaseDate: a.purchaseDate ? toDateInputValue(new Date(a.purchaseDate)) : '',
       vehicleType: a.vehicleType ?? '',
+      registrationNumber: a.registrationNumber ?? '',
+      make: a.make ?? '',
+      model: a.model ?? '',
+      fuelType: a.fuelType ?? '',
+      insurancePolicyId: a.insurancePolicyId ?? '',
     });
     setShowForm(true);
   };
@@ -162,6 +199,11 @@ export default function AssetsPage() {
                       {VEHICLE_TYPES[a.vehicleType]}
                     </span>
                   )}
+                  {a.assetType === 'VEHICLE' && a.fuelType && (
+                    <span className="text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 px-2 py-0.5 rounded-full">
+                      {FUEL_TYPES[a.fuelType]}
+                    </span>
+                  )}
                   {a.soldAt && (
                     <span className="text-xs font-medium bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300 px-2 py-0.5 rounded-full">
                       Sold {formatDate(a.soldAt)}
@@ -169,8 +211,20 @@ export default function AssetsPage() {
                   )}
                 </div>
                 <h3 className="font-semibold mt-1">{a.name}</h3>
+                {(a.make || a.model) && (
+                  <p className="text-xs text-muted-foreground">{[a.make, a.model].filter(Boolean).join(' ')}</p>
+                )}
+                {a.registrationNumber && (
+                  <p className="text-xs text-muted-foreground">{a.registrationNumber}</p>
+                )}
                 {a.purchaseDate && (
                   <p className="text-xs text-muted-foreground">Bought {formatDate(a.purchaseDate)}</p>
+                )}
+                {a.insurancePolicy && (
+                  <p className="text-xs text-muted-foreground">
+                    {a.insurancePolicy.providerName} · {a.insurancePolicy.policyName}
+                    {a.insurancePolicy.endDate && ` (till ${formatDate(a.insurancePolicy.endDate)})`}
+                  </p>
                 )}
               </div>
               <div className="flex items-center gap-1">
@@ -276,6 +330,58 @@ export default function AssetsPage() {
                   </select>
                   {form.formState.errors.vehicleType && <p className="text-xs text-destructive">{form.formState.errors.vehicleType.message}</p>}
                 </div>
+              )}
+              {watchedAssetType === 'VEHICLE' && (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label htmlFor="asset-make">Make (optional)</Label>
+                      <Input id="asset-make" {...form.register('make')} placeholder="Honda" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="asset-model">Model (optional)</Label>
+                      <Input id="asset-model" {...form.register('model')} placeholder="City" />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="asset-registration">Registration Number (optional)</Label>
+                    <Input id="asset-registration" {...form.register('registrationNumber')} placeholder="KA01AB1234" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="asset-fuel-type">Fuel Type (optional)</Label>
+                    <select id="asset-fuel-type" {...form.register('fuelType')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                      <option value="">Select…</option>
+                      {Object.entries(FUEL_TYPES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="asset-insurance">Insurance Policy (optional)</Label>
+                    {/* Controlled, unlike vehicleType/fuelType above: those two select
+                        from static maps that render synchronously on mount, so RHF's
+                        register-driven uncontrolled value applies cleanly. This one's
+                        options arrive from an async query gated on the form being open,
+                        so an uncontrolled select would apply openEdit's reset value
+                        before the matching <option> exists and silently fail to select
+                        it once the options do arrive. */}
+                    <select
+                      id="asset-insurance"
+                      {...form.register('insurancePolicyId')}
+                      value={watchedInsurancePolicyId ?? ''}
+                      onChange={(e) => form.setValue('insurancePolicyId', e.target.value)}
+                      className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                    >
+                      <option value="">Not linked</option>
+                      {vehiclePolicies.map((p) => (
+                        <option key={p.id} value={p.id}>{p.providerName} · {p.policyName}</option>
+                      ))}
+                    </select>
+                    {isPoliciesError && (
+                      <p className="text-xs text-destructive">
+                        Couldn't load insurance policies — an existing link won't show here, but is unaffected.
+                      </p>
+                    )}
+                  </div>
+                </>
               )}
               <div className="space-y-1">
                 <Label htmlFor="asset-purchase-date">Purchase Date (optional)</Label>

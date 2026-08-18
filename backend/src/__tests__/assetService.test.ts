@@ -14,6 +14,7 @@ vi.mock('../config/prisma', () => {
     realEstate: { findFirst: vi.fn() },
     goldHolding: { findFirst: vi.fn() },
     loan: { findFirst: vi.fn() },
+    insurancePolicy: { findFirst: vi.fn() },
   };
   return { default: mock, prisma: mock };
 });
@@ -28,6 +29,7 @@ const assetMock = (prisma as any).asset;
 const realEstateMock = (prisma as any).realEstate;
 const goldMock = (prisma as any).goldHolding;
 const loanMock = (prisma as any).loan;
+const insurancePolicyMock = (prisma as any).insurancePolicy;
 
 const MOCK_ASSET = {
   id: 'asset-1',
@@ -172,11 +174,87 @@ describe('updateAsset', () => {
     );
   });
 
-  it('nulls a stale vehicleType when switching an existing VEHICLE to a different type', async () => {
-    assetMock.findFirst.mockResolvedValue({ ...MOCK_ASSET, assetType: 'VEHICLE', vehicleType: 'TWO_WHEELER' });
+  it('nulls all six vehicle-only fields when switching an existing VEHICLE to a different type', async () => {
+    assetMock.findFirst.mockResolvedValue({
+      ...MOCK_ASSET, assetType: 'VEHICLE', vehicleType: 'TWO_WHEELER',
+      registrationNumber: 'KA01AB1234', make: 'Honda', model: 'Activa', fuelType: 'PETROL',
+      insurancePolicyId: 'ip-1',
+    });
     await updateAsset('u1', 'asset-1', { assetType: 'OTHER' } as never);
     expect(assetMock.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { assetType: 'OTHER', vehicleType: null } }),
+      expect.objectContaining({
+        data: {
+          assetType: 'OTHER',
+          vehicleType: null, registrationNumber: null, make: null, model: null,
+          fuelType: null, insurancePolicyId: null,
+        },
+      }),
+    );
+    // A stale insurancePolicyId surviving from a hidden, unmounted VEHICLE field must be
+    // silently nulled, not validated against a policy that may no longer exist.
+    expect(insurancePolicyMock.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('does not validate insurancePolicyId at all on a non-VEHICLE create — clearVehicleOnlyFields nulls it regardless', async () => {
+    await createAsset('u1', { assetType: 'OTHER', name: 'Boat', value: 100_000, insurancePolicyId: 'ip-1' } as never);
+    expect(insurancePolicyMock.findFirst).not.toHaveBeenCalled();
+    expect(assetMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ insurancePolicyId: null }) }),
+    );
+  });
+
+  it('validates insurancePolicyId ownership on a VEHICLE create, 404 if not owned', async () => {
+    insurancePolicyMock.findFirst.mockResolvedValue(null);
+    await expect(
+      createAsset('u1', { assetType: 'VEHICLE', name: 'Swift', value: 100, vehicleType: 'FOUR_WHEELER', insurancePolicyId: 'ip-1' } as never),
+    ).rejects.toThrow(/insurance policy/i);
+    expect(insurancePolicyMock.findFirst).toHaveBeenCalledWith({
+      where: { id: 'ip-1', userId: 'u1' }, select: { id: true, policyType: true },
+    });
+    expect(assetMock.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects linking a non-VEHICLE policy to a vehicle asset with 400, not 404', async () => {
+    insurancePolicyMock.findFirst.mockResolvedValue({ id: 'ip-1', policyType: 'HEALTH' });
+    await expect(
+      createAsset('u1', { assetType: 'VEHICLE', name: 'Swift', value: 100, vehicleType: 'FOUR_WHEELER', insurancePolicyId: 'ip-1' } as never),
+    ).rejects.toThrow(/vehicle insurance policy/i);
+  });
+
+  it('allows linking an owned VEHICLE policy', async () => {
+    insurancePolicyMock.findFirst.mockResolvedValue({ id: 'ip-1', policyType: 'VEHICLE' });
+    await createAsset('u1', { assetType: 'VEHICLE', name: 'Swift', value: 100, vehicleType: 'FOUR_WHEELER', insurancePolicyId: 'ip-1' } as never);
+    expect(assetMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ insurancePolicyId: 'ip-1' }) }),
+    );
+  });
+
+  it('updateAsset validates a newly-set insurancePolicyId only when the merged assetType is VEHICLE', async () => {
+    assetMock.findFirst.mockResolvedValue({ ...MOCK_ASSET, assetType: 'VEHICLE', vehicleType: 'TWO_WHEELER' });
+    insurancePolicyMock.findFirst.mockResolvedValue({ id: 'ip-2', policyType: 'VEHICLE' });
+    await updateAsset('u1', 'asset-1', { insurancePolicyId: 'ip-2' } as never);
+    expect(insurancePolicyMock.findFirst).toHaveBeenCalledWith({
+      where: { id: 'ip-2', userId: 'u1' }, select: { id: true, policyType: true },
+    });
+  });
+
+  it('updateAsset does not validate insurancePolicyId when it is not part of the request body', async () => {
+    assetMock.findFirst.mockResolvedValue({ ...MOCK_ASSET, assetType: 'VEHICLE', vehicleType: 'TWO_WHEELER', insurancePolicyId: 'ip-1' });
+    await updateAsset('u1', 'asset-1', { value: 200 } as never);
+    expect(insurancePolicyMock.findFirst).not.toHaveBeenCalled();
+    // Untouched — the merged-state clearing helper returns {} for VEHICLE, so the
+    // pre-existing link (not present in this partial payload) is left alone.
+    expect(assetMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { value: 200 } }),
+    );
+  });
+
+  it('explicit-null unlinks an insurance policy on update', async () => {
+    assetMock.findFirst.mockResolvedValue({ ...MOCK_ASSET, assetType: 'VEHICLE', vehicleType: 'TWO_WHEELER', insurancePolicyId: 'ip-1' });
+    await updateAsset('u1', 'asset-1', { insurancePolicyId: null } as never);
+    expect(insurancePolicyMock.findFirst).not.toHaveBeenCalled();
+    expect(assetMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { insurancePolicyId: null } }),
     );
   });
 
