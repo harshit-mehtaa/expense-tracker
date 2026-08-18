@@ -3,6 +3,7 @@ import { AppError } from '../utils/AppError';
 import { normalizeOwnerShares, assertPrimaryOwnerRetained } from '../utils/ownerShares';
 import { getFYRange } from '../utils/financialYear';
 import { ownerScopedWhere } from '../utils/resolveTargetUserId';
+import { findActiveLoanSecuring, type RecordSaleInput } from './assetService';
 import type { Prisma, InvestmentType, FDStatus, RDStatus, SIPStatus } from '@prisma/client';
 
 // ─── XIRR (Newton-Raphson) ────────────────────────────────────────────────────
@@ -576,6 +577,37 @@ export async function deleteGoldHolding(requesterId: string, id: string, request
   return prisma.goldHolding.delete({ where: { id } });
 }
 
+/**
+ * Sets soldAt/salePrice; never deletes. Preserves purchasePricePerGram/purchaseDate so
+ * the sale is a fact added to the record, not the record's replacement. Gold DOES secure
+ * loans (SECURED_TYPES includes GOLD, routes/loans.ts) via Asset.goldHoldingId ->
+ * Loan.assetId — the same guard RealEstate uses, resolved through that link.
+ */
+export async function recordGoldHoldingSale(
+  requesterId: string,
+  id: string,
+  input: RecordSaleInput,
+  requesterRole = 'MEMBER',
+) {
+  const g = await prisma.goldHolding.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
+  if (!g) throw AppError.notFound('Gold holding');
+
+  const linkedAsset = await prisma.asset.findFirst({ where: { goldHoldingId: id }, select: { id: true } });
+  if (linkedAsset) {
+    const openLoan = await findActiveLoanSecuring(linkedAsset.id);
+    if (openLoan) {
+      throw AppError.conflict(
+        `This still secures an active loan (${openLoan.lenderName}). Close or pay off the loan before recording a sale.`,
+      );
+    }
+  }
+
+  return prisma.goldHolding.update({
+    where: { id },
+    data: { soldAt: new Date(input.date), salePrice: input.salePrice },
+  });
+}
+
 export async function getGoldHoldingForAudit(requesterId: string, id: string, requesterRole = 'MEMBER') {
   return prisma.goldHolding.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
 }
@@ -766,6 +798,41 @@ export async function deleteRealEstate(requesterId: string, id: string, requeste
   const r = await prisma.realEstate.findFirst({ where: userRealEstateWriteWhere(id, requesterId, requesterRole) });
   if (!r) throw AppError.notFound('Property');
   return prisma.realEstate.delete({ where: { id } });
+}
+
+/**
+ * Sets soldAt/salePrice; never deletes — preserves purchasePrice/purchaseDate/location so
+ * the sale is a fact added to the record, not the record's replacement.
+ *
+ * RealEstate.loanId is DEAD (superseded by Asset.realEstateId -> Loan.assetId; zero rows
+ * populate it — see the field's own comment). The guard resolves the REAL link: find the
+ * Asset this property is represented by, then check ITS loans for one that isn't closed.
+ * Getting this wrong either blocks a legitimate sale or, worse, lets a mortgaged property
+ * vanish from net worth while the loan silently persists against nothing.
+ */
+export async function recordRealEstateSale(
+  requesterId: string,
+  id: string,
+  input: RecordSaleInput,
+  requesterRole = 'MEMBER',
+) {
+  const r = await prisma.realEstate.findFirst({ where: userRealEstateWriteWhere(id, requesterId, requesterRole) });
+  if (!r) throw AppError.notFound('Property');
+
+  const linkedAsset = await prisma.asset.findFirst({ where: { realEstateId: id }, select: { id: true } });
+  if (linkedAsset) {
+    const openLoan = await findActiveLoanSecuring(linkedAsset.id);
+    if (openLoan) {
+      throw AppError.conflict(
+        `This still secures an active loan (${openLoan.lenderName}). Close or pay off the loan before recording a sale.`,
+      );
+    }
+  }
+
+  return prisma.realEstate.update({
+    where: { id },
+    data: { soldAt: new Date(input.date), salePrice: input.salePrice },
+  });
 }
 
 /**

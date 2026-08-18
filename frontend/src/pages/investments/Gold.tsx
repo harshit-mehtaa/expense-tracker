@@ -11,7 +11,8 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { investmentsApi, GoldHolding } from '@/api/investments';
 import { formatINR } from '@/lib/indianFormat';
-import { formatDate } from '@/lib/dateFormat';
+import { formatDate, toDateInputValue } from '@/lib/dateFormat';
+import { useToast } from '@/contexts/ToastContext';
 
 const GOLD_TYPES: Record<string, string> = {
   PHYSICAL: 'Physical Gold', SGB: 'Sovereign Gold Bond', GOLD_ETF: 'Gold ETF', DIGITAL: 'Digital Gold',
@@ -35,6 +36,10 @@ export default function GoldPage() {
   const [editingGoldId, setEditingGoldId] = useState<string | null>(null);
   const [editGoldValue, setEditGoldValue] = useState('');
   const [editingGoldHolding, setEditingGoldHolding] = useState<GoldHolding | null>(null);
+  const [sellingHolding, setSellingHolding] = useState<GoldHolding | null>(null);
+  const [sellPrice, setSellPrice] = useState('');
+  const [sellDate, setSellDate] = useState(toDateInputValue(new Date()));
+  const { toast } = useToast();
 
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
   const isViewingFamilyWide = isAdmin && !viewUserId;
@@ -57,6 +62,26 @@ export default function GoldPage() {
   const deleteGoldMutation = useMutation({
     mutationFn: investmentsApi.deleteGold,
     onSuccess: () => invalidateGold(),
+  });
+
+  // Kept alongside the existing delete above, deliberately — they mean different things.
+  // Delete is "this holding shouldn't exist" (a mistake); Sell is "I actually owned this
+  // and got rid of it" (a real event worth keeping a record of).
+  const sellGoldMutation = useMutation({
+    mutationFn: ({ id, salePrice, date }: { id: string; salePrice: number; date: string }) =>
+      investmentsApi.sellGold(id, { salePrice, date }),
+    onSuccess: () => {
+      invalidateGold();
+      qc.invalidateQueries({ queryKey: ['report-networth'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['net-worth-history'] });
+      setSellingHolding(null);
+      setSellPrice('');
+      toast({ title: 'Sale recorded', variant: 'success' });
+    },
+    onError: (err: any) => {
+      toast({ title: err?.response?.data?.message ?? 'Failed to record sale', variant: 'error' });
+    },
   });
 
   const updateGoldPriceMutation = useMutation({
@@ -153,9 +178,16 @@ export default function GoldPage() {
           <div key={h.id} className="rounded-lg border bg-card p-4 space-y-2">
             <div className="flex justify-between items-start">
               <div>
-                <span className="text-xs font-medium bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded-full">
-                  {GOLD_TYPES[h.type] ?? h.type}
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-medium bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded-full">
+                    {GOLD_TYPES[h.type] ?? h.type}
+                  </span>
+                  {h.soldAt && (
+                    <span className="text-xs font-medium bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300 px-2 py-0.5 rounded-full">
+                      Sold {formatDate(h.soldAt)}
+                    </span>
+                  )}
+                </div>
                 {h.description && <p className="text-sm mt-1">{h.description}</p>}
                 {isViewingFamilyWide && (h as any).userName && (
                   <p className="text-xs text-muted-foreground mt-0.5">{(h as any).userName}</p>
@@ -165,46 +197,65 @@ export default function GoldPage() {
                 <Button variant="ghost" size="icon" onClick={() => openEditModal(h)} title="Edit holding">
                   <SquarePen className="h-4 w-4" />
                 </Button>
-                <Button variant="ghost" size="icon" onClick={() => deleteGoldMutation.mutate(h.id)}>
+                {!h.soldAt && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => { setSellingHolding(h); setSellPrice(String(Math.round(h.quantityGrams * h.currentPricePerGram))); setSellDate(toDateInputValue(new Date())); }}
+                    title="Record sale"
+                  >
+                    <span className="text-xs font-medium">Sell</span>
+                  </Button>
+                )}
+                <Button variant="ghost" size="icon" onClick={() => deleteGoldMutation.mutate(h.id)} title="Delete (this shouldn't exist)">
                   <Trash2 className="h-4 w-4 text-destructive" />
                 </Button>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div><p className="text-muted-foreground">Quantity</p><p className="font-semibold">{h.quantityGrams}g</p></div>
-              <div><p className="text-muted-foreground">Current Value</p><INRDisplay amount={h.quantityGrams * h.currentPricePerGram} className="font-semibold" /></div>
               <div><p className="text-muted-foreground">Buy Rate</p><p>{formatINR(h.purchasePricePerGram)}/g</p></div>
-              <div>
-                <p className="text-muted-foreground">Current Rate</p>
-                {editingGoldId === h.id ? (
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <Input
-                      type="number"
-                      value={editGoldValue}
-                      onChange={(e) => setEditGoldValue(e.target.value)}
-                      className="h-7 w-24 text-xs"
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') { const p = Number(editGoldValue); if (p > 0) updateGoldPriceMutation.mutate({ id: h.id, price: p }); }
-                        if (e.key === 'Escape') setEditingGoldId(null);
-                      }}
-                    />
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { const p = Number(editGoldValue); if (p > 0) updateGoldPriceMutation.mutate({ id: h.id, price: p }); }}>
-                      <Check className="h-3 w-3 text-green-600" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingGoldId(null)}>
-                      <X className="h-3 w-3" />
-                    </Button>
+              {h.soldAt ? (
+                <>
+                  <div><p className="text-muted-foreground">Sale Price</p><INRDisplay amount={h.salePrice ?? 0} className="font-semibold" /></div>
+                  <div><p className="text-muted-foreground">Realised Gain</p><INRDisplay amount={(h.salePrice ?? 0) - h.quantityGrams * h.purchasePricePerGram} colorCode /></div>
+                </>
+              ) : (
+                <>
+                  <div><p className="text-muted-foreground">Current Value</p><INRDisplay amount={h.quantityGrams * h.currentPricePerGram} className="font-semibold" /></div>
+                  <div>
+                    <p className="text-muted-foreground">Current Rate</p>
+                    {editingGoldId === h.id ? (
+                      <div className="flex items-center gap-1 mt-0.5">
+                        <Input
+                          type="number"
+                          value={editGoldValue}
+                          onChange={(e) => setEditGoldValue(e.target.value)}
+                          className="h-7 w-24 text-xs"
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { const p = Number(editGoldValue); if (p > 0) updateGoldPriceMutation.mutate({ id: h.id, price: p }); }
+                            if (e.key === 'Escape') setEditingGoldId(null);
+                          }}
+                        />
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { const p = Number(editGoldValue); if (p > 0) updateGoldPriceMutation.mutate({ id: h.id, price: p }); }}>
+                          <Check className="h-3 w-3 text-green-600" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingGoldId(null)}>
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 group">
+                        <p>{formatINR(h.currentPricePerGram)}/g</p>
+                        <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setEditingGoldId(h.id); setEditGoldValue(String(h.currentPricePerGram)); }} title="Update price">
+                          <Pencil className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div className="flex items-center gap-1 group">
-                    <p>{formatINR(h.currentPricePerGram)}/g</p>
-                    <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setEditingGoldId(h.id); setEditGoldValue(String(h.currentPricePerGram)); }} title="Update price">
-                      <Pencil className="h-3 w-3" />
-                    </Button>
-                  </div>
-                )}
-              </div>
+                </>
+              )}
               <div className="col-span-2">
                 <p className="text-muted-foreground">Purchased</p>
                 <p>{formatDate(h.purchaseDate)}</p>
@@ -221,6 +272,44 @@ export default function GoldPage() {
           </div>
         )}
       </div>
+
+      {sellingHolding && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-background rounded-lg border shadow-xl w-full max-w-sm p-6 space-y-4">
+            <h2 className="text-lg font-semibold">
+              Record sale — {sellingHolding.description || GOLD_TYPES[sellingHolding.type] || sellingHolding.type}
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              This stays on the record — purchase price and date are kept, not erased.
+              The holding stops counting toward net worth going forward.
+            </p>
+            <div className="space-y-1">
+              <Label htmlFor="gold-sell-price">Sale price (₹)</Label>
+              <Input
+                id="gold-sell-price"
+                type="number"
+                step="100"
+                value={sellPrice}
+                onChange={(e) => setSellPrice(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="gold-sell-date">Sale date</Label>
+              <Input id="gold-sell-date" type="date" value={sellDate} onChange={(e) => setSellDate(e.target.value)} />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setSellingHolding(null)}>Cancel</Button>
+              <Button
+                onClick={() => sellGoldMutation.mutate({ id: sellingHolding.id, salePrice: Number(sellPrice), date: sellDate })}
+                disabled={!sellPrice || Number(sellPrice) <= 0 || sellGoldMutation.isPending}
+              >
+                {sellGoldMutation.isPending ? 'Recording…' : 'Confirm sale'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showGoldForm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">

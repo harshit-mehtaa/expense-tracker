@@ -76,4 +76,24 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   sendNoContent(res);
 }));
 
+const saleSchema = z.object({
+  salePrice: z.number().positive(),
+  date: z.string().refine((v) => !Number.isNaN(new Date(v).getTime()), 'Invalid date'),
+});
+
+router.post('/:id/sell', asyncHandler(async (req, res) => {
+  const data = saleSchema.parse(req.body);
+  const oldAsset = await svc.getAssetForAudit(req.user!.userId, req.params.id, req.user!.role);
+  const asset = await svc.recordAssetSale(req.user!.userId, req.params.id, data, req.user!.role);
+  await recordAuditLog({
+    performedByUserId: req.user!.userId,
+    action: 'UPDATE',
+    entityType: 'Asset',
+    entityId: asset.id,
+    oldValue: oldAsset,
+    newValue: asset,
+  });
+  sendSuccess(res, asset);
+}));
+
 export default router;

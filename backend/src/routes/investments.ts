@@ -16,6 +16,12 @@ function parseFY(raw: unknown): string {
 const router = Router();
 router.use(requireAuth);
 
+// A sale is real money on a real date — same shape wherever it's recorded.
+const saleSchema = z.object({
+  salePrice: z.number().positive(),
+  date: z.string().refine((v) => !Number.isNaN(new Date(v).getTime()), 'Invalid date'),
+});
+
 // ─── Portfolio ────────────────────────────────────────────────────────────────
 
 router.get('/portfolio-summary', asyncHandler(async (req, res) => {
@@ -318,6 +324,14 @@ router.delete('/gold/:id', asyncHandler(async (req, res) => {
   sendNoContent(res);
 }));
 
+router.post('/gold/:id/sell', asyncHandler(async (req, res) => {
+  const data = saleSchema.parse(req.body);
+  const oldHolding = await svc.getGoldHoldingForAudit(req.user!.userId, req.params.id, req.user!.role);
+  const holding = await svc.recordGoldHoldingSale(req.user!.userId, req.params.id, data, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'GoldHolding', entityId: holding.id, oldValue: oldHolding, newValue: holding });
+  sendSuccess(res, holding);
+}));
+
 // ─── Real Estate ──────────────────────────────────────────────────────────────
 
 const reOwnerSchema = z.object({
@@ -365,6 +379,14 @@ router.delete('/real-estate/:id', asyncHandler(async (req, res) => {
   const prop = await svc.deleteRealEstate(req.user!.userId, req.params.id, req.user!.role);
   await recordAuditLog({ performedByUserId: req.user!.userId, action: 'DELETE', entityType: 'RealEstate', entityId: prop?.id ?? req.params.id, oldValue: oldProp });
   sendNoContent(res);
+}));
+
+router.post('/real-estate/:id/sell', asyncHandler(async (req, res) => {
+  const data = saleSchema.parse(req.body);
+  const oldProp = await svc.getRealEstateForAudit(req.user!.userId, req.params.id, req.user!.role);
+  const prop = await svc.recordRealEstateSale(req.user!.userId, req.params.id, data, req.user!.role);
+  await recordAuditLog({ performedByUserId: req.user!.userId, action: 'UPDATE', entityType: 'RealEstate', entityId: prop.id, oldValue: oldProp, newValue: prop });
+  sendSuccess(res, prop);
 }));
 
 export default router;

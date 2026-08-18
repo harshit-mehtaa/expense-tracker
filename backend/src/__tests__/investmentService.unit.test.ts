@@ -68,6 +68,14 @@ vi.mock('../config/prisma', () => {
     insurancePolicy: {
       findMany: vi.fn().mockResolvedValue([]),
     },
+    // Sale-guard dependencies (findActiveLoanSecuring, assetService.ts) — that module
+    // imports the SAME mocked '../config/prisma', so no separate mock is needed for it.
+    asset: {
+      findFirst: vi.fn(),
+    },
+    loan: {
+      findFirst: vi.fn(),
+    },
   };
   return { default: mockPrisma, prisma: mockPrisma };
 });
@@ -110,6 +118,8 @@ import {
   updateRealEstate,
   deleteRealEstate,
   getRealEstateForAudit,
+  recordRealEstateSale,
+  recordGoldHoldingSale,
   getExchangeRates,
   upsertExchangeRate,
   getExchangeRateForAudit,
@@ -126,6 +136,8 @@ const goldMock = prisma.goldHolding as any;
 const reMock = prisma.realEstate as any;
 const userMock = (prisma as any).user;
 const insMock = prisma.insurancePolicy as any;
+const assetMock = (prisma as any).asset;
+const loanMock = (prisma as any).loan;
 
 const MOCK_INV = {
   id: 'inv-1',
@@ -159,6 +171,10 @@ beforeEach(() => {
   reMock.findFirst.mockResolvedValue({ id: 're-1', userId: 'u1' });
   userMock.findMany.mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]);
   insMock.findMany.mockResolvedValue([]);
+  // No linked asset by default — the sale guard trivially passes unless a test says
+  // otherwise (a linked asset with an active loan).
+  assetMock.findFirst.mockResolvedValue(null);
+  loanMock.findFirst.mockResolvedValue(null);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1286,6 +1302,48 @@ describe('updateGoldHolding / deleteGoldHolding', () => {
     expect(goldMock.delete).toHaveBeenCalledWith({ where: { id: 'gold-1' } });
   });
 
+  // ── Selling — the old mechanism was delete, which destroyed purchase price/date. ──
+
+  it('recordGoldHoldingSale sets soldAt/salePrice, never deletes', async () => {
+    goldMock.update.mockResolvedValue({ id: 'gold-1', soldAt: new Date('2026-06-01'), salePrice: 60000 });
+    await recordGoldHoldingSale('u1', 'gold-1', { salePrice: 60000, date: '2026-06-01' });
+
+    expect(goldMock.delete).not.toHaveBeenCalled();
+    expect(goldMock.update).toHaveBeenCalledWith({
+      where: { id: 'gold-1' },
+      data: { soldAt: new Date('2026-06-01'), salePrice: 60000 },
+    });
+  });
+
+  it('recordGoldHoldingSale: gold DOES secure loans (SECURED_TYPES includes GOLD) — blocks if the linked asset has one open', async () => {
+    assetMock.findFirst.mockResolvedValue({ id: 'asset-1' });
+    loanMock.findFirst.mockResolvedValue({ id: 'loan-1', lenderName: 'Muthoot' });
+
+    await expect(
+      recordGoldHoldingSale('u1', 'gold-1', { salePrice: 60000, date: '2026-06-01' }),
+    ).rejects.toThrow(/active loan/i);
+    expect(goldMock.update).not.toHaveBeenCalled();
+    expect(assetMock.findFirst).toHaveBeenCalledWith({ where: { goldHoldingId: 'gold-1' }, select: { id: true } });
+    expect(loanMock.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { assetId: 'asset-1', closedAt: null } }));
+  });
+
+  it('recordGoldHoldingSale: no linked asset at all — sells with no loan check needed', async () => {
+    assetMock.findFirst.mockResolvedValue(null);
+    goldMock.update.mockResolvedValue({ id: 'gold-1' });
+    await expect(
+      recordGoldHoldingSale('u1', 'gold-1', { salePrice: 60000, date: '2026-06-01' }),
+    ).resolves.toBeDefined();
+    expect(loanMock.findFirst).not.toHaveBeenCalled();
+    expect(goldMock.update).toHaveBeenCalled();
+  });
+
+  it('recordGoldHoldingSale: 404s for a holding the requester cannot write to', async () => {
+    goldMock.findFirst.mockResolvedValue(null);
+    await expect(
+      recordGoldHoldingSale('u1', 'gold-x', { salePrice: 60000, date: '2026-06-01' }),
+    ).rejects.toThrow(/not found/i);
+  });
+
   it('updates gold holding when found', async () => {
     const updated = { id: 'gold-1', quantityGrams: 20 };
     goldMock.update.mockResolvedValue(updated);
@@ -1430,6 +1488,57 @@ describe('createRealEstate / updateRealEstate / deleteRealEstate', () => {
     reMock.delete.mockResolvedValue({ id: 're-1' });
     await deleteRealEstate('u1', 're-1');
     expect(reMock.delete).toHaveBeenCalledWith({ where: { id: 're-1' } });
+  });
+
+  // ── Selling — RealEstate.tsx had no delete action wired up at all before this; the
+  // sale flow is the property's first and only lifecycle action. ──────────────────
+
+  it('recordRealEstateSale sets soldAt/salePrice, never deletes, preserving purchase history', async () => {
+    reMock.update.mockResolvedValue({ id: 're-1', soldAt: new Date('2026-06-01'), salePrice: 9_500_000 });
+    await recordRealEstateSale('u1', 're-1', { salePrice: 9_500_000, date: '2026-06-01' });
+
+    expect(reMock.delete).not.toHaveBeenCalled();
+    expect(reMock.update).toHaveBeenCalledWith({
+      where: { id: 're-1' },
+      data: { soldAt: new Date('2026-06-01'), salePrice: 9_500_000 },
+    });
+  });
+
+  it('DQ5/DQ6: blocks a sale while the property secures an active loan — via the REAL Asset-mediated link, not the dead RealEstate.loanId field', async () => {
+    assetMock.findFirst.mockResolvedValue({ id: 'asset-1' });
+    loanMock.findFirst.mockResolvedValue({ id: 'loan-1', lenderName: 'HDFC Bank' });
+
+    await expect(
+      recordRealEstateSale('u1', 're-1', { salePrice: 9_500_000, date: '2026-06-01' }),
+    ).rejects.toThrow(/active loan \(HDFC Bank\)/i);
+    expect(reMock.update).not.toHaveBeenCalled();
+    expect(assetMock.findFirst).toHaveBeenCalledWith({ where: { realEstateId: 're-1' }, select: { id: true } });
+    expect(loanMock.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { assetId: 'asset-1', closedAt: null } }));
+  });
+
+  it('allows the sale once the securing loan is closedAt-closed', async () => {
+    assetMock.findFirst.mockResolvedValue({ id: 'asset-1' });
+    loanMock.findFirst.mockResolvedValue(null); // findActiveLoanSecuring already filters closedAt: null
+    reMock.update.mockResolvedValue({ id: 're-1' });
+    await expect(
+      recordRealEstateSale('u1', 're-1', { salePrice: 9_500_000, date: '2026-06-01' }),
+    ).resolves.toBeDefined();
+    expect(reMock.update).toHaveBeenCalled();
+  });
+
+  it('VQ6: a co-owner can record a sale — same write-scope every other RealEstate mutation uses', async () => {
+    reMock.findFirst.mockResolvedValue({ id: 're-1', userId: 'u1' });
+    await recordRealEstateSale('u2', 're-1', { salePrice: 9_500_000, date: '2026-06-01' }, 'MEMBER');
+    expect(reMock.findFirst).toHaveBeenCalledWith({
+      where: { id: 're-1', OR: [{ userId: 'u2' }, { owners: { some: { userId: 'u2' } } }] },
+    });
+  });
+
+  it('404s for a property the requester cannot write to', async () => {
+    reMock.findFirst.mockResolvedValue(null);
+    await expect(
+      recordRealEstateSale('u3', 're-1', { salePrice: 9_500_000, date: '2026-06-01' }),
+    ).rejects.toThrow(/not found/i);
   });
 
   it('refuses a co-owner who drops the primary owner from the owners list', async () => {

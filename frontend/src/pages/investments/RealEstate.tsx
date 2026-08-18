@@ -11,6 +11,8 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { useAuth } from '@/contexts/AuthContext';
 import { investmentsApi, type RealEstateProperty } from '@/api/investments';
+import { useToast } from '@/contexts/ToastContext';
+import { formatDate, toDateInputValue } from '@/lib/dateFormat';
 
 const PROPERTY_TYPES: Record<string, string> = {
   RESIDENTIAL: 'Residential', COMMERCIAL: 'Commercial', LAND: 'Land', PLOT: 'Plot',
@@ -61,6 +63,10 @@ export default function RealEstatePage() {
   const [editingREId, setEditingREId] = useState<string | null>(null);
   const [editREValue, setEditREValue] = useState('');
   const [editingOwnersProperty, setEditingOwnersProperty] = useState<RealEstateProperty | null>(null);
+  const [sellingProperty, setSellingProperty] = useState<RealEstateProperty | null>(null);
+  const [sellPrice, setSellPrice] = useState('');
+  const [sellDate, setSellDate] = useState(toDateInputValue(new Date()));
+  const { toast } = useToast();
 
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
   const isViewingFamilyWide = isAdmin && !viewUserId;
@@ -104,6 +110,27 @@ export default function RealEstatePage() {
     mutationFn: ({ id, value }: { id: string; value: number }) =>
       investmentsApi.updateRealEstate(id, { currentValue: value }),
     onSuccess: () => { invalidateRE(); setEditingREId(null); },
+  });
+
+  const sellMutation = useMutation({
+    mutationFn: ({ id, salePrice, date }: { id: string; salePrice: number; date: string }) =>
+      investmentsApi.sellRealEstate(id, { salePrice, date }),
+    onSuccess: () => {
+      // Net worth reads currentValue live, so the sold property must stop counting —
+      // invalidating just ['realestate'] would leave a stale dashboard figure.
+      invalidateRE();
+      qc.invalidateQueries({ queryKey: ['report-networth'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['net-worth-history'] });
+      setSellingProperty(null);
+      setSellPrice('');
+      toast({ title: 'Sale recorded', variant: 'success' });
+    },
+    onError: (err: any) => {
+      // The loan-collateral guard surfaces here as a 409 with a specific reason —
+      // without this the click would just silently do nothing.
+      toast({ title: err?.response?.data?.message ?? 'Failed to record sale', variant: 'error' });
+    },
   });
 
   const createPropertyMutation = useMutation({
@@ -223,9 +250,19 @@ export default function RealEstatePage() {
           <div key={p.id} className="rounded-lg border bg-card p-5 space-y-3">
             <div className="flex justify-between items-start">
               <div>
-                <span className="text-xs font-medium bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
-                  {PROPERTY_TYPES[p.propertyType] ?? p.propertyType}
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-medium bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
+                    {PROPERTY_TYPES[p.propertyType] ?? p.propertyType}
+                  </span>
+                  {/* There was no delete action on this page at all before this — this
+                      badge, and the Sell button below, are the property's first and only
+                      lifecycle action. */}
+                  {p.soldAt && (
+                    <span className="text-xs font-medium bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300 px-2 py-0.5 rounded-full">
+                      Sold {formatDate(p.soldAt)}
+                    </span>
+                  )}
+                </div>
                 <h3 className="font-semibold mt-1">{p.propertyName}</h3>
                 <p className="text-sm text-muted-foreground">{p.location}</p>
                 {isViewingFamilyWide && p.userName && (
@@ -239,6 +276,16 @@ export default function RealEstatePage() {
                 <Button variant="outline" size="sm" onClick={() => openOwnersEditor(p)} title="Edit owners">
                   <Users className="h-4 w-4 mr-1" /> Owners
                 </Button>
+                {!p.soldAt && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => { setSellingProperty(p); setSellPrice(String(p.currentValue)); setSellDate(toDateInputValue(new Date())); }}
+                    title="Record sale"
+                  >
+                    Sell
+                  </Button>
+                )}
               </div>
             </div>
             {p.owners?.length > 0 && (
@@ -262,39 +309,48 @@ export default function RealEstatePage() {
             )}
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div><p className="text-muted-foreground">Purchase Price</p><INRDisplay amount={p.purchasePrice} /></div>
-              <div>
-                <p className="text-muted-foreground">Current Value</p>
-                {editingREId === p.id ? (
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <Input
-                      type="number"
-                      step="1000"
-                      value={editREValue}
-                      onChange={(e) => setEditREValue(e.target.value)}
-                      className="h-7 w-28 text-xs"
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') { const v = Number(editREValue); if (v > 0) updateREValueMutation.mutate({ id: p.id, value: v }); }
-                        if (e.key === 'Escape') setEditingREId(null);
-                      }}
-                    />
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { const v = Number(editREValue); if (v > 0) updateREValueMutation.mutate({ id: p.id, value: v }); }}>
-                      <Check className="h-3 w-3 text-green-600" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingREId(null)}>
-                      <X className="h-3 w-3" />
-                    </Button>
+              {p.soldAt ? (
+                <>
+                  <div><p className="text-muted-foreground">Sale Price</p><INRDisplay amount={p.salePrice ?? 0} className="font-semibold" /></div>
+                  <div><p className="text-muted-foreground">Realised Gain</p><INRDisplay amount={(p.salePrice ?? 0) - p.purchasePrice} colorCode /></div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <p className="text-muted-foreground">Current Value</p>
+                    {editingREId === p.id ? (
+                      <div className="flex items-center gap-1 mt-0.5">
+                        <Input
+                          type="number"
+                          step="1000"
+                          value={editREValue}
+                          onChange={(e) => setEditREValue(e.target.value)}
+                          className="h-7 w-28 text-xs"
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { const v = Number(editREValue); if (v > 0) updateREValueMutation.mutate({ id: p.id, value: v }); }
+                            if (e.key === 'Escape') setEditingREId(null);
+                          }}
+                        />
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { const v = Number(editREValue); if (v > 0) updateREValueMutation.mutate({ id: p.id, value: v }); }}>
+                          <Check className="h-3 w-3 text-green-600" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingREId(null)}>
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 group">
+                        <INRDisplay amount={p.currentValue} className="text-green-600 font-semibold" />
+                        <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setEditingREId(p.id); setEditREValue(String(p.currentValue)); }} title="Update value">
+                          <Pencil className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div className="flex items-center gap-1 group">
-                    <INRDisplay amount={p.currentValue} className="text-green-600 font-semibold" />
-                    <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => { setEditingREId(p.id); setEditREValue(String(p.currentValue)); }} title="Update value">
-                      <Pencil className="h-3 w-3" />
-                    </Button>
-                  </div>
-                )}
-              </div>
-              <div><p className="text-muted-foreground">Unrealised Gain</p><INRDisplay amount={p.currentValue - p.purchasePrice} colorCode /></div>
+                  <div><p className="text-muted-foreground">Unrealised Gain</p><INRDisplay amount={p.currentValue - p.purchasePrice} colorCode /></div>
+                </>
+              )}
               {p.rentalIncomeMonthly && <div><p className="text-muted-foreground">Monthly Rental</p><INRDisplay amount={p.rentalIncomeMonthly} /></div>}
             </div>
             {p.loan && (
@@ -308,6 +364,42 @@ export default function RealEstatePage() {
           </div>
         )}
       </div>
+
+      {sellingProperty && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-background rounded-lg border shadow-xl w-full max-w-sm p-6 space-y-4">
+            <h2 className="text-lg font-semibold">Record sale — {sellingProperty.propertyName}</h2>
+            <p className="text-xs text-muted-foreground">
+              This stays on the record — purchase price, date and location are kept, not
+              erased. The property stops counting toward net worth going forward.
+            </p>
+            <div className="space-y-1">
+              <Label htmlFor="sell-price">Sale price (₹)</Label>
+              <Input
+                id="sell-price"
+                type="number"
+                step="1000"
+                value={sellPrice}
+                onChange={(e) => setSellPrice(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="sell-date">Sale date</Label>
+              <Input id="sell-date" type="date" value={sellDate} onChange={(e) => setSellDate(e.target.value)} />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setSellingProperty(null)}>Cancel</Button>
+              <Button
+                onClick={() => sellMutation.mutate({ id: sellingProperty.id, salePrice: Number(sellPrice), date: sellDate })}
+                disabled={!sellPrice || Number(sellPrice) <= 0 || sellMutation.isPending}
+              >
+                {sellMutation.isPending ? 'Recording…' : 'Confirm sale'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showPropertyForm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">

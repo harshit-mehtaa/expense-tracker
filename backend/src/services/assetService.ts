@@ -82,6 +82,61 @@ export async function updateAsset(
   return prisma.asset.update({ where: { id }, data, include: assetInclude });
 }
 
+/**
+ * The open loan (if any) securing the asset with this id, or null. "Open" specifically —
+ * a CLOSED loan that once used this as collateral is not a reason to block a sale; you
+ * can sell a house once the mortgage against it is paid off. Shared by every sale path
+ * (this file's own recordAssetSale, and investmentService's RealEstate/GoldHolding sale
+ * functions, which resolve their own linked asset's id first).
+ */
+export async function findActiveLoanSecuring(assetId: string) {
+  return prisma.loan.findFirst({
+    where: { assetId, closedAt: null },
+    select: { id: true, lenderName: true },
+  });
+}
+
+async function assertNotSecuringActiveLoan(assetId: string) {
+  const openLoan = await findActiveLoanSecuring(assetId);
+  if (openLoan) {
+    throw AppError.conflict(
+      `This still secures an active loan (${openLoan.lenderName}). Close or pay off the loan before recording a sale.`,
+    );
+  }
+}
+
+export interface RecordSaleInput {
+  salePrice: number;
+  date: string;
+}
+
+/**
+ * For an UNLINKED asset only (no realEstateId/goldHoldingId) — a linked one's sale is
+ * recorded on the RealEstate/GoldHolding row it represents (investmentService.ts), so
+ * this refuses rather than creating a second place that could claim the same sale.
+ */
+export async function recordAssetSale(
+  requesterId: string,
+  id: string,
+  input: RecordSaleInput,
+  requesterRole = 'MEMBER',
+) {
+  const asset = await prisma.asset.findFirst({ where: ownerScopedWhere(id, requesterId, requesterRole) });
+  if (!asset) throw AppError.notFound('Asset');
+  if (asset.realEstateId || asset.goldHoldingId) {
+    throw AppError.badRequest(
+      'This asset represents a property or gold holding — record the sale there instead.',
+    );
+  }
+  await assertNotSecuringActiveLoan(id);
+
+  return prisma.asset.update({
+    where: { id },
+    data: { soldAt: new Date(input.date), salePrice: input.salePrice },
+    include: assetInclude,
+  });
+}
+
 export async function deleteAsset(requesterId: string, id: string, requesterRole = 'MEMBER') {
   const asset = await prisma.asset.findFirst({
     where: ownerScopedWhere(id, requesterId, requesterRole),

@@ -24,6 +24,7 @@ vi.mock('../../services/assetService', () => ({
   updateAsset: vi.fn(),
   deleteAsset: vi.fn(),
   getAssetForAudit: vi.fn(),
+  recordAssetSale: vi.fn(),
 }));
 
 vi.mock('../../services/auditService', () => ({ recordAuditLog: vi.fn() }));
@@ -67,6 +68,7 @@ beforeEach(() => {
   m(svc.updateAsset).mockResolvedValue(MOCK_ASSET);
   m(svc.deleteAsset).mockResolvedValue(MOCK_ASSET);
   m(svc.getAssetForAudit).mockResolvedValue(MOCK_ASSET);
+  m(svc.recordAssetSale).mockResolvedValue({ ...MOCK_ASSET, soldAt: new Date('2026-06-01'), salePrice: 500000 });
 });
 
 describe('GET /api/assets', () => {
@@ -179,5 +181,36 @@ describe('DELETE /api/assets/:id', () => {
     const res = await request(makeMemberApp()).delete('/api/assets/asset-1');
     expect(res.status).toBe(409);
     expect(res.body.message).toMatch(/secures 1 loan/i);
+  });
+});
+
+describe('POST /api/assets/:id/sell', () => {
+  it('records the sale and an UPDATE audit entry', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets/asset-1/sell').send({ salePrice: 500000, date: '2026-06-01' });
+    expect(res.status).toBe(200);
+    expect(m(svc.recordAssetSale)).toHaveBeenCalledWith('u1', 'asset-1', { salePrice: 500000, date: '2026-06-01' }, 'MEMBER');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({ action: 'UPDATE', entityType: 'Asset' }));
+  });
+
+  it('422s a non-positive sale price', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets/asset-1/sell').send({ salePrice: 0, date: '2026-06-01' });
+    expect(res.status).toBe(422);
+    expect(m(svc.recordAssetSale)).not.toHaveBeenCalled();
+  });
+
+  it('422s an unparseable date', async () => {
+    const res = await request(makeMemberApp()).post('/api/assets/asset-1/sell').send({ salePrice: 500000, date: 'nonsense' });
+    expect(res.status).toBe(422);
+    expect(m(svc.recordAssetSale)).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the loan-collateral guard as a 409', async () => {
+    const { AppError } = await import('../../utils/AppError');
+    m(svc.recordAssetSale).mockRejectedValue(
+      AppError.conflict('This still secures an active loan (HDFC Bank). Close or pay off the loan before recording a sale.'),
+    );
+    const res = await request(makeMemberApp()).post('/api/assets/asset-1/sell').send({ salePrice: 500000, date: '2026-06-01' });
+    expect(res.status).toBe(409);
+    expect(res.body.message).toMatch(/active loan/i);
   });
 });

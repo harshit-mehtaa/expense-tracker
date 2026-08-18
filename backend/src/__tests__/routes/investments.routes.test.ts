@@ -55,11 +55,13 @@ vi.mock('../../services/investmentService', () => ({
   updateGoldHolding: vi.fn(),
   deleteGoldHolding: vi.fn(),
   getGoldHoldingForAudit: vi.fn(),
+  recordGoldHoldingSale: vi.fn(),
   getRealEstate: vi.fn(),
   createRealEstate: vi.fn(),
   updateRealEstate: vi.fn(),
   deleteRealEstate: vi.fn(),
   getRealEstateForAudit: vi.fn(),
+  recordRealEstateSale: vi.fn(),
 }));
 
 vi.mock('../../services/auditService', () => ({
@@ -773,6 +775,29 @@ describe('DELETE /api/investments/gold/:id', () => {
   });
 });
 
+describe('POST /api/investments/gold/:id/sell', () => {
+  it('records the sale and an UPDATE audit entry', async () => {
+    m(svc.recordGoldHoldingSale).mockResolvedValue({ id: 'gold-1', soldAt: new Date('2026-06-01'), salePrice: 60000 });
+    const res = await request(app).post('/api/investments/gold/gold-1/sell').send({ salePrice: 60000, date: '2026-06-01' });
+    expect(res.status).toBe(200);
+    expect(m(svc.recordGoldHoldingSale)).toHaveBeenCalledWith('u1', 'gold-1', { salePrice: 60000, date: '2026-06-01' }, 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({ action: 'UPDATE', entityType: 'GoldHolding' }));
+  });
+
+  it('422s a non-positive sale price', async () => {
+    const res = await request(app).post('/api/investments/gold/gold-1/sell').send({ salePrice: -1, date: '2026-06-01' });
+    expect(res.status).toBe(422);
+    expect(m(svc.recordGoldHoldingSale)).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the loan-collateral guard as a 409', async () => {
+    const { AppError } = await import('../../utils/AppError');
+    m(svc.recordGoldHoldingSale).mockRejectedValue(AppError.conflict('This still secures an active loan (Muthoot).'));
+    const res = await request(app).post('/api/investments/gold/gold-1/sell').send({ salePrice: 60000, date: '2026-06-01' });
+    expect(res.status).toBe(409);
+  });
+});
+
 // ─── Real Estate ──────────────────────────────────────────────────────────────
 
 const VALID_RE = {
@@ -856,5 +881,31 @@ describe('DELETE /api/investments/real-estate/:id', () => {
     m(svc.deleteRealEstate).mockResolvedValue({ id: 're-returned' });
     await request(app).delete('/api/investments/real-estate/re-1');
     expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({ entityId: 're-returned' }));
+  });
+});
+
+describe('POST /api/investments/real-estate/:id/sell', () => {
+  it('records the sale and an UPDATE audit entry', async () => {
+    m(svc.recordRealEstateSale).mockResolvedValue({ id: 're-1', soldAt: new Date('2026-06-01'), salePrice: 9_500_000 });
+    const res = await request(app).post('/api/investments/real-estate/re-1/sell').send({ salePrice: 9_500_000, date: '2026-06-01' });
+    expect(res.status).toBe(200);
+    expect(m(svc.recordRealEstateSale)).toHaveBeenCalledWith('u1', 're-1', { salePrice: 9_500_000, date: '2026-06-01' }, 'ADMIN');
+    expect(m(recordAuditLog)).toHaveBeenCalledWith(expect.objectContaining({ action: 'UPDATE', entityType: 'RealEstate' }));
+  });
+
+  it('422s an unparseable date', async () => {
+    const res = await request(app).post('/api/investments/real-estate/re-1/sell').send({ salePrice: 9_500_000, date: 'nonsense' });
+    expect(res.status).toBe(422);
+    expect(m(svc.recordRealEstateSale)).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the loan-collateral guard as a 409, not a raw 500', async () => {
+    const { AppError } = await import('../../utils/AppError');
+    m(svc.recordRealEstateSale).mockRejectedValue(
+      AppError.conflict('This still secures an active loan (HDFC Bank). Close or pay off the loan before recording a sale.'),
+    );
+    const res = await request(app).post('/api/investments/real-estate/re-1/sell').send({ salePrice: 9_500_000, date: '2026-06-01' });
+    expect(res.status).toBe(409);
+    expect(res.body.message).toMatch(/active loan/i);
   });
 });

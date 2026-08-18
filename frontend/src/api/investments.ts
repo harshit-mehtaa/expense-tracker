@@ -96,6 +96,9 @@ export interface GoldHolding {
   purchaseDate: string;
   notes?: string;
   userName?: string;
+  /** Set once, by recording a sale. Null means still held. */
+  soldAt?: string | null;
+  salePrice?: number | null;
 }
 
 export interface RealEstateOwner {
@@ -125,6 +128,9 @@ export interface RealEstateProperty {
   currentValueShare?: number;
   rentalIncomeMonthlyShare?: number;
   loan?: { lenderName: string; outstandingBalance: number } | null;
+  /** Set once, by recording a sale. Null means still owned. */
+  soldAt?: string | null;
+  salePrice?: number | null;
 }
 
 export interface ExchangeRate {
@@ -173,7 +179,13 @@ export function normalizeRD(rd: RD): RD {
 }
 
 export function normalizeGoldHolding(h: GoldHolding): GoldHolding {
-  return { ...h, quantityGrams: Number(h.quantityGrams), purchasePricePerGram: Number(h.purchasePricePerGram), currentPricePerGram: Number(h.currentPricePerGram) };
+  return {
+    ...h,
+    quantityGrams: Number(h.quantityGrams),
+    purchasePricePerGram: Number(h.purchasePricePerGram),
+    currentPricePerGram: Number(h.currentPricePerGram),
+    salePrice: h.salePrice != null ? Number(h.salePrice) : h.salePrice,
+  };
 }
 
 export function normalizeRealEstateProperty(p: any): any {
@@ -187,6 +199,7 @@ export function normalizeRealEstateProperty(p: any): any {
     ...(p.purchasePriceShare != null ? { purchasePriceShare: Number(p.purchasePriceShare) } : {}),
     ...(p.currentValueShare != null ? { currentValueShare: Number(p.currentValueShare) } : {}),
     ...(p.rentalIncomeMonthlyShare != null ? { rentalIncomeMonthlyShare: Number(p.rentalIncomeMonthlyShare) } : {}),
+    ...(p.salePrice != null ? { salePrice: Number(p.salePrice) } : {}),
     ...(p.loan ? { loan: { ...p.loan, outstandingBalance: Number(p.loan.outstandingBalance) } } : {}),
   };
 }
@@ -245,6 +258,8 @@ export const investmentsApi = {
     api.post('/investments/gold', data, { params: opts?.targetUserId ? { targetUserId: opts.targetUserId } : {} }).then((r) => normalizeGoldHolding(r.data.data)),
   updateGold: (id: string, data: object) => api.put(`/investments/gold/${id}`, data).then((r) => normalizeGoldHolding(r.data.data)),
   deleteGold: (id: string) => api.delete(`/investments/gold/${id}`),
+  sellGold: (id: string, data: { salePrice: number; date: string }) =>
+    api.post(`/investments/gold/${id}/sell`, data).then((r) => normalizeGoldHolding(r.data.data)),
   getRealEstate: (opts?: { targetUserId?: string }) =>
     api.get<{ data: any }>('/investments/real-estate', {
       params: opts?.targetUserId ? { userId: opts.targetUserId } : {},
@@ -253,6 +268,8 @@ export const investmentsApi = {
     api.post('/investments/real-estate', data, { params: opts?.targetUserId ? { targetUserId: opts.targetUserId } : {} }).then((r) => normalizeRealEstateProperty(r.data.data)),
   updateRealEstate: (id: string, data: object) => api.put(`/investments/real-estate/${id}`, data).then((r) => normalizeRealEstateProperty(r.data.data)),
   deleteRealEstate: (id: string) => api.delete(`/investments/real-estate/${id}`),
+  sellRealEstate: (id: string, data: { salePrice: number; date: string }) =>
+    api.post(`/investments/real-estate/${id}/sell`, data).then((r) => normalizeRealEstateProperty(r.data.data)),
   getExchangeRates: () => api.get<{ data: ExchangeRate[] }>('/investments/exchange-rates').then(unwrap),
   updateExchangeRate: (currency: string, rate: number) => api.put(`/investments/exchange-rates/${currency}`, { rate }),
 };

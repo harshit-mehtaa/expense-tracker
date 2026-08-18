@@ -732,7 +732,10 @@ export default function LoansPage() {
   // uneditable by anyone but its primary owner.
   const assetOptions = useMemo(() => {
     const byId = new Map<string, { id: string; name: string; assetType: string }>();
-    assets.forEach((a) => byId.set(a.id, { id: a.id, name: a.name, assetType: a.assetType }));
+    // Excludes sold assets — securing a NEW loan against something already sold makes no
+    // sense. The editing?.asset fallback below still shows an OLD loan's asset even if
+    // it has since been sold, so editing that loan does not suddenly look unsecured.
+    assets.filter((a) => !a.soldAt).forEach((a) => byId.set(a.id, { id: a.id, name: a.name, assetType: a.assetType }));
     if (editing?.asset && !byId.has(editing.asset.id)) {
       byId.set(editing.asset.id, {
         id: editing.asset.id, name: editing.asset.name, assetType: editing.asset.assetType,

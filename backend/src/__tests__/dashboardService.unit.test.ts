@@ -303,6 +303,20 @@ describe('computeNetWorthStatement', () => {
     expect(r.totalLiabilities).toBe(0);
   });
 
+  // ── Sold assets ─────────────────────────────────────────────────────────────
+  // Nothing filtered goldHolding/realEstate/asset by any status before this — the ONLY
+  // removal mechanism was hard delete. A sold item is a PERMANENT record kept on the
+  // row (recordRealEstateSale etc.), not a delete, so it would still count here unless
+  // explicitly excluded. A mocked findMany does not actually filter, so these assert the
+  // WHERE clause shape — the thing that makes the real exclusion happen.
+
+  it('excludes sold rows from every asset-holding query — goldHolding, asset, realEstate', async () => {
+    await computeNetWorthStatement('u1');
+    expect(goldMock.findMany.mock.calls[0][0].where).toMatchObject({ soldAt: null });
+    expect(assetMock.findMany.mock.calls[0][0].where).toMatchObject({ soldAt: null });
+    expect(reMock.findMany.mock.calls[0][0].where).toMatchObject({ soldAt: null });
+  });
+
   it('includes bank balance in totalAssets', async () => {
     bankMock.findMany.mockResolvedValue([{ bankName: 'HDFC', accountNumberLast4: '1234', accountType: 'SAVINGS', currentBalance: 100000 }]);
     const r = await computeNetWorthStatement('u1');

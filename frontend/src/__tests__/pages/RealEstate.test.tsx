@@ -120,3 +120,87 @@ describe('Real Estate page — smoke', () => {
     });
   });
 });
+
+// ─── Recording a sale ────────────────────────────────────────────────────────
+
+/**
+ * There was no delete action on this page at all before this — "Sell" is the property's
+ * first and only lifecycle action.
+ */
+describe('Real Estate page — recording a sale', () => {
+  it('opens a sale confirmation with the property\'s current value prefilled', async () => {
+    const user = userEvent.setup();
+    renderPage(<RealEstatePage />, { route: '/real-estate', handlers: reHandlers(), user: MEMBER_USER });
+    await screen.findByText('Koramangala Flat');
+
+    await user.click(screen.getByRole('button', { name: /^sell$/i }));
+
+    expect(await screen.findByText(/record sale — koramangala flat/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/sale price/i)).toHaveValue(8000000);
+  });
+
+  it('sends the sale price and date, and confirms with a success toast', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    renderPage(<RealEstatePage />, {
+      route: '/real-estate',
+      user: MEMBER_USER,
+      handlers: [
+        ...reHandlers(),
+        http.post(url('/investments/real-estate/re-1/sell'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({
+            data: { ...PROPERTY, soldAt: '2026-06-01T00:00:00.000Z', salePrice: 9500000 },
+          });
+        }),
+      ],
+    });
+    await screen.findByText('Koramangala Flat');
+    await user.click(screen.getByRole('button', { name: /^sell$/i }));
+
+    const priceInput = await screen.findByLabelText(/sale price/i);
+    await user.clear(priceInput);
+    await user.type(priceInput, '9500000');
+    await user.click(screen.getByRole('button', { name: /confirm sale/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body).toMatchObject({ salePrice: 9500000 });
+    await waitFor(() => {
+      expect(screen.getByText(/sale recorded/i)).toBeInTheDocument();
+    });
+  });
+
+  it('surfaces the loan-collateral guard as a toast, not a silent no-op', async () => {
+    const user = userEvent.setup();
+    renderPage(<RealEstatePage />, {
+      route: '/real-estate',
+      user: MEMBER_USER,
+      handlers: [
+        ...reHandlers(),
+        http.post(url('/investments/real-estate/re-1/sell'), () => HttpResponse.json(
+          { message: 'This still secures an active loan (HDFC Bank). Close or pay off the loan before recording a sale.' },
+          { status: 409 },
+        )),
+      ],
+    });
+    await screen.findByText('Koramangala Flat');
+    await user.click(screen.getByRole('button', { name: /^sell$/i }));
+    await user.click(screen.getByRole('button', { name: /confirm sale/i }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/active loan/i).length).toBeGreaterThan(0);
+    });
+  });
+
+  it('hides the Sell button and shows Sale Price instead of Current Value once sold', async () => {
+    const SOLD = { ...PROPERTY, soldAt: '2026-06-01T00:00:00.000Z', salePrice: 9500000 };
+    renderPage(<RealEstatePage />, { route: '/real-estate', user: MEMBER_USER, handlers: reHandlers([SOLD]) });
+    await screen.findByText('Koramangala Flat');
+
+    expect(screen.queryByRole('button', { name: /^sell$/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/sale price/i)).toBeInTheDocument();
+    // Exact text — "Total Current Value" in the portfolio summary card is unrelated and
+    // must not collide with this.
+    expect(screen.queryByText('Current Value')).not.toBeInTheDocument();
+  });
+});

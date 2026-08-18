@@ -353,6 +353,28 @@ describe('Loans — asset link', () => {
     expect(within(picker).getByRole('option', { name: /Swift Dzire/ })).toBeInTheDocument();
   });
 
+  it('excludes a sold asset — you cannot secure a new loan against something you no longer own', async () => {
+    const user = userEvent.setup();
+    renderPage(<LoansPage />, {
+      route: '/loans',
+      user: MEMBER_USER,
+      handlers: [
+        // Must precede the spread below — loanHandlers() registers its OWN /assets
+        // handler, and MSW matches in the order handlers were given (first match wins).
+        http.get(url('/assets'), () => HttpResponse.json({
+          data: [...ASSETS, { id: 'a-3', userId: 'u-member', assetType: 'VEHICLE', name: 'Old Scooter', value: 30000, soldAt: '2026-01-01T00:00:00.000Z' }],
+        })),
+        ...loanHandlers([]),
+      ],
+    });
+    await screen.findByRole('heading', { level: 1, name: /loans/i });
+    await user.click(screen.getByRole('button', { name: /add loan/i }));
+
+    const picker = await screen.findByLabelText(/Secured Against/i);
+    expect(within(picker).getByRole('option', { name: /Swift Dzire/ })).toBeInTheDocument();
+    expect(within(picker).queryByRole('option', { name: /Old Scooter/ })).not.toBeInTheDocument();
+  });
+
   it('does not require an asset for an unsecured type', async () => {
     const user = userEvent.setup();
     await openCreateForm(user);

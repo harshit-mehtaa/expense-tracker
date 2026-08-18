@@ -518,6 +518,9 @@ model GoldHolding {
   currentPricePerGram  Decimal  @db.Decimal(15, 2) // User-updated in Settings
   purchaseDate         DateTime
   notes                String?
+  /// See RealEstate.soldAt — same convention, same reason.
+  soldAt               DateTime?
+  salePrice            Decimal?  @db.Decimal(15, 2)
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -541,6 +544,11 @@ model RealEstate {
   loanId              String? // Linked home loan
   rentalIncomeMonthly Decimal?     @db.Decimal(15, 2)
   notes               String?
+  /// Set exactly once, by recording a sale. NULL means still owned. Preserved alongside
+  /// purchasePrice/purchaseDate rather than replacing the row on sale (the old mechanism
+  /// was hard delete, which destroyed this same history) — mirrors Loan.closedAt.
+  soldAt              DateTime?
+  salePrice           Decimal?     @db.Decimal(15, 2)
   createdAt           DateTime     @default(now())
   updatedAt           DateTime     @updatedAt
 
@@ -844,6 +852,11 @@ model Asset {
   /// worth with nothing able to detect it.
   goldHoldingId String?  @unique
   notes        String?
+  /// See RealEstate.soldAt — same convention. Only meaningful for an UNLINKED asset
+  /// (realEstateId/goldHoldingId both null) — a linked asset's sale is recorded on the
+  /// RealEstate/GoldHolding row it represents, not duplicated here.
+  soldAt       DateTime?
+  salePrice    Decimal?  @db.Decimal(15, 2)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 

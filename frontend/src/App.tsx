@@ -18,6 +18,7 @@ import CategoriesPage from '@/pages/admin/Categories';
 import SettingsPage from '@/pages/Settings';
 import GoldPage from '@/pages/investments/Gold';
 import RealEstatePage from '@/pages/investments/RealEstate';
+import AssetsPage from '@/pages/investments/Assets';
 import ChangePasswordPage from '@/pages/ChangePassword';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -60,6 +61,7 @@ export default function App() {
         <Route path="investments/*" element={<InvestmentsPage />} />
         <Route path="gold" element={<GoldPage />} />
         <Route path="real-estate" element={<RealEstatePage />} />
+        <Route path="assets" element={<AssetsPage />} />
         <Route path="insurance" element={<InsurancePage />} />
         <Route path="budgets" element={<BudgetsPage />} />
         <Route path="loans/*" element={<LoansPage />} />

@@ -16,6 +16,7 @@ import {
   IndianRupee,
   Home,
   Tag,
+  Car,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -27,6 +28,7 @@ const NAV_ITEMS = [
   { to: '/investments', icon: TrendingUp, label: 'Investments' },
   { to: '/gold', icon: Gem, label: 'Gold' },
   { to: '/real-estate', icon: Home, label: 'Real Estate' },
+  { to: '/assets', icon: Car, label: 'Assets' },
   { to: '/insurance', icon: Shield, label: 'Insurance' },
   { to: '/budgets', icon: Target, label: 'Budgets' },
   { to: '/loans', icon: CreditCard, label: 'Loans & EMIs' },

@@ -112,3 +112,88 @@ describe('Gold page — smoke', () => {
     });
   });
 });
+
+// ─── Recording a sale ────────────────────────────────────────────────────────
+
+/**
+ * Kept alongside the EXISTING destructive delete button, deliberately — they mean
+ * different things. Delete is "this shouldn\'t exist" (a mistake); Sell is "I actually
+ * owned this and got rid of it" (a real event worth a permanent record).
+ */
+describe('Gold page — recording a sale', () => {
+  it('opens a sale confirmation, and delete still works alongside it', async () => {
+    const user = userEvent.setup();
+    renderPage(<GoldPage />, { route: '/gold', handlers: goldHandlers(), user: MEMBER_USER });
+    await screen.findByText('Wedding bangles');
+
+    expect(screen.getByRole('button', { name: /^sell$/i })).toBeInTheDocument();
+    // The pre-existing delete icon button is still there, unchanged.
+    expect(screen.getByTitle(/delete/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^sell$/i }));
+    expect(await screen.findByText(/record sale — wedding bangles/i)).toBeInTheDocument();
+  });
+
+  it('sends the sale price and date, and confirms with a success toast', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    renderPage(<GoldPage />, {
+      route: '/gold',
+      user: MEMBER_USER,
+      handlers: [
+        ...goldHandlers(),
+        http.post(url('/investments/gold/g-1/sell'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: { ...HOLDING, soldAt: '2026-06-01T00:00:00.000Z', salePrice: 130000 } });
+        }),
+      ],
+    });
+    await screen.findByText('Wedding bangles');
+    await user.click(screen.getByRole('button', { name: /^sell$/i }));
+
+    const priceInput = await screen.findByLabelText(/sale price/i);
+    await user.clear(priceInput);
+    await user.type(priceInput, '130000');
+    await user.click(screen.getByRole('button', { name: /confirm sale/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body).toMatchObject({ salePrice: 130000 });
+    await waitFor(() => {
+      expect(screen.getByText(/sale recorded/i)).toBeInTheDocument();
+    });
+  });
+
+  it('surfaces the loan-collateral guard as a toast — gold DOES secure loans', async () => {
+    const user = userEvent.setup();
+    renderPage(<GoldPage />, {
+      route: '/gold',
+      user: MEMBER_USER,
+      handlers: [
+        ...goldHandlers(),
+        http.post(url('/investments/gold/g-1/sell'), () => HttpResponse.json(
+          { message: 'This still secures an active loan (Muthoot Finance).' },
+          { status: 409 },
+        )),
+      ],
+    });
+    await screen.findByText('Wedding bangles');
+    await user.click(screen.getByRole('button', { name: /^sell$/i }));
+    await user.click(screen.getByRole('button', { name: /confirm sale/i }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/active loan/i).length).toBeGreaterThan(0);
+    });
+  });
+
+  it('hides Sell and shows Sale Price instead of Current Rate once sold', async () => {
+    const SOLD = { ...HOLDING, soldAt: '2026-06-01T00:00:00.000Z', salePrice: 130000 };
+    renderPage(<GoldPage />, { route: '/gold', user: MEMBER_USER, handlers: goldHandlers([SOLD]) });
+    await screen.findByText('Wedding bangles');
+
+    expect(screen.queryByRole('button', { name: /^sell$/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/sale price/i)).toBeInTheDocument();
+    expect(screen.queryByText('Current Rate')).not.toBeInTheDocument();
+    // Delete remains available even once sold — a data-entry mistake can still be undone.
+    expect(screen.getByTitle(/delete/i)).toBeInTheDocument();
+  });
+});

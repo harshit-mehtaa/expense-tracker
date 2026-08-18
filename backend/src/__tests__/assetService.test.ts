@@ -13,6 +13,7 @@ vi.mock('../config/prisma', () => {
     // assertRealEstateOwned confirms a linked property belongs to the asset's owner.
     realEstate: { findFirst: vi.fn() },
     goldHolding: { findFirst: vi.fn() },
+    loan: { findFirst: vi.fn() },
   };
   return { default: mock, prisma: mock };
 });
@@ -20,11 +21,13 @@ vi.mock('../config/prisma', () => {
 import { prisma } from '../config/prisma';
 import {
   listAssets, getAsset, createAsset, updateAsset, deleteAsset, getAssetForAudit,
+  recordAssetSale, findActiveLoanSecuring,
 } from '../services/assetService';
 
 const assetMock = (prisma as any).asset;
 const realEstateMock = (prisma as any).realEstate;
 const goldMock = (prisma as any).goldHolding;
+const loanMock = (prisma as any).loan;
 
 const MOCK_ASSET = {
   id: 'asset-1',
@@ -43,6 +46,7 @@ beforeEach(() => {
   assetMock.create.mockResolvedValue(MOCK_ASSET);
   assetMock.update.mockResolvedValue(MOCK_ASSET);
   assetMock.delete.mockResolvedValue(MOCK_ASSET);
+  loanMock.findFirst.mockResolvedValue(null);
 });
 
 describe('listAssets', () => {
@@ -255,5 +259,71 @@ describe('a linked gold holding must belong to the asset owner', () => {
       expect.objectContaining({ where: { id: 'g-admin', userId: 'u-member' } }),
     );
     expect(assetMock.update).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Selling an unlinked asset ─────────────────────────────────────────────────
+// Nothing on Asset, RealEstate, or GoldHolding ever recorded a sale before this — the
+// only removal mechanism was a hard delete, which destroyed the entire history.
+
+describe('recordAssetSale', () => {
+  const UNLINKED = { ...MOCK_ASSET, realEstateId: null, goldHoldingId: null };
+
+  it('sets soldAt/salePrice, never deletes', async () => {
+    assetMock.findFirst.mockResolvedValue(UNLINKED);
+    await recordAssetSale('u1', 'asset-1', { salePrice: 500_000, date: '2026-06-01' });
+
+    expect(assetMock.delete).not.toHaveBeenCalled();
+    expect(assetMock.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'asset-1' },
+      data: { soldAt: new Date('2026-06-01'), salePrice: 500_000 },
+    }));
+  });
+
+  it('refuses to sell an asset that represents a property or gold holding instead', async () => {
+    assetMock.findFirst.mockResolvedValue({ ...MOCK_ASSET, realEstateId: 're-1' });
+    await expect(
+      recordAssetSale('u1', 'asset-1', { salePrice: 500_000, date: '2026-06-01' }),
+    ).rejects.toThrow(/record the sale there instead/i);
+    expect(assetMock.update).not.toHaveBeenCalled();
+  });
+
+  it('DQ5/DQ6: blocks the sale if it still secures an active (not closedAt) loan', async () => {
+    assetMock.findFirst.mockResolvedValue(UNLINKED);
+    loanMock.findFirst.mockResolvedValue({ id: 'loan-1', lenderName: 'HDFC Bank' });
+
+    await expect(
+      recordAssetSale('u1', 'asset-1', { salePrice: 500_000, date: '2026-06-01' }),
+    ).rejects.toThrow(/active loan/i);
+    expect(assetMock.update).not.toHaveBeenCalled();
+    expect(loanMock.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { assetId: 'asset-1', closedAt: null },
+    }));
+  });
+
+  it('allows the sale once the securing loan is closed', async () => {
+    assetMock.findFirst.mockResolvedValue(UNLINKED);
+    loanMock.findFirst.mockResolvedValue(null); // findActiveLoanSecuring filters closedAt: null itself
+    await expect(
+      recordAssetSale('u1', 'asset-1', { salePrice: 500_000, date: '2026-06-01' }),
+    ).resolves.toBeDefined();
+    expect(assetMock.update).toHaveBeenCalled();
+  });
+
+  it('404s for a loan the requester cannot write to', async () => {
+    assetMock.findFirst.mockResolvedValue(null);
+    await expect(
+      recordAssetSale('u3', 'asset-1', { salePrice: 500_000, date: '2026-06-01' }),
+    ).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('findActiveLoanSecuring', () => {
+  it('filters to loans that are not yet closedAt-closed', async () => {
+    await findActiveLoanSecuring('asset-1');
+    expect(loanMock.findFirst).toHaveBeenCalledWith({
+      where: { assetId: 'asset-1', closedAt: null },
+      select: { id: true, lenderName: true },
+    });
   });
 });

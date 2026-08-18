@@ -536,8 +536,12 @@ async function fetchAssetBreakdown(userId?: string) {
       where,
       select: { name: true, type: true, unitsOrQuantity: true, purchasePricePerUnit: true, purchaseExchangeRate: true, currentPricePerUnit: true, currency: true },
     }),
+    // soldAt: null — a sale is a permanent record kept on the row (see
+    // recordGoldHoldingSale), not a delete, so a sold holding still exists here and would
+    // still count unless explicitly excluded. List pages (Gold.tsx) deliberately do NOT
+    // apply this same filter — they still show sold items, for history.
     prisma.goldHolding.findMany({
-      where,
+      where: { ...where, soldAt: null },
       select: { type: true, description: true, quantityGrams: true, purchasePricePerGram: true, currentPricePerGram: true },
     }),
     // Assets that nothing else already represents.
@@ -548,12 +552,12 @@ async function fetchAssetBreakdown(userId?: string) {
     // for gold against a GoldHolding. Only assets with neither link are unrepresented,
     // and those are exactly the ones a car loan leaves with no offset today.
     prisma.asset.findMany({
-      where: { ...where, realEstateId: null, goldHoldingId: null },
+      where: { ...where, realEstateId: null, goldHoldingId: null, soldAt: null },
       select: { name: true, assetType: true, value: true },
       orderBy: { value: 'desc' },
     }),
     prisma.realEstate.findMany({
-      where: realEstateWhere,
+      where: { ...realEstateWhere, soldAt: null },
       select: {
         userId: true,
         propertyName: true,

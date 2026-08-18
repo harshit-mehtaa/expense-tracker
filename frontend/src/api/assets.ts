@@ -23,9 +23,15 @@ export interface Asset {
   name: string;
   value: number;
   realEstateId?: string | null;
+  goldHoldingId?: string | null;
   notes?: string | null;
   /** Loans this asset secures — a non-empty list blocks deletion (409). */
   loans?: AssetLoanRef[];
+  /** Set once, by recording a sale. Null means still owned. Only meaningful for an
+   *  UNLINKED asset — one representing a property or gold holding records its sale on
+   *  that row instead, so this stays null for those even after they're sold. */
+  soldAt?: string | null;
+  salePrice?: number | null;
 }
 
 const unwrap = <T>(res: { data: { data: T } }): T => res.data.data;
@@ -36,6 +42,7 @@ export function normalizeAsset(a: Asset): Asset {
     ...a,
     value: Number(a.value),
     loans: a.loans?.map((l) => ({ ...l, outstandingBalance: Number(l.outstandingBalance) })),
+    salePrice: a.salePrice != null ? Number(a.salePrice) : a.salePrice,
   };
 }
 
@@ -50,4 +57,6 @@ export const assetsApi = {
   update: (id: string, data: object) =>
     api.put<{ data: Asset }>(`/assets/${id}`, data).then(unwrap).then(normalizeAsset),
   delete: (id: string) => api.delete(`/assets/${id}`),
+  sell: (id: string, data: { salePrice: number; date: string }) =>
+    api.post<{ data: Asset }>(`/assets/${id}/sell`, data).then(unwrap).then(normalizeAsset),
 };
