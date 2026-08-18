@@ -120,6 +120,36 @@ router.post('/:id/prepayment-simulation', asyncHandler(async (req, res) => {
   sendSuccess(res, result);
 }));
 
+const prepaymentSchema = z.object({
+  amount: z.number().positive(),
+  date: z.string().refine((v) => !Number.isNaN(new Date(v).getTime()), 'Invalid date'),
+  mode: z.enum(['reduce_tenure', 'reduce_emi']).default('reduce_tenure'),
+  notes: z.string().optional(),
+  bankAccountId: optionalId,
+  categoryId: optionalId,
+});
+
+router.post('/:id/prepayments', asyncHandler(async (req, res) => {
+  const data = prepaymentSchema.parse(req.body);
+  const result = await svc.recordLoanPrepayment(req.user!.userId, req.user!.role, req.params.id, data);
+  await recordAuditLog({
+    performedByUserId: req.user!.userId,
+    action: 'CREATE',
+    entityType: 'LoanPrepayment',
+    entityId: result.prepayment.id,
+    newValue: result,
+  });
+  sendCreated(res, result);
+}));
+
+router.get('/:id/prepayments', asyncHandler(async (req, res) => {
+  // Same visibility rule as the amortization schedule: ADMIN family-wide (undefined),
+  // MEMBER scoped to loans they own or co-own.
+  const ownerFilter = req.user!.role === 'ADMIN' ? undefined : req.user!.userId;
+  const result = await svc.listLoanPrepayments(ownerFilter, req.params.id);
+  sendSuccess(res, result);
+}));
+
 /**
  * Derive the fields a user shouldn't have to compute. The frontend calls this rather
  * than carrying its own copy of the formulas — `backend/tsconfig.json` sets

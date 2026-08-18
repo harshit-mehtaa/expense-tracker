@@ -1,7 +1,8 @@
 import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import { normalizeOwnerShares, assertPrimaryOwnerRetained } from '../utils/ownerShares';
-import { computeEmi } from '../utils/loanMath';
+import { computeEmi, deriveEndDate } from '../utils/loanMath';
+import { createTransaction } from './transactionService';
 import type { Prisma, LoanType } from '@prisma/client';
 
 export interface LoanOwnerInput {
@@ -346,4 +347,130 @@ export async function simulatePrepayment(
     // with how much is being repaid.
     prepaymentCharges: Number(loan.prepaymentChargesAmount ?? 0),
   };
+}
+
+// ─── Prepayment Recording ──────────────────────────────────────────────────────
+
+export interface RecordPrepaymentInput {
+  amount: number;
+  date: string;
+  mode: 'reduce_tenure' | 'reduce_emi';
+  notes?: string | null;
+  bankAccountId?: string | null;
+  categoryId?: string | null;
+}
+
+/**
+ * Records a prepayment that actually happened, as opposed to `simulatePrepayment`'s
+ * what-if. Two things must both be true afterward, or the feature is worse than not
+ * having it: (1) the loan's numbers reflect it, and (2) net worth still balances — a
+ * liability that drops with no matching drop in an asset silently inflates net worth by
+ * the prepayment amount (the same class of bug credit card double-counting produced
+ * earlier: liabilities/assets must move together, not just one side).
+ *
+ * Reuses the EXACT primitives `simulatePrepayment` uses (`buildAmortizationSchedule`,
+ * `computeEmi`) rather than re-deriving the numbers, so what gets applied can never
+ * silently differ from what the user was shown before confirming.
+ *
+ * Money movement goes through `createTransaction` — an ordinary EXPENSE linked via
+ * `loanId`, the SAME mechanism a normal EMI payment already uses — rather than writing
+ * `outstandingBalance` here directly. That decrement is the single most drift-prone
+ * field in this codebase (this project's own tech debt log already carries two other
+ * "two writers, one field" bugs); routing through the one existing writer keeps it a
+ * writer, not two.
+ *
+ * `createTransaction` opens its own `prisma.$transaction` and cannot join an outer one,
+ * so this is NOT a single atomic unit — it is two: money movement (transaction + balance
+ * decrement) always succeeds or fully rolls back on its own, and the LoanPrepayment
+ * audit row + EMI/tenure update run as a second unit immediately after. A failure in the
+ * second unit leaves a correctly-decremented loan and a real ledger entry with no
+ * schedule-metadata explaining it — recoverable by retrying, not by the money being
+ * wrong.
+ */
+export async function recordLoanPrepayment(
+  requesterId: string,
+  requesterRole: string,
+  loanId: string,
+  input: RecordPrepaymentInput,
+) {
+  const loan = await prisma.loan.findFirst({ where: userLoanWriteWhere(loanId, requesterId, requesterRole) });
+  if (!loan) throw AppError.notFound('Loan');
+
+  const outstanding = Number(loan.outstandingBalance);
+  const rate = Number(loan.interestRate);
+  const emi = Number(loan.emiAmount);
+
+  // Same shape as simulatePrepayment: schedule from today, at today's balance and EMI.
+  const current = buildAmortizationSchedule(outstanding, rate, emi, loan.emiDate, new Date());
+  const newOutstanding = Math.max(outstanding - input.amount, 0);
+
+  let newEmi = emi;
+  let afterSchedule: AmortizationRow[];
+  if (input.mode === 'reduce_emi') {
+    const remainingMonths = current.length;
+    newEmi = computeEmi(newOutstanding, rate, remainingMonths) ?? emi;
+    afterSchedule = buildAmortizationSchedule(newOutstanding, rate, newEmi, loan.emiDate, new Date());
+  } else {
+    afterSchedule = buildAmortizationSchedule(newOutstanding, rate, emi, loan.emiDate, new Date());
+  }
+  const monthsSaved = current.length - afterSchedule.length;
+
+  // The money movement. This is what actually validates `amount <= outstandingBalance`
+  // (createTransaction's own check) and decrements outstandingBalance — the ONLY write
+  // to that field anywhere in this flow. Attributed to the loan's primary owner, not the
+  // requester: a co-owner recording a prepayment does not have their own account checked
+  // against — the loan's balance and ledger belong to one owning user, same as every
+  // other loan mutation in this codebase.
+  const transaction = await createTransaction(loan.userId, {
+    bankAccountId: input.bankAccountId ?? undefined,
+    categoryId: input.categoryId ?? undefined,
+    amount: input.amount,
+    type: 'EXPENSE',
+    description: `Loan prepayment — ${loan.lenderName}`,
+    date: input.date,
+    loanId,
+  });
+
+  // tenureMonths is TOTAL tenure from firstEmiDate/disbursementDate, not months
+  // remaining — deriveEndDate (the same util loan creation uses) counts forward from
+  // the start, so the two must agree. `current.length` is remaining months as of today,
+  // so `loan.tenureMonths - current.length` is how much has already elapsed.
+  const loanUpdate: Prisma.LoanUpdateInput = input.mode === 'reduce_emi'
+    ? { emiAmount: newEmi }
+    : (() => {
+        const elapsedMonths = loan.tenureMonths - current.length;
+        const newTenureMonths = elapsedMonths + afterSchedule.length;
+        return {
+          tenureMonths: newTenureMonths,
+          endDate: deriveEndDate(loan.disbursementDate, newTenureMonths, loan.firstEmiDate) ?? loan.endDate,
+        };
+      })();
+
+  const [prepayment, updatedLoan] = await prisma.$transaction([
+    prisma.loanPrepayment.create({
+      data: {
+        loanId,
+        amount: input.amount,
+        date: new Date(input.date),
+        notes: input.notes ?? null,
+        reducedEmi: input.mode === 'reduce_emi' ? newEmi : null,
+        tenureReduced: input.mode === 'reduce_tenure' ? monthsSaved : null,
+      },
+    }),
+    prisma.loan.update({ where: { id: loanId }, data: loanUpdate }),
+  ]);
+
+  return { transaction, prepayment, loan: updatedLoan };
+}
+
+/**
+ * Prepayment history. Visibility mirrors `getLoanAmortization` — same read-scope, not
+ * the write-scope `recordLoanPrepayment` uses. A writer with no reader anywhere is the
+ * exact defect this whole feature exists to fix (see DQ1); this exists so recording one
+ * is not itself the same mistake in miniature.
+ */
+export async function listLoanPrepayments(userId: string | undefined, id: string) {
+  const loan = await prisma.loan.findFirst({ where: userId ? { id, ...userLoanWhere(userId) } : { id } });
+  if (!loan) throw AppError.notFound('Loan');
+  return prisma.loanPrepayment.findMany({ where: { loanId: id }, orderBy: { date: 'desc' } });
 }

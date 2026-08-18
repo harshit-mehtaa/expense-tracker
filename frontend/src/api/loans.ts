@@ -15,6 +15,9 @@ export interface LoanAsset {
 
 export interface Loan {
   id: string;
+  /** The loan's primary owner. A prepayment is always attributed to this user's ledger
+   *  and accounts, even when a co-owner is the one recording it. */
+  userId: string;
   lenderName: string;
   loanType: string;
   loanAccountNumber?: string;
@@ -72,6 +75,27 @@ export interface DeriveLoanInput {
   firstEmiDate?: string;
 }
 
+export interface LoanPrepayment {
+  id: string;
+  amount: number;
+  date: string;
+  notes?: string | null;
+  /** Set only when recorded with mode='reduce_emi'. */
+  reducedEmi?: number | null;
+  /** Months saved; set only when recorded with mode='reduce_tenure'. */
+  tenureReduced?: number | null;
+  createdAt: string;
+}
+
+export interface RecordPrepaymentInput {
+  amount: number;
+  date: string;
+  mode: 'reduce_tenure' | 'reduce_emi';
+  notes?: string;
+  bankAccountId?: string | null;
+  categoryId?: string | null;
+}
+
 const unwrap = <T>(res: { data: { data: T } }): T => res.data.data;
 
 /** Coerce a Decimal-or-null field without turning null into 0. */
@@ -104,6 +128,19 @@ export const loansApi = {
   getAmortization: (id: string) => api.get<{ data: { loan: Loan; schedule: AmortizationRow[]; summary: any } }>(`/loans/${id}/amortization-schedule`).then(unwrap).then((r) => ({ ...r, loan: normalizeLoan(r.loan) })),
   simulatePrepayment: (id: string, data: { prepaymentAmount: number; mode: string }) =>
     api.post<{ data: any }>(`/loans/${id}/prepayment-simulation`, data).then(unwrap),
+  /** Records a prepayment that actually happened — as opposed to simulatePrepayment's
+   *  what-if. Returns the updated loan, so callers can refresh without a second fetch. */
+  recordPrepayment: (id: string, data: RecordPrepaymentInput) =>
+    api.post<{ data: { transaction: unknown; prepayment: LoanPrepayment; loan: Loan } }>(
+      `/loans/${id}/prepayments`, data,
+    ).then(unwrap).then((r) => ({ ...r, loan: normalizeLoan(r.loan) })),
+  getPrepayments: (id: string) =>
+    api.get<{ data: LoanPrepayment[] }>(`/loans/${id}/prepayments`).then(unwrap)
+      .then((rows) => rows.map((r) => ({
+        ...r,
+        amount: Number(r.amount),
+        reducedEmi: numOrNull(r.reducedEmi),
+      }))),
   /**
    * Ask the backend for the fields a user shouldn't have to compute.
    * The formulas live server-side only — duplicating financial maths across two

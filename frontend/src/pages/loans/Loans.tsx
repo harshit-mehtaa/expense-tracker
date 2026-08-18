@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
-import { loansApi, type Loan, type AmortizationRow } from '@/api/loans';
+import { loansApi, type Loan, type AmortizationRow, type LoanPrepayment } from '@/api/loans';
 import { assetsApi, ASSET_TYPES, type AssetType } from '@/api/assets';
 import { investmentsApi } from '@/api/investments';
 import { formatINRShort } from '@/lib/indianFormat';
@@ -17,6 +17,10 @@ import { formatDate, formatNextOccurrence, toDateInputValue, addMonths } from '@
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, CustomTooltip } from '@/lib/chartUtils';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { useAuth } from '@/contexts/AuthContext';
+import { useToast } from '@/contexts/ToastContext';
+import { formatAccountOption } from '@/lib/accountFormat';
+import { toCategoryTreeOptions, getCategoryTreeOptionLabel } from '@/lib/categoryUtils';
+import api from '@/lib/api';
 
 const LOAN_TYPES: Record<string, string> = {
   HOME: 'Home Loan', AUTO: 'Car Loan', PERSONAL: 'Personal Loan',
@@ -117,7 +121,7 @@ interface AmortData {
   summary: { totalInterest: number; remainingMonths: number };
 }
 
-function AmortizationModal({ loan, amortData, onClose }: { loan: Loan; amortData: AmortData; onClose: () => void }) {
+function AmortizationModal({ loan, amortData, prepayments, onClose }: { loan: Loan; amortData: AmortData; prepayments: LoanPrepayment[]; onClose: () => void }) {
   const uid = useId().replace(/:/g, '');
   const balanceGradId = `amort-balance-${uid}`;
 
@@ -173,6 +177,36 @@ function AmortizationModal({ loan, amortData, onClose }: { loan: Loan; amortData
             <INRDisplay amount={totalEmiCost} className="font-bold text-base" />
           </div>
         </div>
+
+        {/* Prepayment history — a table with rows and no reader is as broken as a
+            feature nobody can use; this is the read half of "log a prepayment". */}
+        {prepayments.length > 0 && (
+          <div>
+            <p className="text-sm font-medium text-muted-foreground mb-2">
+              Prepayment History ({prepayments.length})
+            </p>
+            <div className="rounded-lg border divide-y">
+              {prepayments.map((p) => (
+                <div key={p.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                  <div>
+                    <p className="font-medium">{formatDate(p.date)}</p>
+                    {p.notes && <p className="text-xs text-muted-foreground">{p.notes}</p>}
+                  </div>
+                  <div className="text-right">
+                    <INRDisplay amount={p.amount} className="font-semibold" />
+                    <p className="text-xs text-muted-foreground">
+                      {p.reducedEmi != null
+                        ? <>EMI reduced to <INRDisplay amount={p.reducedEmi} /></>
+                        : p.tenureReduced != null
+                        ? `${p.tenureReduced} month${p.tenureReduced === 1 ? '' : 's'} saved`
+                        : null}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Charts */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -260,10 +294,20 @@ function AmortizationModal({ loan, amortData, onClose }: { loan: Loan; amortData
 }
 
 function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; onEdit: () => void; onDelete: () => void; readOnly?: boolean }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
   const [showModal, setShowModal] = useState(false);
   const [prepayAmt, setPrepayAmt] = useState('');
   const [prepayMode, setPrepayMode] = useState<'reduce_tenure' | 'reduce_emi'>('reduce_tenure');
   const [prepayResult, setPrepayResult] = useState<any>(null);
+
+  // Confirmation details, shown only once a simulation exists — recording without first
+  // seeing the effect would ask for trust the simulator already earns for free.
+  const [showRecordForm, setShowRecordForm] = useState(false);
+  const [recordDate, setRecordDate] = useState(toDateInputValue(new Date()));
+  const [recordNotes, setRecordNotes] = useState('');
+  const [recordBankAccountId, setRecordBankAccountId] = useState('');
+  const [recordCategoryId, setRecordCategoryId] = useState('');
 
   const { data: amortData, isLoading: amortLoading } = useQuery({
     queryKey: ['loan-amort', loan.id],
@@ -271,9 +315,60 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
     enabled: showModal,
   });
 
+  const { data: prepayments = [] } = useQuery({
+    queryKey: ['loan-prepayments', loan.id],
+    queryFn: () => loansApi.getPrepayments(loan.id),
+    enabled: showModal,
+  });
+
+  // Fetched only once the record form is open — every other loan card on the page would
+  // otherwise fire the same two requests for no reason.
+  const { data: accounts = [] } = useQuery({
+    queryKey: ['accounts', loan.userId],
+    queryFn: () => api.get<{ data: any[] }>('/accounts', { params: { userId: loan.userId } }).then((r) => r.data.data),
+    enabled: showRecordForm,
+  });
+  const { data: categories = [] } = useQuery({
+    queryKey: ['categories', 'all'],
+    queryFn: () => api.get<{ data: any[] }>('/categories').then((r) => r.data.data),
+    enabled: showRecordForm,
+  });
+  const categoryOptions = useMemo(() => toCategoryTreeOptions(categories), [categories]);
+
   const simulateMutation = useMutation({
     mutationFn: () => loansApi.simulatePrepayment(loan.id, { prepaymentAmount: Number(prepayAmt), mode: prepayMode }),
-    onSuccess: (data) => setPrepayResult(data),
+    onSuccess: (data) => { setPrepayResult(data); setShowRecordForm(false); },
+  });
+
+  const recordMutation = useMutation({
+    mutationFn: () => loansApi.recordPrepayment(loan.id, {
+      amount: Number(prepayAmt),
+      date: recordDate,
+      mode: prepayMode,
+      notes: recordNotes || undefined,
+      bankAccountId: recordBankAccountId || null,
+      categoryId: recordCategoryId || null,
+    }),
+    onSuccess: () => {
+      // The loan's own numbers (outstanding, EMI, endDate) changed, the amortization
+      // schedule and prepayment history are now stale, and a real expense landed in the
+      // ledger — each has its own cache key, so each needs its own invalidation.
+      qc.invalidateQueries({ queryKey: ['loans'] });
+      qc.invalidateQueries({ queryKey: ['loan-amort', loan.id] });
+      qc.invalidateQueries({ queryKey: ['loan-prepayments', loan.id] });
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+      qc.invalidateQueries({ queryKey: ['assets'] });
+      setShowRecordForm(false);
+      setPrepayResult(null);
+      setPrepayAmt('');
+      setRecordNotes('');
+      setRecordBankAccountId('');
+      setRecordCategoryId('');
+      toast({ title: 'Prepayment recorded', variant: 'success' });
+    },
+    onError: (err: any) => {
+      toast({ title: err?.response?.data?.message ?? 'Failed to record prepayment', variant: 'error' });
+    },
   });
 
   const paidPct = loan.principalAmount > 0
@@ -375,12 +470,24 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
           <Input
             placeholder="Prepay amount (₹)"
             value={prepayAmt}
-            onChange={(e) => setPrepayAmt(e.target.value)}
+            onChange={(e) => {
+              // Editing after a simulation invalidates it — the confirm step below
+              // would otherwise record whatever amount is currently typed while still
+              // showing savings computed for a DIFFERENT amount. Force a fresh
+              // simulation before recording can happen again.
+              setPrepayAmt(e.target.value);
+              setPrepayResult(null);
+              setShowRecordForm(false);
+            }}
             className="text-sm h-8"
           />
           <select
             value={prepayMode}
-            onChange={(e) => setPrepayMode(e.target.value as any)}
+            onChange={(e) => {
+              setPrepayMode(e.target.value as any);
+              setPrepayResult(null);
+              setShowRecordForm(false);
+            }}
             className="rounded-md border bg-background px-2 py-1 text-sm"
           >
             <option value="reduce_tenure">Reduce Tenure</option>
@@ -391,11 +498,89 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
           </Button>
         </div>
         {prepayResult && (
-          <div className="rounded-md bg-green-50 dark:bg-green-950 p-3 text-sm space-y-1">
+          <div className="rounded-md bg-green-50 dark:bg-green-950 p-3 text-sm space-y-2">
             <p className="font-medium text-green-700 dark:text-green-300">Savings with prepayment:</p>
             <p>Interest saved: <INRDisplay amount={prepayResult.savings.interestSaved} className="font-semibold" /></p>
             <p>Months saved: <span className="font-semibold">{prepayResult.savings.monthsSaved}</span></p>
             <p>New tenure: <span className="font-semibold">{prepayResult.after.months} months</span></p>
+            {prepayResult.prepaymentCharges > 0 && (
+              <p className="text-xs text-muted-foreground">
+                This lender charges <INRDisplay amount={prepayResult.prepaymentCharges} /> to
+                prepay — not included above; add it to the amount yourself if you are
+                paying it as part of this payment.
+              </p>
+            )}
+
+            {!showRecordForm ? (
+              <Button size="sm" variant="outline" onClick={() => setShowRecordForm(true)}>
+                Record this prepayment
+              </Button>
+            ) : (
+              <div className="space-y-2 border-t pt-2">
+                <p className="text-xs text-muted-foreground">
+                  This is real — it will reduce the outstanding balance and add an expense
+                  to the ledger.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label htmlFor={`prepay-date-${loan.id}`} className="text-xs">Date</Label>
+                    <Input
+                      id={`prepay-date-${loan.id}`}
+                      type="date"
+                      value={recordDate}
+                      onChange={(e) => setRecordDate(e.target.value)}
+                      className="h-8 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor={`prepay-account-${loan.id}`} className="text-xs">Paid from</Label>
+                    <select
+                      id={`prepay-account-${loan.id}`}
+                      value={recordBankAccountId}
+                      onChange={(e) => setRecordBankAccountId(e.target.value)}
+                      className="w-full rounded-md border bg-background px-2 py-1.5 text-sm h-8"
+                    >
+                      <option value="">— Not set —</option>
+                      {accounts.map((a: any) => (
+                        <option key={a.id} value={a.id}>{formatAccountOption(a)}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor={`prepay-category-${loan.id}`} className="text-xs">Category</Label>
+                  <select
+                    id={`prepay-category-${loan.id}`}
+                    value={recordCategoryId}
+                    onChange={(e) => setRecordCategoryId(e.target.value)}
+                    className="w-full rounded-md border bg-background px-2 py-1.5 text-sm h-8"
+                  >
+                    <option value="">— Not set —</option>
+                    {categoryOptions.map(({ category, depth }) => (
+                      <option key={category.id} value={category.id}>
+                        {getCategoryTreeOptionLabel(category, depth)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <Label htmlFor={`prepay-notes-${loan.id}`} className="text-xs">Notes (optional)</Label>
+                  <Input
+                    id={`prepay-notes-${loan.id}`}
+                    value={recordNotes}
+                    onChange={(e) => setRecordNotes(e.target.value)}
+                    placeholder="e.g. Annual bonus"
+                    className="h-8 text-sm"
+                  />
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <Button size="sm" variant="ghost" onClick={() => setShowRecordForm(false)}>Cancel</Button>
+                  <Button size="sm" onClick={() => recordMutation.mutate()} disabled={recordMutation.isPending}>
+                    {recordMutation.isPending ? 'Recording…' : 'Confirm'}
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -420,6 +605,7 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
             <AmortizationModal
               loan={loan}
               amortData={amortData}
+              prepayments={prepayments}
               onClose={() => setShowModal(false)}
             />
           )

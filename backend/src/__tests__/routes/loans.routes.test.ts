@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
+import { AppError } from '../../utils/AppError';
 
 const MEMBER_USER = { userId: 'u1', email: 'a@b.com', role: 'MEMBER' as const };
 const ADMIN_USER = { userId: 'admin-1', email: 'admin@b.com', role: 'ADMIN' as const };
@@ -23,6 +24,8 @@ vi.mock('../../services/loanService', () => ({
   getLoanAmortization: vi.fn(),
   simulatePrepayment: vi.fn(),
   getLoanForAudit: vi.fn(),
+  recordLoanPrepayment: vi.fn(),
+  listLoanPrepayments: vi.fn(),
 }));
 
 vi.mock('../../services/auditService', () => ({
@@ -62,6 +65,8 @@ const deleteMock = svc.deleteLoan as ReturnType<typeof vi.fn>;
 const getAmortizationMock = svc.getLoanAmortization as ReturnType<typeof vi.fn>;
 const simulateMock = svc.simulatePrepayment as ReturnType<typeof vi.fn>;
 const getForAuditMock = svc.getLoanForAudit as ReturnType<typeof vi.fn>;
+const recordPrepaymentMock = svc.recordLoanPrepayment as ReturnType<typeof vi.fn>;
+const listPrepaymentsMock = svc.listLoanPrepayments as ReturnType<typeof vi.fn>;
 const auditMock = recordAuditLog as ReturnType<typeof vi.fn>;
 
 const MOCK_LOAN = {
@@ -266,6 +271,73 @@ describe('POST /api/loans/:id/prepayment-simulation', () => {
       .post('/api/loans/loan-1/prepayment-simulation')
       .send({ prepaymentAmount: -100, mode: 'reduce_tenure' });
     expect(res.status).toBe(422);
+  });
+});
+
+describe('POST /api/loans/:id/prepayments — record', () => {
+  const VALID_BODY = { amount: 500000, date: '2024-06-01', mode: 'reduce_tenure' };
+  const RESULT = { transaction: { id: 'txn-1' }, prepayment: { id: 'prepay-1' }, loan: { id: 'loan-1' } };
+
+  it('returns 201, calls the service with (requesterId, role, loanId, data), and audit-logs it', async () => {
+    recordPrepaymentMock.mockResolvedValue(RESULT);
+    const res = await request(app).post('/api/loans/loan-1/prepayments').send(VALID_BODY);
+
+    expect(res.status).toBe(201);
+    expect(recordPrepaymentMock).toHaveBeenCalledWith('u1', 'MEMBER', 'loan-1', expect.objectContaining({
+      amount: 500000, date: '2024-06-01', mode: 'reduce_tenure',
+    }));
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'CREATE', entityType: 'LoanPrepayment', entityId: 'prepay-1',
+    }));
+  });
+
+  it('ADMIN can record on any loan — role and the ADMIN\'s own userId reach the service, ownership is the service\'s job', async () => {
+    recordPrepaymentMock.mockResolvedValue(RESULT);
+    await request(makeAdminApp()).post('/api/loans/loan-1/prepayments').send(VALID_BODY);
+    expect(recordPrepaymentMock).toHaveBeenCalledWith('admin-1', 'ADMIN', 'loan-1', expect.anything());
+  });
+
+  it('422s on a non-positive amount', async () => {
+    const res = await request(app).post('/api/loans/loan-1/prepayments').send({ ...VALID_BODY, amount: 0 });
+    expect(res.status).toBe(422);
+    expect(recordPrepaymentMock).not.toHaveBeenCalled();
+  });
+
+  it('422s on an unparseable date', async () => {
+    const res = await request(app).post('/api/loans/loan-1/prepayments').send({ ...VALID_BODY, date: 'not-a-date' });
+    expect(res.status).toBe(422);
+    expect(recordPrepaymentMock).not.toHaveBeenCalled();
+  });
+
+  it('a cleared bankAccountId ("") normalizes to null rather than reaching the service as an empty string', async () => {
+    recordPrepaymentMock.mockResolvedValue(RESULT);
+    await request(app).post('/api/loans/loan-1/prepayments').send({ ...VALID_BODY, bankAccountId: '' });
+    expect(recordPrepaymentMock).toHaveBeenCalledWith('u1', 'MEMBER', 'loan-1', expect.objectContaining({
+      bankAccountId: null,
+    }));
+  });
+
+  it('propagates the service\'s "exceeds outstanding balance" error as the caller sees it', async () => {
+    recordPrepaymentMock.mockRejectedValue(AppError.badRequest('Payment amount exceeds outstanding loan balance'));
+    const res = await request(app).post('/api/loans/loan-1/prepayments').send(VALID_BODY);
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/loans/:id/prepayments — history', () => {
+  it('returns 200 with the list, scoped to the requester', async () => {
+    listPrepaymentsMock.mockResolvedValue([{ id: 'p1' }, { id: 'p2' }]);
+    const res = await request(app).get('/api/loans/loan-1/prepayments');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([{ id: 'p1' }, { id: 'p2' }]);
+    expect(listPrepaymentsMock).toHaveBeenCalledWith('u1', 'loan-1');
+  });
+
+  it('ADMIN — ownerFilter is undefined (family-wide access), matching the amortization route', async () => {
+    listPrepaymentsMock.mockResolvedValue([]);
+    await request(makeAdminApp()).get('/api/loans/loan-1/prepayments');
+    expect(listPrepaymentsMock).toHaveBeenCalledWith(undefined, 'loan-1');
   });
 });
 

@@ -15,6 +15,7 @@ failOnConsoleError();
 
 const LOAN = {
   id: 'l-1',
+  userId: 'u-member',
   lenderName: 'HDFC Home Loan',
   loanType: 'HOME',
   loanAccountNumber: '1234567890',
@@ -57,6 +58,7 @@ const loanHandlers = (loans: unknown[] = [LOAN]) => [
   http.get(url('/loans'), () => HttpResponse.json({ data: loans })),
   http.get(url('/assets'), () => HttpResponse.json({ data: ASSETS })),
   http.post(url('/loans/derive'), () => HttpResponse.json({ data: DERIVED })),
+  http.get(url('/loans/l-1/prepayments'), () => HttpResponse.json({ data: [] })),
 ];
 
 /** Open the create form as a MEMBER (create controls are hidden family-wide). */
@@ -784,5 +786,241 @@ describe('Loans page — a MEMBER can add a co-owner', () => {
     await screen.findByText('HDFC Home Loan');
     expect(screen.queryByLabelText(/viewing|member/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /all family/i })).not.toBeInTheDocument();
+  });
+});
+
+// ─── Recording a real prepayment ───────────────────────────────────────────────
+
+/**
+ * The schema and the "Prepayment Simulator" existed since the first migration; nothing
+ * ever wrote a LoanPrepayment row or touched outstandingBalance. This is the missing
+ * write path, plus the read path (history) it would otherwise lack — a write with no
+ * reader is the same defect in miniature.
+ */
+describe('Loans — recording a prepayment', () => {
+  const ACCOUNTS = [
+    { id: 'acct-1', bankName: 'HDFC Bank', accountType: 'SAVINGS', accountNumberLast4: '4821' },
+  ];
+  const CATEGORIES = [
+    { id: 'cat-1', name: 'Loan Repayment', parentId: null, icon: null, color: null },
+  ];
+  const RECORD_RESULT = {
+    transaction: { id: 'txn-1' },
+    prepayment: { id: 'prepay-1', amount: 500000, date: '2026-06-01T00:00:00.000Z', reducedEmi: null, tenureReduced: 8 },
+    loan: { ...LOAN, outstandingBalance: 3500000, tenureMonths: 210 },
+  };
+
+  const simulateAndOpenRecordForm = async (user: ReturnType<typeof userEvent.setup>, handlers: any[] = []) => {
+    renderPage(<LoansPage />, {
+      route: '/loans',
+      user: MEMBER_USER,
+      handlers: [
+        ...loanHandlers(),
+        http.post(url('/loans/l-1/prepayment-simulation'), () => HttpResponse.json({
+          data: {
+            current: { months: 220, totalInterest: 2000000 },
+            after: { months: 212, totalInterest: 1700000 },
+            savings: { interestSaved: 300000, monthsSaved: 8 },
+            prepaymentCharges: 0,
+          },
+        })),
+        http.get(url('/accounts'), () => HttpResponse.json({ data: ACCOUNTS })),
+        http.get(url('/categories'), () => HttpResponse.json({ data: CATEGORIES })),
+        ...handlers,
+      ],
+    });
+    await screen.findByText('HDFC Home Loan');
+    await user.type(screen.getByPlaceholderText(/prepay amount/i), '500000');
+    await user.click(screen.getByRole('button', { name: /^simulate$/i }));
+    await screen.findByText(/savings with prepayment/i);
+    await user.click(screen.getByRole('button', { name: /record this prepayment/i }));
+  };
+
+  it('fetches account and category options only once the record form opens, not before', async () => {
+    renderPage(<LoansPage />, {
+      route: '/loans',
+      user: MEMBER_USER,
+      handlers: [
+        ...loanHandlers(),
+        http.get(url('/accounts'), () => HttpResponse.json({ data: ACCOUNTS })),
+        http.get(url('/categories'), () => HttpResponse.json({ data: CATEGORIES })),
+      ],
+    });
+    await screen.findByText('HDFC Home Loan');
+    expect(screen.queryByText('HDFC Bank ····4821 (Savings)')).not.toBeInTheDocument();
+  });
+
+  it('shows the confirm form only after simulating, with a "this is real" warning', async () => {
+    const user = userEvent.setup();
+    await simulateAndOpenRecordForm(user);
+
+    expect(screen.getByText(/this is real/i)).toBeInTheDocument();
+    expect(await screen.findByText('HDFC Bank ····4821 (Savings)')).toBeInTheDocument();
+  });
+
+  it('sends the amount, date, mode, account and category on confirm', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    await simulateAndOpenRecordForm(user, [
+      http.post(url('/loans/l-1/prepayments'), async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ data: RECORD_RESULT }, { status: 201 });
+      }),
+    ]);
+
+    // Two "— Not set —" selects exist (account, category) once the form is open — scope
+    // via the option list each offers.
+    const selects = screen.getAllByRole('combobox');
+    const accountPicker = selects.find((s) =>
+      within(s as HTMLSelectElement).queryByText('HDFC Bank ····4821 (Savings)'));
+    const categoryPicker = selects.find((s) =>
+      within(s as HTMLSelectElement).queryByText('Loan Repayment'));
+    expect(accountPicker).toBeDefined();
+    expect(categoryPicker).toBeDefined();
+
+    await user.selectOptions(accountPicker!, 'acct-1');
+    await user.selectOptions(categoryPicker!, 'cat-1');
+    await user.click(screen.getByRole('button', { name: /^confirm$/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body).toMatchObject({
+      amount: 500000, mode: 'reduce_tenure', bankAccountId: 'acct-1', categoryId: 'cat-1',
+    });
+    expect(body.date).toBeTruthy();
+  });
+
+  it('closes the form, shows a success toast, and refreshes the loan list on success', async () => {
+    const user = userEvent.setup();
+    await simulateAndOpenRecordForm(user, [
+      http.post(url('/loans/l-1/prepayments'), () => HttpResponse.json({ data: RECORD_RESULT }, { status: 201 })),
+    ]);
+
+    await user.click(screen.getByRole('button', { name: /^confirm$/i }));
+
+    await waitFor(() => expect(screen.getByText(/prepayment recorded/i)).toBeInTheDocument());
+    expect(screen.queryByText(/this is real/i)).not.toBeInTheDocument();
+  });
+
+  it('surfaces a backend error (amount exceeds outstanding balance) as a toast, not a crash', async () => {
+    const user = userEvent.setup();
+    await simulateAndOpenRecordForm(user, [
+      http.post(url('/loans/l-1/prepayments'), () => HttpResponse.json(
+        { message: 'Payment amount exceeds outstanding loan balance' }, { status: 400 },
+      )),
+    ]);
+
+    await user.click(screen.getByRole('button', { name: /^confirm$/i }));
+
+    await waitFor(() => {
+      // The toast renders the message twice (title + accessible live-region echo) —
+      // matches the pattern used elsewhere for toast assertions in this app.
+      expect(screen.getAllByText(/exceeds outstanding loan balance/i).length).toBeGreaterThan(0);
+    });
+    // The form stays open on failure — a failed attempt should not look like a success.
+    expect(screen.getByText(/this is real/i)).toBeInTheDocument();
+  });
+
+  it('surfaces the prepayment charge as informational text, not folded into the amount', async () => {
+    const user = userEvent.setup();
+    renderPage(<LoansPage />, {
+      route: '/loans',
+      user: MEMBER_USER,
+      handlers: [
+        ...loanHandlers(),
+        http.post(url('/loans/l-1/prepayment-simulation'), () => HttpResponse.json({
+          data: {
+            current: { months: 220, totalInterest: 2000000 },
+            after: { months: 212, totalInterest: 1700000 },
+            savings: { interestSaved: 300000, monthsSaved: 8 },
+            prepaymentCharges: 2500,
+          },
+        })),
+      ],
+    });
+    await screen.findByText('HDFC Home Loan');
+    await user.type(screen.getByPlaceholderText(/prepay amount/i), '500000');
+    await user.click(screen.getByRole('button', { name: /^simulate$/i }));
+
+    expect(await screen.findByText(/this lender charges/i)).toBeInTheDocument();
+  });
+
+  it('shows prepayment history in the amortization modal, with the right strategy label', async () => {
+    const user = userEvent.setup();
+    renderPage(<LoansPage />, {
+      route: '/loans',
+      user: MEMBER_USER,
+      handlers: [
+        // First match wins in MSW — this must precede the spread below, which also
+        // defines /loans/l-1/prepayments (returning an empty list).
+        http.get(url('/loans/l-1/prepayments'), () => HttpResponse.json({
+          data: [
+            { id: 'p1', amount: 500000, date: '2026-06-01T00:00:00.000Z', notes: 'Bonus', reducedEmi: null, tenureReduced: 8 },
+          ],
+        })),
+        ...loanHandlers(),
+        http.get(url('/loans/l-1/amortization-schedule'), () => HttpResponse.json({
+          data: {
+            loan: LOAN,
+            schedule: [{
+              month: 1, date: '2023-02-01T00:00:00.000Z', emi: 125000,
+              principal: 90000, interest: 35000, closingBalance: 4910000,
+            }],
+            summary: { totalInterest: 1000000, totalPayment: 6000000 },
+          },
+        })),
+      ],
+    });
+    await screen.findByText('HDFC Home Loan');
+    await user.click(screen.getByRole('button', { name: /schedule/i }));
+
+    expect(await screen.findByText(/prepayment history/i)).toBeInTheDocument();
+    expect(screen.getByText('Bonus')).toBeInTheDocument();
+    expect(screen.getByText(/8 months saved/i)).toBeInTheDocument();
+  });
+
+  it('invalidates a stale simulation when the amount changes, so a later confirm cannot record a different figure', async () => {
+    // Simulate for 500000, then edit the amount WITHOUT re-simulating. The savings panel
+    // and the Record button are for 500000 — recording must not silently apply to
+    // whatever is now typed, or the number confirmed would disagree with the number
+    // shown.
+    const user = userEvent.setup();
+    await simulateAndOpenRecordForm(user);
+    expect(screen.getByText(/savings with prepayment/i)).toBeInTheDocument();
+
+    // Cancel back to the simulator row, then change the amount.
+    await user.click(screen.getByRole('button', { name: /cancel/i }));
+    await user.clear(screen.getByPlaceholderText(/prepay amount/i));
+    await user.type(screen.getByPlaceholderText(/prepay amount/i), '999999');
+
+    expect(screen.queryByText(/savings with prepayment/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /record this prepayment/i })).not.toBeInTheDocument();
+  });
+
+  it('omits the history section entirely when nothing has been recorded', async () => {
+    const user = userEvent.setup();
+    renderPage(<LoansPage />, {
+      route: '/loans',
+      user: MEMBER_USER,
+      handlers: [
+        ...loanHandlers(),
+        http.get(url('/loans/l-1/amortization-schedule'), () => HttpResponse.json({
+          data: {
+            loan: LOAN,
+            schedule: [{
+              month: 1, date: '2023-02-01T00:00:00.000Z', emi: 125000,
+              principal: 90000, interest: 35000, closingBalance: 4910000,
+            }],
+            summary: { totalInterest: 1000000, totalPayment: 6000000 },
+          },
+        })),
+      ],
+    });
+    await screen.findByText('HDFC Home Loan');
+    await user.click(screen.getByRole('button', { name: /schedule/i }));
+
+    // "Full Schedule" also appears on the trigger button ("View Full Schedule →"); the
+    // modal's own heading is the more specific match.
+    await screen.findByText(/full schedule \(\d+ months\)/i);
+    expect(screen.queryByText(/prepayment history/i)).not.toBeInTheDocument();
   });
 });

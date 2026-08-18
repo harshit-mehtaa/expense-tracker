@@ -2,6 +2,7 @@
  * Tests for loanService — pure amortization math + DB-touching CRUD functions.
  */
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import { computeEmi } from '../utils/loanMath';
 
 // Mock prisma (loanService uses named import { prisma })
 vi.mock('../config/prisma', () => {
@@ -17,11 +18,25 @@ vi.mock('../config/prisma', () => {
     user: { findMany: vi.fn() },
     // assertAssetOwned confirms the collateral belongs to the loan's owner.
     asset: { findFirst: vi.fn() },
+    loanPrepayment: { create: vi.fn(), findMany: vi.fn() },
+    // recordLoanPrepayment's second write is the array form, which just runs each
+    // already-invoked op — the individual mocks below control what each resolves to.
+    $transaction: vi.fn((ops: unknown) => Promise.all(ops as Promise<unknown>[])),
   };
   return { default: mockPrisma, prisma: mockPrisma };
 });
 
+// createTransaction is the ONE existing writer of outstandingBalance
+// (transactionService.ts) — recordLoanPrepayment reuses it rather than duplicating the
+// decrement (see loanService.ts's own comment on why). Mocked wholesale rather than
+// simulated through raw prisma calls: its own behavior is transactionService.test.ts's
+// job, not loanService's.
+vi.mock('../services/transactionService', () => ({
+  createTransaction: vi.fn(),
+}));
+
 import { prisma } from '../config/prisma';
+import { createTransaction } from '../services/transactionService';
 import {
   buildAmortizationSchedule,
   getLoans,
@@ -31,11 +46,15 @@ import {
   getLoanAmortization,
   simulatePrepayment,
   getLoanForAudit,
+  recordLoanPrepayment,
+  listLoanPrepayments,
 } from '../services/loanService';
 
 const loanMock = (prisma as any).loan;
 const userMock = (prisma as any).user;
 const assetMock = (prisma as any).asset;
+const prepaymentMock = (prisma as any).loanPrepayment;
+const createTransactionMock = createTransaction as unknown as ReturnType<typeof vi.fn>;
 
 const MOCK_LOAN = {
   id: 'loan-1',
@@ -416,6 +435,170 @@ describe('simulatePrepayment', () => {
     loanMock.findFirst.mockResolvedValue(MOCK_LOAN);
     await simulatePrepayment(undefined, 'loan-1', 100_000, 'reduce_tenure');
     expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1' } });
+  });
+});
+
+// ─── recordLoanPrepayment / listLoanPrepayments ────────────────────────────────
+
+// Needs the fields simulatePrepayment's MOCK_LOAN never touches: lenderName feeds the
+// transaction description, tenureMonths/disbursementDate/firstEmiDate feed the
+// reduce_tenure endDate recompute.
+const PREPAY_LOAN = {
+  ...MOCK_LOAN,
+  lenderName: 'HDFC Bank',
+  tenureMonths: 240,
+  disbursementDate: new Date('2020-01-01'),
+  firstEmiDate: null,
+  endDate: new Date('2040-01-01'),
+};
+
+const MOCK_TRANSACTION = { id: 'txn-1', loanId: 'loan-1', amount: 500_000 };
+
+describe('recordLoanPrepayment', () => {
+  beforeEach(() => {
+    loanMock.findFirst.mockResolvedValue(PREPAY_LOAN);
+    createTransactionMock.mockResolvedValue(MOCK_TRANSACTION);
+    prepaymentMock.create.mockImplementation((args: any) => Promise.resolve({ id: 'prepay-1', ...args.data }));
+    loanMock.update.mockImplementation((args: any) => Promise.resolve({ ...PREPAY_LOAN, ...args.data }));
+  });
+
+  it('VQ2: decrements outstandingBalance through createTransaction only — never writes it directly', async () => {
+    await recordLoanPrepayment('u1', 'MEMBER', 'loan-1', {
+      amount: 500_000, date: '2024-01-15', mode: 'reduce_tenure',
+    });
+
+    expect(createTransactionMock).toHaveBeenCalledWith('u1', expect.objectContaining({
+      type: 'EXPENSE', amount: 500_000, loanId: 'loan-1',
+    }));
+    // The loan.update call (LoanPrepayment side-effect) must never itself carry
+    // outstandingBalance — createTransaction is the only writer of that field.
+    const loanUpdateCall = loanMock.update.mock.calls[0][0];
+    expect(loanUpdateCall.data).not.toHaveProperty('outstandingBalance');
+  });
+
+  it('DQ4: reduce_emi persists reducedEmi computed by the SAME computeEmi primitive simulatePrepayment uses', async () => {
+    const outstanding = Number(PREPAY_LOAN.outstandingBalance);
+    const rate = Number(PREPAY_LOAN.interestRate);
+    const current = buildAmortizationSchedule(outstanding, rate, Number(PREPAY_LOAN.emiAmount), PREPAY_LOAN.emiDate, new Date());
+    const expectedEmi = computeEmi(outstanding - 500_000, rate, current.length) ?? Number(PREPAY_LOAN.emiAmount);
+
+    const result = await recordLoanPrepayment('u1', 'MEMBER', 'loan-1', {
+      amount: 500_000, date: '2024-01-15', mode: 'reduce_emi',
+    });
+
+    const prepaymentCreateCall = prepaymentMock.create.mock.calls[0][0];
+    expect(prepaymentCreateCall.data.reducedEmi).toBe(expectedEmi);
+    expect(prepaymentCreateCall.data.tenureReduced).toBeNull();
+
+    // emiAmount actually changes on the loan; tenure/endDate do not.
+    const loanUpdateCall = loanMock.update.mock.calls[0][0];
+    expect(loanUpdateCall.data).toHaveProperty('emiAmount');
+    expect(loanUpdateCall.data).not.toHaveProperty('tenureMonths');
+    expect(loanUpdateCall.data).not.toHaveProperty('endDate');
+    expect(result.loan.emiAmount).toBe(loanUpdateCall.data.emiAmount);
+  });
+
+  it('VQ1/VQ3: reduce_tenure persists tenureReduced and recomputes endDate via deriveEndDate', async () => {
+    await recordLoanPrepayment('u1', 'MEMBER', 'loan-1', {
+      amount: 500_000, date: '2024-01-15', mode: 'reduce_tenure',
+    });
+
+    const prepaymentCreateCall = prepaymentMock.create.mock.calls[0][0];
+    expect(prepaymentCreateCall.data.reducedEmi).toBeNull();
+    expect(prepaymentCreateCall.data.tenureReduced).toBeGreaterThan(0);
+
+    const loanUpdateCall = loanMock.update.mock.calls[0][0];
+    expect(loanUpdateCall.data).toHaveProperty('tenureMonths');
+    expect(loanUpdateCall.data).toHaveProperty('endDate');
+    expect(loanUpdateCall.data).not.toHaveProperty('emiAmount');
+    // endDate must be strictly earlier than the loan's original endDate — a prepayment
+    // that does not shorten the loan is not actually reducing tenure.
+    expect((loanUpdateCall.data.endDate as Date).getTime()).toBeLessThan(PREPAY_LOAN.endDate.getTime());
+  });
+
+  it('passes through notes, bankAccountId and categoryId to the linked transaction', async () => {
+    await recordLoanPrepayment('u1', 'MEMBER', 'loan-1', {
+      amount: 500_000, date: '2024-01-15', mode: 'reduce_tenure',
+      notes: 'Annual bonus', bankAccountId: 'acct-1', categoryId: 'cat-1',
+    });
+
+    expect(createTransactionMock).toHaveBeenCalledWith('u1', expect.objectContaining({
+      bankAccountId: 'acct-1', categoryId: 'cat-1',
+    }));
+    const prepaymentCreateCall = prepaymentMock.create.mock.calls[0][0];
+    expect(prepaymentCreateCall.data.notes).toBe('Annual bonus');
+  });
+
+  it('VQ4/DQ6: attributes the transaction to the LOAN\'s primary owner, not the requester', async () => {
+    // A co-owner (requester 'u2') records a prepayment on a loan primarily owned by 'u1'.
+    loanMock.findFirst.mockResolvedValue({ ...PREPAY_LOAN, userId: 'u1' });
+    await recordLoanPrepayment('u2', 'MEMBER', 'loan-1', {
+      amount: 500_000, date: '2024-01-15', mode: 'reduce_tenure',
+    });
+    expect(createTransactionMock).toHaveBeenCalledWith('u1', expect.anything());
+  });
+
+  it('VQ8: a co-owner (not primary owner) can write, via userLoanWriteWhere', async () => {
+    await recordLoanPrepayment('u2', 'MEMBER', 'loan-1', {
+      amount: 100_000, date: '2024-01-15', mode: 'reduce_tenure',
+    });
+    expect(loanMock.findFirst).toHaveBeenCalledWith({
+      where: { id: 'loan-1', OR: [{ userId: 'u2' }, { owners: { some: { userId: 'u2' } } }] },
+    });
+  });
+
+  it('VQ8: ADMIN can write any loan regardless of ownership', async () => {
+    await recordLoanPrepayment('admin-1', 'ADMIN', 'loan-1', {
+      amount: 100_000, date: '2024-01-15', mode: 'reduce_tenure',
+    });
+    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1' } });
+  });
+
+  it('404s for a loan the requester cannot write to', async () => {
+    loanMock.findFirst.mockResolvedValue(null);
+    await expect(recordLoanPrepayment('u3', 'MEMBER', 'loan-1', {
+      amount: 100_000, date: '2024-01-15', mode: 'reduce_tenure',
+    })).rejects.toThrow(/not found/i);
+    expect(createTransactionMock).not.toHaveBeenCalled();
+  });
+
+  it('VQ7: an amount exceeding the outstanding balance fails via createTransaction\'s own check', async () => {
+    createTransactionMock.mockRejectedValue(new Error('Payment amount exceeds outstanding loan balance'));
+    await expect(recordLoanPrepayment('u1', 'MEMBER', 'loan-1', {
+      amount: 99_000_000, date: '2024-01-15', mode: 'reduce_tenure',
+    })).rejects.toThrow(/exceeds outstanding/i);
+    // Money movement failed — the audit row and loan update must never have run.
+    expect(prepaymentMock.create).not.toHaveBeenCalled();
+    expect(loanMock.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('listLoanPrepayments', () => {
+  it('lists prepayments for a loan the user can see, most recent first', async () => {
+    loanMock.findFirst.mockResolvedValue(PREPAY_LOAN);
+    prepaymentMock.findMany.mockResolvedValue([{ id: 'p1' }, { id: 'p2' }]);
+
+    const result = await listLoanPrepayments('u1', 'loan-1');
+
+    expect(loanMock.findFirst).toHaveBeenCalledWith({
+      where: { id: 'loan-1', OR: [{ userId: 'u1' }, { owners: { some: { userId: 'u1' } } }] },
+    });
+    expect(prepaymentMock.findMany).toHaveBeenCalledWith({
+      where: { loanId: 'loan-1' }, orderBy: { date: 'desc' },
+    });
+    expect(result).toEqual([{ id: 'p1' }, { id: 'p2' }]);
+  });
+
+  it('family-wide (ADMIN, no userId) queries by id only', async () => {
+    loanMock.findFirst.mockResolvedValue(PREPAY_LOAN);
+    prepaymentMock.findMany.mockResolvedValue([]);
+    await listLoanPrepayments(undefined, 'loan-1');
+    expect(loanMock.findFirst).toHaveBeenCalledWith({ where: { id: 'loan-1' } });
+  });
+
+  it('404s when the loan is not visible to the requester', async () => {
+    loanMock.findFirst.mockResolvedValue(null);
+    await expect(listLoanPrepayments('u3', 'loan-1')).rejects.toThrow(/not found/i);
   });
 });
 
