@@ -29,6 +29,10 @@ export interface Loan {
   tenureMonths: number;
   disbursementDate: string;
   endDate: string;
+  /** Set exactly once, when a prepayment brings outstandingBalance to 0. Null means
+   *  still active. Compare against endDate (the ORIGINAL schedule, never overwritten by
+   *  closure) to say how early: closedAt < endDate. */
+  closedAt?: string | null;
   /** When full EMIs begin. The gap from disbursementDate is the pre-EMI period. */
   firstEmiDate?: string | null;
   /** Interest accruing across that gap. */

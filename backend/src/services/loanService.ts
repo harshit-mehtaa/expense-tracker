@@ -431,20 +431,32 @@ export async function recordLoanPrepayment(
     loanId,
   });
 
+  // A prepayment that clears the whole balance is a CLOSURE, not a re-projection.
+  // `closedAt` becomes the exact, real date; `endDate` is deliberately left as whatever
+  // it last projected — the fact "closed early" needs is closedAt < endDate, and that
+  // only stays true and exact if endDate is never overwritten by an approximation on the
+  // way out. (A partial reduce_tenure prepayment is the opposite case: the loan is NOT
+  // closing, so endDate SHOULD move to the new, genuinely shorter projected payoff date
+  // — that branch is unchanged below.)
+  const isFullPayoff = newOutstanding <= 0;
+
   // tenureMonths is TOTAL tenure from firstEmiDate/disbursementDate, not months
   // remaining — deriveEndDate (the same util loan creation uses) counts forward from
   // the start, so the two must agree. `current.length` is remaining months as of today,
   // so `loan.tenureMonths - current.length` is how much has already elapsed.
-  const loanUpdate: Prisma.LoanUpdateInput = input.mode === 'reduce_emi'
-    ? { emiAmount: newEmi }
-    : (() => {
-        const elapsedMonths = loan.tenureMonths - current.length;
-        const newTenureMonths = elapsedMonths + afterSchedule.length;
-        return {
-          tenureMonths: newTenureMonths,
-          endDate: deriveEndDate(loan.disbursementDate, newTenureMonths, loan.firstEmiDate) ?? loan.endDate,
-        };
-      })();
+  let loanUpdate: Prisma.LoanUpdateInput;
+  if (isFullPayoff) {
+    loanUpdate = { closedAt: new Date() };
+  } else if (input.mode === 'reduce_emi') {
+    loanUpdate = { emiAmount: newEmi };
+  } else {
+    const elapsedMonths = loan.tenureMonths - current.length;
+    const newTenureMonths = elapsedMonths + afterSchedule.length;
+    loanUpdate = {
+      tenureMonths: newTenureMonths,
+      endDate: deriveEndDate(loan.disbursementDate, newTenureMonths, loan.firstEmiDate) ?? loan.endDate,
+    };
+  }
 
   const [prepayment, updatedLoan] = await prisma.$transaction([
     prisma.loanPrepayment.create({

@@ -571,6 +571,64 @@ describe('recordLoanPrepayment', () => {
     expect(prepaymentMock.create).not.toHaveBeenCalled();
     expect(loanMock.update).not.toHaveBeenCalled();
   });
+
+  // ── Closing a loan early ──────────────────────────────────────────────────
+  // Nothing on Loan recorded closure before this — a fully paid-off loan sat in the
+  // list forever, identical to an active one. closedAt is set exactly once, here, when
+  // a prepayment brings the balance to 0.
+
+  it('VQ1/VQ3: a full payoff sets closedAt and touches NOTHING else on the loan — endDate stays the last real projection', async () => {
+    const fullAmount = Number(PREPAY_LOAN.outstandingBalance);
+    await recordLoanPrepayment('u1', 'MEMBER', 'loan-1', {
+      amount: fullAmount, date: '2024-06-01', mode: 'reduce_tenure',
+    });
+
+    const loanUpdateCall = loanMock.update.mock.calls[0][0];
+    expect(loanUpdateCall.data).toEqual({ closedAt: expect.any(Date) });
+    // Explicitly not present — the whole point is endDate is never overwritten here,
+    // so closedAt < endDate stays a comparison against the true original projection.
+    expect(loanUpdateCall.data).not.toHaveProperty('endDate');
+    expect(loanUpdateCall.data).not.toHaveProperty('tenureMonths');
+  });
+
+  it('VQ1: a full payoff via reduce_emi ALSO closes it — the mode must not matter', async () => {
+    // Before this fix, reduce_emi never touched tenure/endDate at all, so a loan fully
+    // paid off this way looked permanently active. Neither mode should special-case
+    // closure differently.
+    const fullAmount = Number(PREPAY_LOAN.outstandingBalance);
+    await recordLoanPrepayment('u1', 'MEMBER', 'loan-1', {
+      amount: fullAmount, date: '2024-06-01', mode: 'reduce_emi',
+    });
+
+    const loanUpdateCall = loanMock.update.mock.calls[0][0];
+    expect(loanUpdateCall.data).toEqual({ closedAt: expect.any(Date) });
+    expect(loanUpdateCall.data).not.toHaveProperty('emiAmount');
+  });
+
+  it('VQ2: closedAt is written through the SAME array-transaction as the audit row, not a separate write', async () => {
+    const fullAmount = Number(PREPAY_LOAN.outstandingBalance);
+    await recordLoanPrepayment('u1', 'MEMBER', 'loan-1', {
+      amount: fullAmount, date: '2024-06-01', mode: 'reduce_tenure',
+    });
+    // Both prisma.loanPrepayment.create and prisma.loan.update are constructed and
+    // handed to the SAME prisma.$transaction([...]) array call — mockPrisma.$transaction
+    // is the one mock that proves they ran as one unit rather than two.
+    expect((prisma as any).$transaction).toHaveBeenCalledTimes(1);
+    expect(loanMock.update).toHaveBeenCalledTimes(1);
+    expect(prepaymentMock.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('VQ4/VQ6: a PARTIAL prepayment never sets closedAt — only reaching exactly 0 does', async () => {
+    // Same loan, an amount well short of the full balance.
+    await recordLoanPrepayment('u1', 'MEMBER', 'loan-1', {
+      amount: 500_000, date: '2024-06-01', mode: 'reduce_tenure',
+    });
+    const loanUpdateCall = loanMock.update.mock.calls[0][0];
+    expect(loanUpdateCall.data).not.toHaveProperty('closedAt');
+    // The existing partial-prepayment behavior (shorten tenure/endDate) is unchanged.
+    expect(loanUpdateCall.data).toHaveProperty('tenureMonths');
+    expect(loanUpdateCall.data).toHaveProperty('endDate');
+  });
 });
 
 describe('listLoanPrepayments', () => {

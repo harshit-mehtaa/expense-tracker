@@ -801,6 +801,13 @@ model Loan {
   /// which is less than the sanctioned principal.
   preEmiAmount            Decimal? @db.Decimal(15, 2)
   assetId                 String?
+  /// Set exactly once, when a prepayment brings outstandingBalance to 0. NULL means
+  /// still active. Deliberately separate from endDate, which stays the ORIGINALLY
+  /// scheduled end — overwriting it on closure would destroy the one fact needed to
+  /// answer "how early": closedAt < endDate. Not set by a manual balance edit or by an
+  /// ordinary EMI-linked transaction reaching 0 naturally near the scheduled endDate;
+  /// only recordLoanPrepayment writes this.
+  closedAt                DateTime?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 

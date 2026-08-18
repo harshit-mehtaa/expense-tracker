@@ -28,6 +28,17 @@ const LOAN_TYPES: Record<string, string> = {
   BUSINESS: 'Business Loan', OTHER: 'Other',
 };
 
+/** Whole months between two dates — display-only rounding, not the financial math
+ *  computeEmi/deriveEndDate own. "About 3 months early" tolerates a day of imprecision;
+ *  what you actually owe never does. */
+function monthsEarly(closedAt: string, endDate: string): number {
+  const closed = new Date(closedAt);
+  const end = new Date(endDate);
+  let months = (end.getFullYear() - closed.getFullYear()) * 12 + (end.getMonth() - closed.getMonth());
+  if (end.getDate() < closed.getDate()) months -= 1;
+  return Math.max(months, 0);
+}
+
 /** The asset kind a secured loan is normally held against, used to pre-select the type
  *  when creating one inline. A guess, not a constraint — the user can change it. */
 function defaultAssetTypeFor(loanType: string): AssetType {
@@ -375,6 +386,12 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
     ? ((loan.principalAmount - loan.outstandingBalance) / loan.principalAmount) * 100
     : 0;
 
+  // closedAt is set exactly once, by a prepayment reaching 0 — never by an ordinary
+  // linked payment or a manual edit, so a loan that simply hasn't caught up to its
+  // scheduled endDate yet is never mistaken for closed.
+  const isClosed = Boolean(loan.closedAt);
+  const early = isClosed && loan.closedAt ? monthsEarly(loan.closedAt, loan.endDate) : 0;
+
   return (
     <div className="rounded-lg border bg-card p-5 space-y-4">
       <div className="flex items-start justify-between">
@@ -385,6 +402,11 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
             </span>
             {loan.section24bEligible && (
               <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Sec 24(b)</span>
+            )}
+            {isClosed && (
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                Closed{early > 0 ? ` · ${early} month${early === 1 ? '' : 's'} early` : ''}
+              </span>
             )}
           </div>
           <h3 className="font-semibold mt-1">{loan.lenderName}</h3>
@@ -408,8 +430,11 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
           <p className="text-muted-foreground">EMI</p>
           <p className="font-semibold"><INRDisplay amount={loan.emiAmount} /></p>
           {/* emiDate is a day-of-month Int, so the bare number made the reader do the
-              arithmetic — and the hardcoded "th" rendered day 1 as "1th". */}
-          <p className="text-xs text-muted-foreground">Next: {formatNextOccurrence(loan.emiDate)}</p>
+              arithmetic — and the hardcoded "th" rendered day 1 as "1th". Once closed
+              there is no next payment — showing one anyway implies money still due. */}
+          {!isClosed && (
+            <p className="text-xs text-muted-foreground">Next: {formatNextOccurrence(loan.emiDate)}</p>
+          )}
         </div>
         <div>
           <p className="text-muted-foreground">Rate</p>
@@ -463,7 +488,8 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
         </div>
       </div>
 
-      {/* Prepayment Simulator */}
+      {/* Prepayment Simulator — nothing left to prepay once closed. */}
+      {!isClosed && (
       <div className="border-t pt-3 space-y-2">
         <p className="text-sm font-medium flex items-center gap-1"><Calculator className="h-4 w-4" /> Prepayment Simulator</p>
         <div className="flex gap-2">
@@ -584,6 +610,7 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
           </div>
         )}
       </div>
+      )}
 
       <Button
         variant="ghost"

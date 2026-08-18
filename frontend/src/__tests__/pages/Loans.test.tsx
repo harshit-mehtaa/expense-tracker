@@ -1024,3 +1024,67 @@ describe('Loans — recording a prepayment', () => {
     expect(screen.queryByText(/prepayment history/i)).not.toBeInTheDocument();
   });
 });
+
+// ─── Closed loans ───────────────────────────────────────────────────────────
+
+/**
+ * Nothing distinguished a fully paid-off loan from an active one before this — same
+ * card, same "Next: <EMI date>" line implying a payment still due, same Prepayment
+ * Simulator offering to prepay a loan with nothing left to prepay.
+ */
+describe('Loans — a closed loan', () => {
+  const CLOSED_LOAN = {
+    ...LOAN,
+    outstandingBalance: 0,
+    outstandingBalanceShare: 0,
+    closedAt: '2026-06-01T00:00:00.000Z', // endDate is 2043-01-01 — years early
+  };
+
+  it('shows a Closed badge with how many months early', async () => {
+    renderPage(<LoansPage />, {
+      route: '/loans', user: MEMBER_USER, handlers: loanHandlers([CLOSED_LOAN]),
+    });
+    await screen.findByText('HDFC Home Loan');
+    expect(screen.getByText(/closed/i)).toBeInTheDocument();
+    expect(screen.getByText(/months early/i)).toBeInTheDocument();
+  });
+
+  it('says just "Closed", with no early/late claim, when it ran its full course', async () => {
+    // closedAt === endDate: not early, and also not later than scheduled (cannot exceed
+    // its own maturity through this feature) — the honest label is just "Closed".
+    renderPage(<LoansPage />, {
+      route: '/loans',
+      user: MEMBER_USER,
+      handlers: loanHandlers([{ ...CLOSED_LOAN, closedAt: CLOSED_LOAN.endDate }]),
+    });
+    await screen.findByText('HDFC Home Loan');
+    expect(screen.getByText(/^closed$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/months early/i)).not.toBeInTheDocument();
+  });
+
+  it('hides the Prepayment Simulator — nothing left to prepay', async () => {
+    renderPage(<LoansPage />, {
+      route: '/loans', user: MEMBER_USER, handlers: loanHandlers([CLOSED_LOAN]),
+    });
+    await screen.findByText('HDFC Home Loan');
+    expect(screen.queryByText(/prepayment simulator/i)).not.toBeInTheDocument();
+  });
+
+  it('hides the "Next" EMI line — implying a payment is still due would be wrong', async () => {
+    renderPage(<LoansPage />, {
+      route: '/loans', user: MEMBER_USER, handlers: loanHandlers([CLOSED_LOAN]),
+    });
+    await screen.findByText('HDFC Home Loan');
+    expect(screen.queryByText(/^next:/i)).not.toBeInTheDocument();
+  });
+
+  it('an active loan (closedAt absent) shows none of the above', async () => {
+    renderPage(<LoansPage />, {
+      route: '/loans', user: MEMBER_USER, handlers: loanHandlers([LOAN]),
+    });
+    await screen.findByText('HDFC Home Loan');
+    expect(screen.queryByText(/^closed$/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/prepayment simulator/i)).toBeInTheDocument();
+    expect(screen.getByText(/^next:/i)).toBeInTheDocument();
+  });
+});
