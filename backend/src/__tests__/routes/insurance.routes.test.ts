@@ -187,6 +187,14 @@ describe('PUT /api/insurance/:id', () => {
     await request(app).put('/api/insurance/pol-1').send({ providerName: 'HDFC Life' });
     expect(getForAuditMock.mock.invocationCallOrder[0]).toBeLessThan(updateMock.mock.invocationCallOrder[0]);
   });
+
+  // premiumDueDate previously had no way to represent "clear this" distinct from
+  // "field not sent" — an explicit null is what makes clearing it possible at all.
+  it('accepts an explicit null for premiumDueDate, clearing it', async () => {
+    const res = await request(app).put('/api/insurance/pol-1').send({ premiumDueDate: null });
+    expect(res.status).toBe(200);
+    expect(updateMock).toHaveBeenCalledWith('u1', 'pol-1', expect.objectContaining({ premiumDueDate: null }), 'ADMIN');
+  });
 });
 
 // ─── DELETE /api/insurance/:id ────────────────────────────────────────────────

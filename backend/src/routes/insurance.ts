@@ -18,7 +18,11 @@ const policySchema = z.object({
   sumAssured: z.number().positive(),
   premiumAmount: z.number().positive(),
   premiumFrequency: z.enum(['MONTHLY', 'QUARTERLY', 'HALF_YEARLY', 'ANNUALLY', 'SINGLE']),
-  premiumDueDate: z.number().int().min(1).max(31).optional(),
+  // `.nullable()` alongside `.optional()`: the frontend always sends this key (it
+  // never omits fields), so a `.partial()` PUT relying on "omitted key = no change"
+  // never actually applies here — the only way to represent "clear this" is an
+  // explicit `null`, which needs its own accepted value distinct from "not provided."
+  premiumDueDate: z.number().int().min(1).max(31).nullable().optional(),
   startDate: z.string().transform((s) => new Date(s)),
   endDate: z.string().transform((s) => new Date(s)).optional(),
   maturityDate: z.string().transform((s) => new Date(s)).optional(),
