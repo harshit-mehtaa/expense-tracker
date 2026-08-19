@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Shield, Plus, Trash2, Edit2, Phone, User, Calendar, CheckCircle2 } from 'lucide-react';
+import { Shield, Plus, Trash2, Edit2, Phone, User, Calendar, CheckCircle2, Car } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -116,7 +116,10 @@ export default function InsurancePage() {
 
   function startEdit(policy: InsurancePolicy) {
     setEditing(policy);
-    Object.entries(policy).forEach(([k, v]) => setValue(k as any, v ?? ''));
+    // `assets` isn't a form field — it's a nested array, not a scalar the resolver can
+    // validate — so it's excluded here rather than swept in by the blanket setValue loop.
+    const { assets: _assets, ...formFields } = policy;
+    Object.entries(formFields).forEach(([k, v]) => setValue(k as any, v ?? ''));
     setValue('startDate', policy.startDate.slice(0, 10));
     if (policy.endDate) setValue('endDate', policy.endDate.slice(0, 10));
     setShowForm(true);
@@ -259,6 +262,29 @@ export default function InsurancePage() {
                   <Phone className="h-3 w-3" /> {policy.agentContact}
                 </div>
               )}
+              {policy.assets && policy.assets.length > 0 && (() => {
+                const assets = policy.assets;
+                return (
+                  <div className="text-sm flex items-start gap-1 text-muted-foreground">
+                    <Car className="h-3 w-3 mt-0.5 shrink-0" />
+                    <span className="flex flex-wrap items-center gap-1">
+                      Covers:
+                      {assets.map((a, i) => (
+                        <span key={a.id} className="inline-flex items-center gap-1">
+                          {a.name}
+                          {a.registrationNumber && <span className="text-xs">({a.registrationNumber})</span>}
+                          {a.soldAt && (
+                            <span className="text-xs font-medium bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300 px-2 py-0.5 rounded-full">
+                              Sold {formatDate(a.soldAt)}
+                            </span>
+                          )}
+                          {i < assets.length - 1 && ','}
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                );
+              })()}
 
               <div className="flex gap-2 pt-1">
                 {policy.isPaid && (

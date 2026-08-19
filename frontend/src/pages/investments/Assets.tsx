@@ -99,6 +99,9 @@ export default function AssetsPage() {
     qc.invalidateQueries({ queryKey: ['report-networth'] });
     qc.invalidateQueries({ queryKey: ['dashboard'] });
     qc.invalidateQueries({ queryKey: ['net-worth-history'] });
+    // A create/update/delete/sell here can change what a linked policy's
+    // "Covers:" list shows on the Insurance page.
+    qc.invalidateQueries({ queryKey: ['insurance'] });
   };
 
   const closeForm = () => { setShowForm(false); setEditingAsset(null); form.reset({ assetType: 'VEHICLE', value: 0, name: '', notes: '' }); };

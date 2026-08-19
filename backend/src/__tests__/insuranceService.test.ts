@@ -75,7 +75,7 @@ describe('getInsurancePolicies', () => {
     const result = await getInsurancePolicies(undefined, 'u1', 'MEMBER');
     expect(policyMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { userId: 'u1' },
-      include: expect.objectContaining({ transactions: expect.any(Object) }),
+      include: expect.objectContaining({ transactions: expect.any(Object), assets: expect.any(Object) }),
       orderBy: { premiumDueDate: 'asc' },
     }));
     expect(result).toHaveLength(1);
@@ -85,7 +85,7 @@ describe('getInsurancePolicies', () => {
     await getInsurancePolicies('u2', 'admin-1', 'ADMIN');
     expect(policyMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { userId: 'u2' },
-      include: expect.objectContaining({ transactions: expect.any(Object) }),
+      include: expect.objectContaining({ transactions: expect.any(Object), assets: expect.any(Object) }),
       orderBy: { premiumDueDate: 'asc' },
     }));
   });
@@ -97,9 +97,39 @@ describe('getInsurancePolicies', () => {
     const result = await getInsurancePolicies(undefined, 'admin-1', 'ADMIN');
     const call = policyMock.findMany.mock.calls[0][0];
     expect(call.where).toEqual({ user: { isActive: true, deletedAt: null } });
-    expect(call.include).toEqual(expect.objectContaining({ user: { select: { name: true } }, transactions: expect.any(Object) }));
+    expect(call.include).toEqual(expect.objectContaining({
+      user: { select: { name: true } },
+      transactions: expect.any(Object),
+      assets: expect.any(Object),
+    }));
     expect((result[0] as any).userName).toBe('Alice');
     expect((result[0] as any).user).toBeUndefined();
+  });
+
+  it('include.assets uses a deliberately minimal, exact select shape (no sensitive fields leaked)', async () => {
+    await getInsurancePolicies(undefined, 'u1', 'MEMBER');
+    const call = policyMock.findMany.mock.calls[0][0];
+    expect(call.include.assets).toEqual({
+      select: { id: true, name: true, registrationNumber: true, soldAt: true },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+    });
+  });
+
+  it('passes through multiple linked assets, including a sold one, unmodified', async () => {
+    policyMock.findMany.mockResolvedValueOnce([
+      {
+        ...MOCK_POLICY,
+        assets: [
+          { id: 'a-1', name: 'Honda City', registrationNumber: 'KA01AB1234', soldAt: null },
+          { id: 'a-2', name: 'Activa', registrationNumber: null, soldAt: new Date('2026-06-01T00:00:00.000Z') },
+        ],
+      },
+    ]);
+    const result = await getInsurancePolicies(undefined, 'u1', 'MEMBER');
+    expect((result[0] as any).assets).toEqual([
+      { id: 'a-1', name: 'Honda City', registrationNumber: 'KA01AB1234', soldAt: null },
+      { id: 'a-2', name: 'Activa', registrationNumber: null, soldAt: new Date('2026-06-01T00:00:00.000Z') },
+    ]);
   });
 
   it('ADMIN family-wide: falls back to empty string when user.name is null', async () => {

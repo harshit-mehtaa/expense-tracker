@@ -729,6 +729,9 @@ export default function LoansPage() {
     }, viewUserId ? { targetUserId: viewUserId } : undefined),
     onSuccess: (created) => {
       qc.invalidateQueries({ queryKey: ['assets'] });
+      // A create here can change what a linked policy's "Covers:" list shows
+      // on the Insurance page.
+      qc.invalidateQueries({ queryKey: ['insurance'] });
       setValue('assetId', created.id, { shouldValidate: true });
       setShowNewAsset(false);
       setNewAsset({

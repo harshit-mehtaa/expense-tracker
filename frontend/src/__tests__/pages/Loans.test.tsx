@@ -2,7 +2,7 @@
  * Loans page — smoke. Full bar applies: "Loading loans…" is a real loading state,
  * distinct from the "No loans added yet" empty state.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -710,6 +710,31 @@ describe('Loans page — inline asset creation can defer to an existing record',
     await waitFor(() => expect(body).not.toBeNull());
     expect(body.realEstateId).toBeUndefined();
     expect(body.goldHoldingId).toBeUndefined();
+  });
+
+  // A create here can change what a linked policy's "Covers:" list shows on the
+  // Insurance page — without this, that page would stay stale for up to the
+  // 5-minute staleTime.
+  it('invalidates the insurance cache after creating an inline asset', async () => {
+    const user = userEvent.setup();
+
+    const { queryClient } = renderPage(<LoansPage />, {
+      route: '/loans',
+      user: MEMBER_USER,
+      handlers: [
+        http.post(url('/assets'), () => HttpResponse.json({ data: { id: 'a-new' } }, { status: 201 })),
+        ...withInvestments(),
+      ],
+    });
+
+    await openAssetCreator(user, 'PROPERTY');
+    await user.type(screen.getByLabelText(/asset name/i), 'Plot behind the school');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    await user.click(screen.getByRole('button', { name: /save asset/i }));
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['insurance'] });
+    });
   });
 
   it('sends goldHoldingId when the gold is already tracked', async () => {

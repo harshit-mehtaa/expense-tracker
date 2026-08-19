@@ -11,6 +11,7 @@ import InsurancePage from '@/pages/insurance/Insurance';
 import { renderPage, failOnConsoleError } from '../support/renderPage';
 import { url } from '../support/handlers';
 import { MONEY_FORMATTED, MEMBER_USER } from '../support/fixtures';
+import { formatDate } from '@/lib/dateFormat';
 
 failOnConsoleError();
 
@@ -90,6 +91,47 @@ describe('Insurance page — smoke', () => {
     await user.click(await screen.findByRole('button', { name: /add policy/i }));
 
     expect(await screen.findByRole('heading', { name: /add.*polic/i })).toBeInTheDocument();
+  });
+
+  it('renders nothing extra when a policy has no linked vehicles (assets field absent)', async () => {
+    renderPage(<InsurancePage />, { route: '/insurance', handlers: insuranceHandlers() });
+    await screen.findByText('Family Floater');
+    expect(screen.queryByText(/covers:/i)).toBeNull();
+  });
+
+  it('shows a single linked vehicle with its registration number', async () => {
+    const withOneVehicle = { ...POLICY, assets: [{ id: 'a-1', name: 'Honda City', registrationNumber: 'KA01AB1234', soldAt: null }] };
+    renderPage(<InsurancePage />, { route: '/insurance', handlers: insuranceHandlers([withOneVehicle]) });
+    await screen.findByText('Family Floater');
+    expect(screen.getByText(/covers:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Honda City/)).toBeInTheDocument();
+    expect(screen.getByText(/KA01AB1234/)).toBeInTheDocument();
+  });
+
+  it('shows multiple linked vehicles', async () => {
+    const withTwoVehicles = {
+      ...POLICY,
+      assets: [
+        { id: 'a-1', name: 'Honda City', registrationNumber: 'KA01AB1234', soldAt: null },
+        { id: 'a-2', name: 'Activa', registrationNumber: null, soldAt: null },
+      ],
+    };
+    renderPage(<InsurancePage />, { route: '/insurance', handlers: insuranceHandlers([withTwoVehicles]) });
+    await screen.findByText('Family Floater');
+    expect(screen.getByText(/Honda City/)).toBeInTheDocument();
+    expect(screen.getByText('Activa')).toBeInTheDocument();
+    // A comma separates entries but a trailing one after the last is a real regression
+    // (index-based conditional — easy to get backwards in a future edit).
+    expect(screen.getByText('Covers:').parentElement?.textContent).toMatch(/Honda City.*KA01AB1234.*,\s*Activa$/);
+  });
+
+  it('shows the sold badge for a linked vehicle that has been sold, without hiding it', async () => {
+    const soldAt = '2026-06-01T00:00:00.000Z';
+    const withSoldVehicle = { ...POLICY, assets: [{ id: 'a-1', name: 'Honda City', registrationNumber: null, soldAt }] };
+    renderPage(<InsurancePage />, { route: '/insurance', handlers: insuranceHandlers([withSoldVehicle]) });
+    await screen.findByText('Family Floater');
+    expect(screen.getByText(/Honda City/)).toBeInTheDocument();
+    expect(screen.getByText(`Sold ${formatDate(soldAt)}`)).toBeInTheDocument();
   });
 
   it('surfaces an error toast when the policies request fails', async () => {

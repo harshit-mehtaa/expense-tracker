@@ -18,6 +18,16 @@ const policyPaymentInclude = {
       description: true,
     },
   },
+  // The reverse of assetService's own insurancePolicy select — deliberately minimal,
+  // same reasoning: `value`/`salePrice` are the only Decimal fields on Asset (would
+  // force nested normalization at the API boundary for zero display benefit).
+  // No `where: {assetType: 'VEHICLE'}` filter needed — clearVehicleOnlyFields already
+  // guarantees a non-VEHICLE asset can never hold this FK. `id` is a secondary sort key
+  // so two vehicles sharing a name still get a deterministic order.
+  assets: {
+    select: { id: true, name: true, registrationNumber: true, soldAt: true },
+    orderBy: [{ name: 'asc' as const }, { id: 'asc' as const }],
+  },
 };
 
 function withPaymentStatus<T extends Record<string, any>>(rows: T[]) {

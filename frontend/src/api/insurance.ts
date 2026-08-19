@@ -1,5 +1,15 @@
 import api from '@/lib/api';
 
+/** Deliberately minimal — mirrors assetService's own insurancePolicy select on the
+ *  Asset side. `registrationNumber`/`soldAt` are explicitly nullable, not just
+ *  optional: Prisma returns `null`, not an absent key, for these. */
+export interface PolicyAssetRef {
+  id: string;
+  name: string;
+  registrationNumber?: string | null;
+  soldAt?: string | null;
+}
+
 export interface InsurancePolicy {
   id: string;
   userId: string;
@@ -25,6 +35,8 @@ export interface InsurancePolicy {
   lastPaidTransactionId?: string | null;
   lastPaidDate?: string | null;
   lastPaidAmount?: number | null;
+  /** Vehicle assets linked to this policy. Absent on create/update/premium-calendar responses. */
+  assets?: PolicyAssetRef[];
   lastPaidDescription?: string | null;
 }
 

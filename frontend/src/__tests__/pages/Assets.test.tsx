@@ -6,7 +6,7 @@
  * `assetsApi` already had full CRUD end-to-end; this page is the first place to reach
  * it standalone.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -102,6 +102,34 @@ describe('Assets page — smoke', () => {
 
     await waitFor(() => expect(body).toBeDefined());
     expect(body).toMatchObject({ name: 'Royal Enfield', value: 250000, vehicleType: 'TWO_WHEELER' });
+  });
+
+  // A create/update/delete/sell here can change what a linked policy's "Covers:" list
+  // shows on the Insurance page — without this, that page would stay stale for up to
+  // the 5-minute staleTime.
+  it('invalidates the insurance cache after creating an asset, so a newly-linked policy shows it', async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderPage(<AssetsPage />, {
+      route: '/assets',
+      user: MEMBER_USER,
+      handlers: [
+        ...assetHandlers(),
+        ...insuranceHandlers(),
+        http.post(url('/assets'), () => HttpResponse.json({ data: { ...VEHICLE, id: 'a-new' } }, { status: 201 })),
+      ],
+    });
+    await screen.findByText('Honda City');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(screen.getByRole('button', { name: /add asset/i }));
+    await user.type(await screen.findByLabelText(/^name/i), 'Royal Enfield');
+    await user.type(screen.getByLabelText(/current value/i), '250000');
+    await user.selectOptions(screen.getByLabelText(/vehicle type/i), 'TWO_WHEELER');
+    await user.click(screen.getByRole('button', { name: /^add$/i }));
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['insurance'] });
+    });
   });
 
   it('the insurance picker lists only VEHICLE-type policies, and posts the selected one', async () => {
