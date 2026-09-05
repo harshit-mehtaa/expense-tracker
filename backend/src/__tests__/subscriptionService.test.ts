@@ -520,6 +520,16 @@ describe('updateSubscription', () => {
     expect(data.nextRunDate).toBeUndefined();
   });
 
+  it('clears the linked account on explicit null, same as paymentMode', async () => {
+    await updateSubscription('u1', 'sub-1', { bankAccountId: null });
+    expect(ruleMock.update.mock.calls[0][0].data).toMatchObject({ bankAccountId: null });
+  });
+
+  it('clears the linked category on explicit null, same as paymentMode', async () => {
+    await updateSubscription('u1', 'sub-1', { categoryId: null });
+    expect(ruleMock.update.mock.calls[0][0].data).toMatchObject({ categoryId: null });
+  });
+
   it('clears a payment field on explicit null, but leaves it alone when absent', async () => {
     // `null` means "clear it"; `undefined` means the form did not send the field. Getting
     // this backwards would wipe the card every time someone renamed a subscription.

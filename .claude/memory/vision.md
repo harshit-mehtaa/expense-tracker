@@ -78,8 +78,7 @@
   across 10 pages — confirm intended.
 - [low] No modal has role="dialog"/focus-trap/Escape; chart clicks are mouse-only — a11y
   gap. `viewUserId` is local useState. BUDGET_ALERT shows the LIMIT as "amount due".
-- [low] Backend branch-coverage tight spots: loanService.ts:457, subscriptionService.ts:402-403.
-  `''`-coerces-to-0 Zod bug unfixed in RealEstate.tsx, Accounts.tsx, TaxCentre.tsx.
+- [low] `''`-coerces-to-0 Zod bug unfixed in RealEstate.tsx, Accounts.tsx, TaxCentre.tsx.
 
 ## What We Will NOT Do
 - No controllers layer — routes call services directly; adding one would be an

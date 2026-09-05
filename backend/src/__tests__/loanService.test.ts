@@ -516,6 +516,37 @@ describe('recordLoanPrepayment', () => {
     expect((loanUpdateCall.data.endDate as Date).getTime()).toBeLessThan(PREPAY_LOAN.endDate.getTime());
   });
 
+  it('falls back to the loan\'s existing endDate when deriveEndDate cannot compute one (recomputed tenure goes non-positive)', async () => {
+    // A loan whose declared tenureMonths (1) is far smaller than what its real
+    // rate/EMI/outstanding actually need to amortize — current.length works out to 6
+    // months, not 1. Combined with a prepayment that leaves a sub-₹0.50 remainder (not a
+    // full payoff, but an empty afterSchedule), elapsedMonths goes negative enough that
+    // newTenureMonths <= 0, and deriveEndDate returns null for any non-positive tenure.
+    const SHORT_TENURE_LOAN = {
+      ...MOCK_LOAN,
+      lenderName: 'HDFC Bank',
+      outstandingBalance: 10000,
+      interestRate: 10,
+      emiAmount: 2000,
+      emiDate: 5,
+      tenureMonths: 1,
+      disbursementDate: new Date('2020-01-01'),
+      firstEmiDate: null,
+      endDate: new Date('2020-06-01'),
+    };
+    loanMock.findFirst.mockResolvedValue(SHORT_TENURE_LOAN);
+
+    await recordLoanPrepayment('u1', 'MEMBER', 'loan-1', {
+      amount: 9999.7, date: '2024-01-15', mode: 'reduce_tenure',
+    });
+
+    const loanUpdateCall = loanMock.update.mock.calls[0][0];
+    // The fallback fired: endDate is untouched from the loan's existing value...
+    expect(loanUpdateCall.data.endDate).toBe(SHORT_TENURE_LOAN.endDate);
+    // ...even though tenureMonths WAS recomputed (and went negative) in the same write.
+    expect(loanUpdateCall.data.tenureMonths).toBe(-5);
+  });
+
   it('passes through notes, bankAccountId and categoryId to the linked transaction', async () => {
     await recordLoanPrepayment('u1', 'MEMBER', 'loan-1', {
       amount: 500_000, date: '2024-01-15', mode: 'reduce_tenure',
