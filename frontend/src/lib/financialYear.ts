@@ -3,17 +3,33 @@
  * FY runs April 1 – March 31. IST-aware.
  */
 
+// IST is +5:30 (330 minutes), no DST — a fixed offset is exact for every date.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+/** IST calendar year/month for a UTC timestamp, via offset-shift-then-read-UTC-
+ *  getters — NOT local getters (assumes the browser's own tz is IST, not
+ *  guaranteed for a self-hosted app) and NOT a raw UTC ISO slice (a month-start
+ *  Date like `dayjs().tz('Asia/Kolkata').startOf('month')` is always "previous
+ *  UTC day, 18:30 UTC", so a raw slice reads one calendar month early, always —
+ *  not just near midnight). */
+function toISTYearMonth(date: Date): { year: number; month: number } {
+  const istDate = new Date(date.getTime() + IST_OFFSET_MS);
+  return { year: istDate.getUTCFullYear(), month: istDate.getUTCMonth() + 1 };
+}
+
 export function getFYFromDate(date: Date): string {
-  // IST offset is +5:30 (330 minutes)
-  const istOffset = 5.5 * 60 * 60 * 1000;
-  const istDate = new Date(date.getTime() + istOffset);
-  const month = istDate.getUTCMonth() + 1; // 1-12
-  const year = istDate.getUTCFullYear();
+  const { year, month } = toISTYearMonth(date);
 
   if (month >= 4) {
     return `${year}-${String(year + 1).slice(-2)}`;
   }
   return `${year - 1}-${String(year).slice(-2)}`;
+}
+
+/** "YYYY-MM" for a date's IST calendar month — see toISTYearMonth. */
+export function getISTMonthKey(date: Date): string {
+  const { year, month } = toISTYearMonth(date);
+  return `${year}-${String(month).padStart(2, '0')}`;
 }
 
 export function getCurrentFY(): string {

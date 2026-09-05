@@ -12,7 +12,7 @@
  * trips onUnhandledRequest:'error'.
  */
 import { describe, it, expect } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import DashboardPage from '@/pages/Dashboard';
@@ -53,6 +53,15 @@ const ALERTS = [
 const NET_WORTH_HISTORY = [
   { snapshotDate: '2025-04-15', netWorth: MONEY, totalAssets: 200000, totalLiabilities: 75000 },
 ];
+
+/** Mirrors backend's getMonthStart(): 1st of `date`'s IST month, 00:00:00 IST,
+ *  serialized the same way a real snapshotDate arrives from the API. */
+function istMonthStartISO(date: Date): string {
+  const istOffset = 5.5 * 60 * 60 * 1000;
+  const ist = new Date(date.getTime() + istOffset);
+  const istMidnightAsIfUTC = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), 1, 0, 0, 0);
+  return new Date(istMidnightAsIfUTC - istOffset).toISOString();
+}
 
 /** An FY-period budget — Dashboard's Budget Health panel filters to period === 'FY'. */
 const FY_BUDGETS = [{ ...BUDGETS_VS_ACTUALS[0], period: 'FY' }];
@@ -139,6 +148,24 @@ describe('Dashboard page — smoke', () => {
     expect(await screen.findByText('(40%)')).toBeInTheDocument();
   });
 
+  it('renders the Net Worth card without a trend indicator when there is no comparable snapshot', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({ summary: { ...SUMMARY, netWorthChange: undefined, netWorthChangePct: undefined } }),
+    });
+    await screen.findByText('55.5%');
+
+    // "Net Worth" also labels the Assets-vs-Liabilities pie panel — the StatCard's
+    // own title is the first match, and its own card is the nearest rounded-xl
+    // ancestor from there.
+    const netWorthCard = screen.getAllByText('Net Worth')[0].closest('div.rounded-xl') as HTMLElement;
+    expect(within(netWorthCard).getByText('vs last FY')).toBeInTheDocument();
+    // change === undefined renders a plain subtitle (StatCard.tsx's
+    // `{subtitle && change === undefined && ...}` branch) — no percentage, no
+    // trend arrow, unlike the defined-change case.
+    expect(within(netWorthCard).queryByText(/%/)).toBeNull();
+  });
+
   it('prompts to set up FY budgets when none have period FY', async () => {
     // The fixture's default period is MONTHLY, which the panel filters out.
     renderPage(<DashboardPage />, {
@@ -164,7 +191,11 @@ describe('Dashboard page — smoke', () => {
 
   it('skips the snapshot write when the current month already has one', async () => {
     let posted = false;
-    const thisMonth = `${new Date().toISOString().slice(0, 7)}-01`;
+    // A realistic snapshotDate — "1st of this IST month, 00:00 IST" — NOT the old
+    // buggy `new Date().toISOString().slice(0,7)-01`, which the SUT itself no
+    // longer uses and which happened to make this test pass for the wrong reason
+    // (both sides shared the same bug, so they always "matched").
+    const thisMonth = istMonthStartISO(new Date());
     renderPage(<DashboardPage />, {
       route: '/',
       handlers: [
@@ -182,6 +213,64 @@ describe('Dashboard page — smoke', () => {
     // The effect guards on hasCurrentMonthSnapshot (:73-84); no write-on-read.
     await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
     expect(posted).toBe(false);
+  });
+
+  it('fires the snapshot write when the most recent snapshot is from a prior month', async () => {
+    let posted = false;
+    // A month-old snapshot, real IST-month-start shape — proves the fix's positive
+    // case (missing current-month snapshot -> write fires), not just the negative
+    // case above.
+    const lastMonth = istMonthStartISO(new Date(Date.now() - 32 * 24 * 60 * 60 * 1000));
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.post(url('/snapshots/net-worth'), () => {
+          posted = true;
+          return HttpResponse.json({ data: NET_WORTH_HISTORY[0] });
+        }),
+        ...dashboardHandlers({
+          history: [{ snapshotDate: lastMonth, netWorth: MONEY, totalAssets: 1, totalLiabilities: 0 }],
+        }),
+      ],
+    });
+
+    await screen.findByText('55.5%');
+    await waitFor(() => expect(posted).toBe(true));
+  });
+
+  it('fires the snapshot write only once across the invalidate-and-refetch cycle', async () => {
+    let postCount = 0;
+    let getCount = 0;
+    const lastMonth = istMonthStartISO(new Date(Date.now() - 32 * 24 * 60 * 60 * 1000));
+    const currentMonthSnapshot = { snapshotDate: istMonthStartISO(new Date()), netWorth: MONEY, totalAssets: 1, totalLiabilities: 0 };
+    // Stateful GET: starts missing the current month, "gains" it once the POST
+    // fires — mirrors the real invalidate->refetch cycle instead of a static fixture.
+    let historyState = [{ snapshotDate: lastMonth, netWorth: MONEY, totalAssets: 1, totalLiabilities: 0 }];
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.get(url('/dashboard/summary'), () => HttpResponse.json({ data: SUMMARY })),
+        http.get(url('/dashboard/cashflow'), () => HttpResponse.json({ data: CASHFLOW })),
+        http.get(url('/dashboard/upcoming-alerts'), () => HttpResponse.json({ data: ALERTS })),
+        http.get(url('/dashboard/family-overview'), () => HttpResponse.json({ data: FAMILY_OVERVIEW })),
+        http.get(url('/budgets/vs-actuals'), () => HttpResponse.json({ data: FY_BUDGETS })),
+        http.get(url('/snapshots/net-worth'), () => { getCount += 1; return HttpResponse.json({ data: historyState }); }),
+        http.post(url('/snapshots/net-worth'), () => {
+          postCount += 1;
+          historyState = [...historyState, currentMonthSnapshot];
+          return HttpResponse.json({ data: currentMonthSnapshot });
+        }),
+      ],
+    });
+
+    await screen.findByText('55.5%');
+    await waitFor(() => expect(postCount).toBe(1));
+    // Wait for the ACTUAL refetch this test claims to exercise (the mutation's
+    // onSuccess invalidates ['net-worth-history'], triggering a 2nd GET) rather
+    // than just the loading spinner, which can clear before that refetch even
+    // fires and would let this assertion pass without proving anything.
+    await waitFor(() => expect(getCount).toBeGreaterThanOrEqual(2));
+    expect(postCount).toBe(1);
   });
 
   it('surfaces an error toast when the summary request fails', async () => {

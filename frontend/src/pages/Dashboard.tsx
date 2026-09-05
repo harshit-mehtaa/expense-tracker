@@ -19,6 +19,7 @@ import { CHART_PALETTE, useChartGradients, CustomTooltip, AXIS_STYLE, GRID_STYLE
 import { toDateInputValue } from '@/lib/dateFormat';
 import { TrendingUp, TrendingDown, ArrowUpRight, Bell, Target, Users } from 'lucide-react';
 import { useFY } from '@/contexts/FYContext';
+import { getISTMonthKey } from '@/lib/financialYear';
 import { fetchDashboardSummary, fetchCashflow, fetchUpcomingAlerts, fetchNetWorthHistory, upsertNetWorthSnapshot, fetchFamilyOverview } from '@/api/dashboard';
 import { useAuth } from '@/contexts/AuthContext';
 import { INRDisplay } from '@/components/shared/INRDisplay';
@@ -70,9 +71,13 @@ export default function DashboardPage() {
     mutationFn: upsertNetWorthSnapshot,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['net-worth-history'] }),
   });
-  const currentMonthKey = new Date().toISOString().slice(0, 7); // "YYYY-MM"
+  // `s.snapshotDate` is always "1st of month 00:00 IST", which serializes to
+  // "previous UTC day 18:30 UTC" — a raw ISO slice on either side reads one
+  // calendar month early, correctly only ~5.5h/month by coincidence. Both sides
+  // must be read via the same IST-aware key, not compared as raw UTC strings.
+  const currentMonthKey = getISTMonthKey(new Date());
   const hasCurrentMonthSnapshot = netWorthHistory?.some(
-    (s) => s.snapshotDate.slice(0, 7) === currentMonthKey,
+    (s) => getISTMonthKey(new Date(s.snapshotDate)) === currentMonthKey,
   );
   // Fire upsert in an effect (not render body) to avoid React side-effect violations
   useEffect(() => {

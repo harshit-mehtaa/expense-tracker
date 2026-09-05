@@ -3,8 +3,10 @@ import api from '@/lib/api';
 export interface DashboardSummary {
   fyYear: string;
   netWorth: number;
-  netWorthChange: number;
-  netWorthChangePct: number;
+  /** Absent when there's no comparable snapshot before this FY (new user, or
+   *  family-wide view, where no per-family snapshot concept exists). */
+  netWorthChange?: number;
+  netWorthChangePct?: number;
   totalIncome: number;
   totalExpense: number;
   savingsRate: number;

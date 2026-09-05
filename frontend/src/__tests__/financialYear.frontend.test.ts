@@ -12,6 +12,7 @@ import {
   getNextFY,
   formatFYLabel,
   listFYOptions,
+  getISTMonthKey,
 } from '@/lib/financialYear';
 
 describe('getFYFromDate — IST boundary (frontend)', () => {
@@ -54,6 +55,43 @@ describe('formatFYLabel', () => {
   it('formats correctly', () => {
     expect(formatFYLabel('2025-26')).toBe('FY 2025-26 (Apr 2025 – Mar 2026)');
     expect(formatFYLabel('2024-25')).toBe('FY 2024-25 (Apr 2024 – Mar 2025)');
+  });
+});
+
+describe('getISTMonthKey — IST calendar month, not raw UTC slice', () => {
+  it('mid-month: no boundary crossed, matches naively', () => {
+    // Jun 15 2025 10:30 IST = Jun 15 05:00 UTC
+    expect(getISTMonthKey(new Date('2025-06-15T05:00:00.000Z'))).toBe('2025-06');
+  });
+
+  it('month-start crossover window: UTC still on the last day of the prior month', () => {
+    // Apr 1 2025 00:05 IST = Mar 31 2025 18:35 UTC — a raw `.toISOString().slice(0,7)`
+    // would read "2025-03" here; the true IST month is April.
+    expect(getISTMonthKey(new Date('2025-03-31T18:35:00.000Z'))).toBe('2025-04');
+  });
+
+  it('month-start, past the crossover window: UTC has caught up to the new month', () => {
+    // Apr 1 2025 08:00 IST = Apr 1 2025 02:30 UTC
+    expect(getISTMonthKey(new Date('2025-04-01T02:30:00.000Z'))).toBe('2025-04');
+  });
+
+  it('month-end, late night IST: no false rollover to next month', () => {
+    // Apr 30 2025 23:55 IST = Apr 30 2025 18:25 UTC
+    expect(getISTMonthKey(new Date('2025-04-30T18:25:00.000Z'))).toBe('2025-04');
+  });
+
+  it('Dec 31 -> Jan 1 IST year boundary: year component also correct, not just month', () => {
+    // Jan 1 2026 00:10 IST = Dec 31 2025 18:40 UTC
+    expect(getISTMonthKey(new Date('2025-12-31T18:40:00.000Z'))).toBe('2026-01');
+  });
+
+  it('a real month-start snapshot instant (getMonthStart()-shaped) reads its OWN IST month, not the prior one', () => {
+    // "Apr 1 2025 00:00:00 IST" — exactly what backend/src/utils/financialYear.ts's
+    // getMonthStart() would store for an April snapshot. `.toISOString().slice(0,7)`
+    // on this raw value reads "2025-03" (structurally, always, for every snapshot) —
+    // this is the case that was silently broken for the entire month, not just near
+    // midnight.
+    expect(getISTMonthKey(new Date('2025-03-31T18:30:00.000Z'))).toBe('2025-04');
   });
 });
 

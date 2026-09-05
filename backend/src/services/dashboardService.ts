@@ -22,30 +22,52 @@ export async function getDashboardSummary(userId: string, requesterRole: string,
   }
 
   const currentFY = fy ?? getCurrentFY();
-  const previousFY = getPreviousFY(currentFY);
-
   const currentRange = getFYRange(currentFY);
-  const previousRange = getFYRange(previousFY);
+  const previousRange = getFYRange(getPreviousFY(currentFY));
 
   // effectiveUserId: undefined = family-wide (ADMIN only), string = scoped to that user
   const effectiveUserId = requesterRole === 'ADMIN' ? targetUserId : userId;
   const userFilter = effectiveUserId ? { userId: effectiveUserId } : {};
 
-  const [currentIncome, currentExpense, prevIncome, prevExpense] = await Promise.all([
+  const [currentIncome, currentExpense] = await Promise.all([
     getIncomeForPeriod(userFilter, currentRange),
     getExpenseForPeriod(userFilter, currentRange),
-    getIncomeForPeriod(userFilter, previousRange),
-    getExpenseForPeriod(userFilter, previousRange),
   ]);
 
   const scopedUserId = effectiveUserId;
-  const [totalAssets, totalLiabilities] = await Promise.all([
+  // Anchor snapshot for "vs last FY": the most recent snapshot within the
+  // PREVIOUS FY specifically (>= previousRange.start, < currentRange.start) —
+  // not just "any snapshot in the past". An unbounded lookup would happily
+  // anchor on a 2-year-old snapshot for a user who hasn't opened the app in a
+  // while and mislabel it "vs last FY", which is more misleading than the
+  // approximation this replaces (that number was wrong, but not confidently
+  // wrong about which period it covered). `lt`, not `lte`, on the upper bound —
+  // `currentRange.start` and `getMonthStart()` land on the identical instant
+  // during the FY's first month (April), so `lte` would let that month's own
+  // just-created snapshot match itself, comparing the current FY against
+  // itself. No per-family snapshot concept exists, so family-wide ADMIN view
+  // (no effectiveUserId) skips the lookup entirely rather than approximating
+  // across members.
+  const [totalAssets, totalLiabilities, anchorSnapshot] = await Promise.all([
     computeNetWorthAssets(scopedUserId),
     computeTotalLiabilities(scopedUserId),
+    effectiveUserId
+      ? prisma.netWorthSnapshot.findFirst({
+          where: {
+            userId: effectiveUserId,
+            snapshotDate: { gte: previousRange.start, lt: currentRange.start },
+          },
+          orderBy: { snapshotDate: 'desc' },
+          select: { netWorth: true },
+        })
+      : Promise.resolve(null),
   ]);
   const netWorth = totalAssets - totalLiabilities;
-  // prevNetWorth: approximate via prior-FY income/expense delta since we don't snapshot balances historically
-  const prevNetWorth = netWorth - ((currentIncome - currentExpense) - (prevIncome - prevExpense));
+
+  const anchorNetWorth = anchorSnapshot?.netWorth != null ? Number(anchorSnapshot.netWorth) : null;
+  // A zero anchor makes "% change" mathematically undefined, not 0 — showing 0%
+  // would falsely claim "no change" for what is really "no comparable baseline".
+  const hasComparableAnchor = anchorNetWorth != null && anchorNetWorth !== 0;
 
   const savingsRate =
     currentIncome > 0 ? ((currentIncome - currentExpense) / currentIncome) * 100 : 0;
@@ -53,8 +75,13 @@ export async function getDashboardSummary(userId: string, requesterRole: string,
   return {
     fyYear: currentFY,
     netWorth,
-    netWorthChange: netWorth - prevNetWorth,
-    netWorthChangePct: prevNetWorth !== 0 ? ((netWorth - prevNetWorth) / prevNetWorth) * 100 : 0,
+    netWorthChange: hasComparableAnchor ? netWorth - anchorNetWorth : undefined,
+    // Divide by the MAGNITUDE, not the signed anchor — a negative anchor (net
+    // worth was negative, e.g. an unsecured loan) would otherwise flip the
+    // sign: an improvement (debt shrinking) divided by a negative baseline
+    // computes as a negative percentage, showing a red "down" arrow for what
+    // is actually good news.
+    netWorthChangePct: hasComparableAnchor ? ((netWorth - anchorNetWorth) / Math.abs(anchorNetWorth)) * 100 : undefined,
     totalIncome: currentIncome,
     totalExpense: currentExpense,
     savingsRate: Math.round(savingsRate * 100) / 100,

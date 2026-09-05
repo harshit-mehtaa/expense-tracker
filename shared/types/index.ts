@@ -64,8 +64,8 @@ export interface FYRange {
 
 export interface DashboardSummary {
   netWorth: number;
-  netWorthChange: number;          // vs last FY
-  netWorthChangePct: number;
+  netWorthChange?: number;         // vs last FY; absent with no comparable snapshot
+  netWorthChangePct?: number;
   totalIncome: number;
   totalExpense: number;
   savingsRate: number;             // percentage

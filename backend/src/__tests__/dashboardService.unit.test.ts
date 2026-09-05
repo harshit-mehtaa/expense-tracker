@@ -32,7 +32,7 @@ vi.mock('../config/prisma', () => {
     realEstate: { findMany: vi.fn() },
     exchangeRate: { findMany: vi.fn() },
     loan: { findMany: vi.fn(), aggregate: vi.fn(), groupBy: vi.fn() },
-    netWorthSnapshot: { upsert: vi.fn(), findMany: vi.fn() },
+    netWorthSnapshot: { upsert: vi.fn(), findMany: vi.fn(), findFirst: vi.fn() },
     user: { findMany: vi.fn() },
     category: { findMany: vi.fn() },
     sIP: { findMany: vi.fn() },
@@ -52,6 +52,7 @@ vi.mock('../services/recurringService', () => ({
 
 import prisma from '../config/prisma';
 import { generateDueRecurringTransactions } from '../services/recurringService';
+import { getFYRange, getPreviousFY } from '../utils/financialYear';
 import {
   getDashboardSummary,
   getCashflow,
@@ -108,6 +109,7 @@ function resetAllMocks() {
   loanMock.findMany.mockResolvedValue([]);
   snapshotMock.upsert.mockResolvedValue({});
   snapshotMock.findMany.mockResolvedValue([]);
+  snapshotMock.findFirst.mockResolvedValue(null);
   userMock.findMany.mockResolvedValue([]);
   catMock.findMany.mockResolvedValue([]);
   sipMock.findMany.mockResolvedValue([]);
@@ -139,10 +141,7 @@ describe('getDashboardSummary', () => {
     txMock.aggregate
       .mockResolvedValueOnce({ _sum: { amount: 100000 } }) // current income
       .mockResolvedValueOnce({ _sum: { amount: 60000 } })  // current expense
-      .mockResolvedValueOnce({ _sum: { amount: 0 } })      // current refunds
-      .mockResolvedValueOnce({ _sum: { amount: 80000 } })  // prev income
-      .mockResolvedValueOnce({ _sum: { amount: 50000 } })  // prev expense
-      .mockResolvedValueOnce({ _sum: { amount: 0 } });     // prev refunds
+      .mockResolvedValueOnce({ _sum: { amount: 0 } });     // current refunds
     const r = await getDashboardSummary('u1', 'MEMBER', '2025-26');
     expect(r.fyYear).toBe('2025-26');
     expect(r.totalIncome).toBe(100000);
@@ -180,6 +179,99 @@ describe('getDashboardSummary', () => {
     // all aggregates return zero
     const r = await getDashboardSummary('u1', 'MEMBER', '2025-26');
     expect(r.savingsRate).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// getDashboardSummary — "vs last FY" via a real netWorthSnapshot anchor
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('getDashboardSummary — net worth vs last FY (anchor snapshot)', () => {
+  it('MEMBER: uses the anchor snapshot found before FY start to compute netWorthChangePct', async () => {
+    // totalAssets/totalLiabilities all default to 0 via resetAllMocks -> netWorth = 0.
+    snapshotMock.findFirst.mockResolvedValue({ netWorth: 80 });
+    const r = await getDashboardSummary('u1', 'MEMBER', '2025-26');
+    expect(r.netWorthChange).toBe(-80);
+    expect(r.netWorthChangePct).toBe(-100);
+  });
+
+  it('ADMIN with targetUserId: queries the anchor scoped to that member, not the requester', async () => {
+    snapshotMock.findFirst.mockResolvedValue({ netWorth: 50 });
+    await getDashboardSummary('admin-1', 'ADMIN', '2025-26', 'u2');
+    expect(snapshotMock.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ userId: 'u2' }),
+    }));
+  });
+
+  it('excludes a snapshot dated exactly at FY start — lt, not lte (the plan-challenger must_fix case), and bounds the lower end to the previous FY', async () => {
+    await getDashboardSummary('u1', 'MEMBER', '2025-26');
+    const call = snapshotMock.findFirst.mock.calls[0][0];
+    const { start } = getFYRange('2025-26');
+    const { start: prevStart } = getFYRange(getPreviousFY('2025-26'));
+    expect(call.where.snapshotDate).toEqual({ gte: prevStart, lt: start });
+    expect(call.where.snapshotDate).not.toHaveProperty('lte');
+  });
+
+  it('a snapshot older than the previous FY (a multi-year gap) is NOT used as the "vs last FY" anchor', async () => {
+    // Prisma's `gte: previousRange.start` in the where clause is what excludes this
+    // in production; mocked findFirst here just proves the summary doesn't fabricate
+    // a comparison when the (mocked) lookup correctly finds nothing in-window.
+    snapshotMock.findFirst.mockResolvedValue(null);
+    const r = await getDashboardSummary('u1', 'MEMBER', '2025-26');
+    expect(r.netWorthChangePct).toBeUndefined();
+  });
+
+  it('orders by snapshotDate desc, so the CLOSEST prior snapshot wins', async () => {
+    await getDashboardSummary('u1', 'MEMBER', '2025-26');
+    expect(snapshotMock.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: { snapshotDate: 'desc' } }),
+    );
+  });
+
+  it('no anchor snapshot (new user): netWorthChange/netWorthChangePct are undefined, not 0 or NaN', async () => {
+    snapshotMock.findFirst.mockResolvedValue(null);
+    const r = await getDashboardSummary('u1', 'MEMBER', '2025-26');
+    expect(r.netWorthChange).toBeUndefined();
+    expect(r.netWorthChangePct).toBeUndefined();
+  });
+
+  it('anchor netWorth is exactly 0: undefined, not a false 0% "no change"', async () => {
+    snapshotMock.findFirst.mockResolvedValue({ netWorth: 0 });
+    const r = await getDashboardSummary('u1', 'MEMBER', '2025-26');
+    expect(r.netWorthChange).toBeUndefined();
+    expect(r.netWorthChangePct).toBeUndefined();
+  });
+
+  it('anchor netWorth is null (nullable column): treated as no valid anchor', async () => {
+    snapshotMock.findFirst.mockResolvedValue({ netWorth: null });
+    const r = await getDashboardSummary('u1', 'MEMBER', '2025-26');
+    expect(r.netWorthChange).toBeUndefined();
+    expect(r.netWorthChangePct).toBeUndefined();
+  });
+
+  it('family-wide ADMIN (no targetUserId): skips the anchor query entirely — no per-family snapshot concept', async () => {
+    const r = await getDashboardSummary('admin-1', 'ADMIN');
+    expect(snapshotMock.findFirst).not.toHaveBeenCalled();
+    expect(r.netWorthChange).toBeUndefined();
+    expect(r.netWorthChangePct).toBeUndefined();
+  });
+
+  it('anchor netWorth arrives as a Prisma Decimal-shaped string — coerced to Number', async () => {
+    snapshotMock.findFirst.mockResolvedValue({ netWorth: '25' as any });
+    const r = await getDashboardSummary('u1', 'MEMBER', '2025-26');
+    expect(r.netWorthChange).toBe(-25);
+    expect(typeof r.netWorthChangePct).toBe('number');
+  });
+
+  it('a negative anchor (net worth was in debt) does not invert the trend sign', async () => {
+    // netWorth is 0 by default (resetAllMocks zeroes every financial query) — going
+    // from -100000 (net debt) to 0 is a genuine IMPROVEMENT and must read as
+    // positive, not negative just because the anchor itself was negative (dividing
+    // by the signed anchor instead of its magnitude would flip this to -100%).
+    snapshotMock.findFirst.mockResolvedValue({ netWorth: -100000 });
+    const r = await getDashboardSummary('u1', 'MEMBER', '2025-26');
+    expect(r.netWorthChange).toBe(100000);
+    expect(r.netWorthChangePct).toBe(100);
   });
 });
 
