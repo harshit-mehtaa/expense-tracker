@@ -17,12 +17,14 @@ import {
 } from 'recharts';
 import { CHART_PALETTE, useChartGradients, CustomTooltip, AXIS_STYLE, GRID_STYLE, reportCategoryName } from '@/lib/chartUtils';
 import { toDateInputValue } from '@/lib/dateFormat';
-import { TrendingUp, TrendingDown, ArrowUpRight, Bell, Target, Users, Tags, IndianRupee } from 'lucide-react';
+import { TrendingUp, TrendingDown, ArrowUpRight, Bell, Target, Users, Tags, IndianRupee, Landmark } from 'lucide-react';
 import { useFY } from '@/contexts/FYContext';
 import { getISTMonthKey } from '@/lib/financialYear';
 import { fetchDashboardSummary, fetchCashflow, fetchUpcomingAlerts, fetchNetWorthHistory, upsertNetWorthSnapshot, fetchFamilyOverview, fetchSpendingByCategory } from '@/api/dashboard';
 import { taxApi } from '@/api/tax';
 import { insuranceApi } from '@/api/insurance';
+import { investmentsApi } from '@/api/investments';
+import { loansApi } from '@/api/loans';
 import { useAuth } from '@/contexts/AuthContext';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
@@ -84,6 +86,19 @@ export default function DashboardPage() {
     queryKey: ['insurance', '80d', viewUserId],
     queryFn: () => insuranceApi.get80D(viewUserId ? { targetUserId: viewUserId } : undefined),
     staleTime: 5 * 60 * 1000,
+  });
+
+  // Shared query keys/queryFns with Investments.tsx/Loans.tsx — byte-identical so the
+  // two pages draw from one cache entry each. No `selectedFY`: both are live/current
+  // (portfolio value has no FY param; a loan's outstandingBalance is a running total).
+  const { data: portfolio, isLoading: portfolioLoading, isError: portfolioError } = useQuery({
+    queryKey: ['portfolio', viewUserId],
+    queryFn: () => investmentsApi.getPortfolioSummary(viewUserId ? { targetUserId: viewUserId } : undefined),
+  });
+
+  const { data: loans = [], isLoading: loansLoading, isError: loansError } = useQuery({
+    queryKey: ['loans', viewUserId],
+    queryFn: () => loansApi.getAll(viewUserId),
   });
 
   const { data: familyOverview } = useQuery({
@@ -560,6 +575,59 @@ export default function DashboardPage() {
             </div>
           );
         })()}
+      </div>
+
+      {/* Investments & Loans */}
+      <div className="rounded-xl border border-border/60 bg-card shadow-card p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Landmark className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-base font-semibold">Investments &amp; Loans</h2>
+          </div>
+        </div>
+
+        {portfolioLoading || loansLoading ? null : (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium">Portfolio Value</span>
+              {portfolioError ? (
+                <span className="text-xs text-muted-foreground">Unable to load</span>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <INRDisplay amount={portfolio?.totalCurrentValue ?? 0} short className="text-sm font-semibold" />
+                  <Link to="/investments" className="text-xs text-muted-foreground hover:underline flex items-center gap-1">
+                    View all <ArrowUpRight className="h-3 w-3" />
+                  </Link>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium">Loan Outstanding</span>
+              {loansError ? (
+                <span className="text-xs text-muted-foreground">Unable to load</span>
+              ) : (
+                <div className="flex items-center gap-2">
+                  {/* Share-aware, matching Loans.tsx's own totalOutstanding exactly — this
+                      is deliberately the SAME ground truth as the Loans page, NOT
+                      computeTotalLiabilities (dashboardService.ts), which excludes loans
+                      past their scheduled end date via a separate, undocumented filter.
+                      That same function backs BOTH the Assets vs Liabilities pie below
+                      AND the "Net Worth" StatCard above (summary.netWorth) — so this row
+                      can legitimately disagree with either of those on an overdue loan.
+                      Anyone fixing that filter should check both call sites, not just one. */}
+                  <INRDisplay
+                    amount={loans.reduce((s, l) => s + (l.outstandingBalanceShare ?? l.outstandingBalance), 0)}
+                    short
+                    className="text-sm font-semibold"
+                  />
+                  <Link to="/loans" className="text-xs text-muted-foreground hover:underline flex items-center gap-1">
+                    View all <ArrowUpRight className="h-3 w-3" />
+                  </Link>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Net Worth Trend */}

@@ -63,6 +63,8 @@ const shellHandlers = () => [
   http.get(url('/tax/profile'), () => HttpResponse.json({ data: { regime: 'OLD' } })),
   http.get(url('/tax/80c-tracker'), () => HttpResponse.json({ data: { limit: 150000, utilized: 0, remaining: 150000, pctUtilized: 0, breakdown: {} } })),
   http.get(url('/insurance/80d-summary'), () => HttpResponse.json({ data: { selfFamily: { paid: 0, limit: 25000, deductible: 0 }, parents: { paid: 0, limit: 25000, deductible: 0 }, total: 0, policies: [] } })),
+  http.get(url('/investments/portfolio-summary'), () => HttpResponse.json({ data: { totalInvested: 0, totalCurrentValue: 0, absoluteGain: 0, absoluteReturnPct: 0, byType: {} } })),
+  http.get(url('/loans'), () => HttpResponse.json({ data: [] })),
   http.get(url('/snapshots/net-worth'), () => HttpResponse.json({ data: [] })),
   http.post(url('/snapshots/net-worth'), () => HttpResponse.json({ data: {} })),
   http.post(url('/auth/change-password'), () => HttpResponse.json({ data: {} })),

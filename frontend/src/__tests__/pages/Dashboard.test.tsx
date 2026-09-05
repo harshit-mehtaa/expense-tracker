@@ -7,12 +7,14 @@
  * sentinel is still a data-derived string rather than the heading, so the assertion
  * stays honest if that early return is ever removed.
  *
- * Handler count: 11 page-specific + 5 base = 16. Note POST /snapshots/net-worth, fired
+ * Handler count: 13 page-specific + 5 base = 18. Note POST /snapshots/net-worth, fired
  * from a mount effect (:77-84) whenever the current month has no snapshot — omitting it
  * trips onUnhandledRequest:'error'. GET /reports/spending-by-category backs the
  * Spend by Category widget, shared with Reports.tsx under the same query key. GET
  * /tax/profile, /tax/80c-tracker, /insurance/80d-summary back the Tax Deductions
- * widget, shared with TaxCentre.tsx/Tracker80DTab.tsx under the same query keys.
+ * widget, shared with TaxCentre.tsx/Tracker80DTab.tsx under the same query keys. GET
+ * /investments/portfolio-summary, /loans back the Investments & Loans widget, shared
+ * with Investments.tsx/Loans.tsx under the same query keys.
  */
 import { describe, it, expect } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
@@ -100,10 +102,24 @@ const SUMMARY_80D = {
   policies: [],
 };
 
+const PORTFOLIO = {
+  totalInvested: 300000,
+  totalCurrentValue: 350000,
+  absoluteGain: 50000,
+  absoluteReturnPct: 16.7,
+  byType: {},
+};
+
+const LOANS = [
+  { id: 'loan-1', outstandingBalance: 120000, outstandingBalanceShare: undefined },
+  { id: 'loan-2', outstandingBalance: 200000, outstandingBalanceShare: 80000 },
+];
+
 function dashboardHandlers(over: Partial<{
   summary: unknown; cashflow: unknown; alerts: unknown;
   history: unknown; budgets: unknown; family: unknown; spending: unknown;
   taxProfile: unknown; tracker80C: unknown; summary80D: unknown;
+  portfolio: unknown; loans: unknown;
 }> = {}) {
   return [
     http.get(url('/dashboard/summary'), () =>
@@ -129,6 +145,10 @@ function dashboardHandlers(over: Partial<{
       HttpResponse.json({ data: over.tracker80C ?? TRACKER_80C })),
     http.get(url('/insurance/80d-summary'), () =>
       HttpResponse.json({ data: over.summary80D ?? SUMMARY_80D })),
+    http.get(url('/investments/portfolio-summary'), () =>
+      HttpResponse.json({ data: over.portfolio ?? PORTFOLIO })),
+    http.get(url('/loans'), () =>
+      HttpResponse.json({ data: over.loans ?? LOANS })),
   ];
 }
 
@@ -421,6 +441,67 @@ describe('Dashboard page — smoke', () => {
     await waitFor(() => expect(seenTargetUserIds).toContain('u-member'));
   });
 
+  it('renders Portfolio Value and Loan Outstanding for the default (family-wide ADMIN) view', async () => {
+    renderPage(<DashboardPage />, { route: '/', handlers: dashboardHandlers() });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Investments & Loans/i)).closest('div.rounded-xl') as HTMLElement;
+    // PORTFOLIO.totalCurrentValue = 350000.
+    expect(within(widget).getByText('Portfolio Value')).toBeInTheDocument();
+    expect(within(widget).getByText('₹3,50,000.00')).toBeInTheDocument();
+    // LOANS: loan-1 has no share (falls back to outstandingBalance 120000), loan-2's
+    // share (80000) wins over its outstandingBalance (200000) — total 200000, exactly
+    // mirroring Loans.tsx's own outstandingBalanceShare ?? outstandingBalance reduce.
+    // A regression that dropped the `??` fallback or summed both fields would produce
+    // a different total and fail this exact assertion.
+    expect(within(widget).getByText('Loan Outstanding')).toBeInTheDocument();
+    expect(within(widget).getByText('₹2,00,000.00')).toBeInTheDocument();
+    const links = within(widget).getAllByRole('link', { name: /View all/i });
+    expect(links.map((l) => l.getAttribute('href'))).toEqual(['/investments', '/loans']);
+  });
+
+  it('renders ₹0 Loan Outstanding when there are no loans, not an error', async () => {
+    renderPage(<DashboardPage />, { route: '/', handlers: dashboardHandlers({ loans: [] }) });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Investments & Loans/i)).closest('div.rounded-xl') as HTMLElement;
+    expect(within(widget).getByText('Loan Outstanding')).toBeInTheDocument();
+    expect(within(widget).getByText('₹0.00')).toBeInTheDocument();
+    // ₹0 is a legitimate state here, not an "unconfigured" empty-state message or error.
+    expect(within(widget).queryByText(/no /i)).toBeNull();
+    expect(within(widget).queryByText(/unable to load/i)).toBeNull();
+  });
+
+  it('renders ₹0 Portfolio Value when the user has never invested', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({
+        portfolio: { totalInvested: 0, totalCurrentValue: 0, absoluteGain: 0, absoluteReturnPct: 0, byType: {} },
+      }),
+    });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Investments & Loans/i)).closest('div.rounded-xl') as HTMLElement;
+    expect(within(widget).getByText('Portfolio Value')).toBeInTheDocument();
+    expect(within(widget).getByText('₹0.00')).toBeInTheDocument();
+  });
+
+  it('shows a distinct "Unable to load" state per row on a fetch error, not a false ₹0', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.get(url('/investments/portfolio-summary'), () => HttpResponse.json({ message: 'boom' }, { status: 500 })),
+        ...dashboardHandlers(),
+      ],
+    });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Investments & Loans/i)).closest('div.rounded-xl') as HTMLElement;
+    await waitFor(() => expect(within(widget).getByText('Unable to load')).toBeInTheDocument());
+    // The loan row, unaffected by the portfolio error, still renders its real value.
+    expect(within(widget).getByText('₹2,00,000.00')).toBeInTheDocument();
+  });
+
   it('prompts to set up FY budgets when none have period FY', async () => {
     // The fixture's default period is MONTHLY, which the panel filters out.
     renderPage(<DashboardPage />, {
@@ -513,6 +594,8 @@ describe('Dashboard page — smoke', () => {
         http.get(url('/tax/profile'), () => HttpResponse.json({ data: TAX_PROFILE })),
         http.get(url('/tax/80c-tracker'), () => HttpResponse.json({ data: TRACKER_80C })),
         http.get(url('/insurance/80d-summary'), () => HttpResponse.json({ data: SUMMARY_80D })),
+        http.get(url('/investments/portfolio-summary'), () => HttpResponse.json({ data: PORTFOLIO })),
+        http.get(url('/loans'), () => HttpResponse.json({ data: LOANS })),
         http.get(url('/snapshots/net-worth'), () => { getCount += 1; return HttpResponse.json({ data: historyState }); }),
         http.post(url('/snapshots/net-worth'), () => {
           postCount += 1;
