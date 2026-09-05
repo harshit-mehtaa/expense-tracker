@@ -25,6 +25,7 @@ vi.mock('../config/prisma', () => {
     },
     bankAccount: {
       findFirst: vi.fn(),
+      create: vi.fn(),
       update: vi.fn(),
     },
     loan: {
@@ -787,6 +788,109 @@ describe('createTransaction — INCOME/EXPENSE', () => {
     await expect(
       createTransaction('u1', { ...BASE_DATA, type: 'INCOME', refundForTransactionId: 'expense-1' }),
     ).rejects.toThrow(/Transfer transactions cannot be refunded/i);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// createTransaction — CASH paymentMode auto-resolve to the user's cash account
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('createTransaction — CASH auto-resolve', () => {
+  const CASH_DATA = {
+    amount: 300,
+    type: 'EXPENSE',
+    paymentMode: 'CASH',
+    description: 'Street food',
+    date: '2025-04-01',
+  };
+  const CASH_ACCOUNT = { id: 'cash-1', userId: 'u1', isCashAccount: true, currentBalance: 0 };
+
+  it('auto-resolves to the cash account for a CASH EXPENSE with no bankAccountId', async () => {
+    acctMock.findFirst.mockResolvedValue(CASH_ACCOUNT);
+
+    await createTransaction('u1', CASH_DATA);
+
+    expect(acctMock.findFirst).toHaveBeenCalledWith({ where: { userId: 'u1', isCashAccount: true } });
+    expect(txMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: 'cash-1' }) }),
+    );
+    expect(acctMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'cash-1' },
+        data: { currentBalance: { increment: -300 } },
+      }),
+    );
+  });
+
+  it('auto-resolves to the cash account for a CASH INCOME with no bankAccountId', async () => {
+    acctMock.findFirst.mockResolvedValue(CASH_ACCOUNT);
+
+    await createTransaction('u1', { ...CASH_DATA, type: 'INCOME' });
+
+    expect(txMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: 'cash-1' }) }),
+    );
+    expect(acctMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'cash-1' },
+        data: { currentBalance: { increment: 300 } },
+      }),
+    );
+  });
+
+  it('does not override an explicitly chosen bankAccountId even when paymentMode is CASH', async () => {
+    acctMock.findFirst.mockResolvedValue({ id: 'acct-1', userId: 'u1' });
+
+    await createTransaction('u1', { ...CASH_DATA, bankAccountId: 'acct-1' });
+
+    // Only the ownership-validation lookup runs; the cash-account lookup is skipped
+    // because bankAccountId was already supplied.
+    expect(acctMock.findFirst).toHaveBeenCalledTimes(1);
+    expect(txMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: 'acct-1' }) }),
+    );
+  });
+
+  it('self-heals by provisioning a cash account when the user has none yet', async () => {
+    acctMock.findFirst.mockResolvedValue(null);
+    acctMock.create.mockResolvedValue({ id: 'cash-new', userId: 'u1', isCashAccount: true });
+
+    await createTransaction('u1', CASH_DATA);
+
+    expect(acctMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ userId: 'u1', isCashAccount: true }) }),
+    );
+    expect(txMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: 'cash-new' }) }),
+    );
+  });
+
+  it('does not auto-resolve for a non-CASH paymentMode with no bankAccountId', async () => {
+    await createTransaction('u1', { ...CASH_DATA, paymentMode: 'UPI' });
+
+    expect(acctMock.findFirst).not.toHaveBeenCalled();
+    expect(txMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: undefined }) }),
+    );
+  });
+
+  it('does not auto-resolve for a TRANSFER even with paymentMode CASH (source/dest are always explicit)', async () => {
+    acctMock.findFirst
+      .mockResolvedValueOnce({ id: 'acct-src', userId: 'u1' })
+      .mockResolvedValueOnce({ id: 'acct-dest', userId: 'u1' });
+
+    await createTransaction('u1', {
+      amount: 500,
+      type: 'TRANSFER',
+      paymentMode: 'CASH',
+      description: 'To savings',
+      date: '2025-04-01',
+      bankAccountId: 'acct-src',
+      transferToAccountId: 'acct-dest',
+    });
+
+    // Only the two ownership-validation lookups (source, destination) — no cash-account lookup.
+    expect(acctMock.findFirst).toHaveBeenCalledTimes(2);
   });
 });
 

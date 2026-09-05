@@ -32,6 +32,7 @@ enum AccountType {
   PPF
   EPF
   DEMAT
+  CASH
 }
 
 enum InvestmentType {
@@ -350,6 +351,11 @@ model BankAccount {
   maturityDate         DateTime? // For FD/RD type accounts
   upiId                String?
   isActive             Boolean     @default(true)
+  // System-managed per-user cash wallet; exactly one per user. "Exactly one" is enforced
+  // by a raw-SQL partial unique index (migration 20260906090100) that this schema cannot
+  // express — if a future migration ever looks like it's dropping an "unrecognized" index
+  // on BankAccount(userId), that's it; re-add it, don't let `prisma migrate dev` drop it.
+  isCashAccount        Boolean     @default(false)
   createdAt            DateTime    @default(now())
   updatedAt            DateTime    @updatedAt
 

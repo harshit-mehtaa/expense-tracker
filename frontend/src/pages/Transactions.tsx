@@ -71,6 +71,8 @@ interface Transaction {
   isCreditCardBillPayment?: boolean;
   creditCardAccountName?: string;
   transferCounterpartyAccountName?: string;
+  isCashLeg?: boolean;
+  isCashWithdrawal?: boolean;
   memberName?: string;
   memberColor?: string | null;
 }
@@ -130,6 +132,28 @@ const TRANSACTION_TYPES = [
 function formatTransactionAccount(account?: { bankName: string; accountNumberLast4?: string | null } | null): string | undefined {
   if (!account) return undefined;
   return `${account.bankName}${account.accountNumberLast4 ? ` ****${account.accountNumberLast4}` : ''}`;
+}
+
+/** True when either leg's own account (this one or its transfer counterparty) is the user's cash account. */
+function isCashLegOf(tx: RawTransaction): boolean {
+  return tx.bankAccount?.accountType === 'CASH' || tx.transferCounterpartyAccount?.accountType === 'CASH';
+}
+
+/**
+ * True when the cash account is the DESTINATION of this transfer pair — a withdrawal
+ * (money moving into cash). False when it is the SOURCE — a deposit (money moving out of
+ * cash). Undefined when neither leg touches a cash account.
+ *
+ * Both legs of one withdrawal must report the same direction: the EXPENSE leg's
+ * destination is its counterparty (it is the debit/source side), while the INCOME leg's
+ * destination is its own account (it is the credit side) — so which field to check flips
+ * with `tx.type`, not with `isDebitLeg` naively applied to "which label to show".
+ */
+function isCashWithdrawalOf(tx: RawTransaction): boolean | undefined {
+  const ownIsCash = tx.bankAccount?.accountType === 'CASH';
+  const counterpartyIsCash = tx.transferCounterpartyAccount?.accountType === 'CASH';
+  if (!ownIsCash && !counterpartyIsCash) return undefined;
+  return tx.type === 'EXPENSE' ? counterpartyIsCash : ownIsCash;
 }
 
 const BANK_CHIP_STYLES = [
@@ -222,6 +246,8 @@ async function fetchTransactions(fy: string, filters: TxFilters, cursor?: string
     refundedAmount: tx.refunds?.reduce((sum, refund) => sum + Number(refund.amount), 0) ?? 0,
     creditCardAccountName: formatTransactionAccount(tx.creditCardAccount),
     transferCounterpartyAccountName: formatTransactionAccount(tx.transferCounterpartyAccount),
+    isCashLeg: isCashLegOf(tx),
+    isCashWithdrawal: isCashWithdrawalOf(tx),
     memberName: tx.user?.name,
     memberColor: tx.user?.colorTag,
   }));
@@ -330,7 +356,11 @@ function TransferCategoryInfo({ tx, compact = false }: { tx: Transaction; compac
     ? (tx.isCreditCardBillPayment ? tx.creditCardAccountName : tx.transferCounterpartyAccountName)
     : tx.transferCounterpartyAccountName;
   const Icon = tx.isCreditCardBillPayment ? CreditCard : Repeat;
-  const label = `${tx.isCreditCardBillPayment ? 'CC Bill Payment' : 'Transfer'} ${isDebitLeg ? 'Debit' : 'Credit'}`;
+  const label = tx.isCreditCardBillPayment
+    ? `CC Bill Payment ${isDebitLeg ? 'Debit' : 'Credit'}`
+    : tx.isCashLeg
+    ? (tx.isCashWithdrawal ? 'Cash Withdrawal' : 'Cash Deposit')
+    : `Transfer ${isDebitLeg ? 'Debit' : 'Credit'}`;
 
   return (
     <div className={cn('space-y-1 min-w-0', compact ? 'basis-full max-w-full' : 'max-w-[280px]')}>
@@ -339,6 +369,8 @@ function TransferCategoryInfo({ tx, compact = false }: { tx: Transaction; compac
           'inline-flex max-w-full items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium',
           tx.isCreditCardBillPayment
             ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300'
+            : tx.isCashLeg
+            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
             : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
         )}
       >
@@ -586,6 +618,8 @@ function mapRawTransaction(tx: RawTransaction): Transaction {
     refundedAmount: tx.refunds?.reduce((sum, refund) => sum + Number(refund.amount), 0) ?? 0,
     creditCardAccountName: formatTransactionAccount(tx.creditCardAccount),
     transferCounterpartyAccountName: formatTransactionAccount(tx.transferCounterpartyAccount),
+    isCashLeg: isCashLegOf(tx),
+    isCashWithdrawal: isCashWithdrawalOf(tx),
     memberName: tx.user?.name,
     memberColor: tx.user?.colorTag,
   };

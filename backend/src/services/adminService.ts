@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
+import { ensureCashAccount } from './accountService';
 
 // PII/credential allow-list for the audit trail — excludes passwordHash so it never
 // lands in auditLog.oldValueJson, which getAuditLog() below serves back to any ADMIN.
@@ -50,17 +51,21 @@ export async function createUser(data: {
   if (exists) throw AppError.conflict('Email already in use');
 
   const passwordHash = await bcrypt.hash(data.password, 12);
-  return prisma.user.create({
-    data: {
-      name: data.name,
-      email: data.email,
-      passwordHash,
-      role: data.role,
-      panNumberMasked: data.panNumberMasked,
-      colorTag: data.colorTag,
-      mustChangePassword: true,
-    },
-    select: { id: true, name: true, email: true, role: true, isActive: true, createdAt: true },
+  return prisma.$transaction(async (tx) => {
+    const user = await tx.user.create({
+      data: {
+        name: data.name,
+        email: data.email,
+        passwordHash,
+        role: data.role,
+        panNumberMasked: data.panNumberMasked,
+        colorTag: data.colorTag,
+        mustChangePassword: true,
+      },
+      select: { id: true, name: true, email: true, role: true, isActive: true, createdAt: true },
+    });
+    await ensureCashAccount(tx, user.id);
+    return user;
   });
 }
 

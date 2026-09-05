@@ -78,7 +78,7 @@ async function main() {
       },
     });
 
-    await tx.user.upsert({
+    const user = await tx.user.upsert({
       where: { email: 'harshit@mehta.local' },
       update: {
         name: 'Harshit Mehta',
@@ -99,6 +99,24 @@ async function main() {
         colorTag: '#6366f1',
       },
     });
+
+    // Every user gets a cash account (authService/adminService provision it on creation
+    // going forward; upsert bypasses both, so it's provisioned here too, inline rather
+    // than importing accountService — this file deliberately stays free of service
+    // imports, its own separate PrismaClient instance).
+    const existingCashAccount = await tx.bankAccount.findFirst({ where: { userId: user.id, isCashAccount: true } });
+    if (!existingCashAccount) {
+      await tx.bankAccount.create({
+        data: {
+          userId: user.id,
+          bankName: 'Cash',
+          accountType: 'CASH',
+          isCashAccount: true,
+          currentBalance: 0,
+          currency: 'INR',
+        },
+      });
+    }
 
     for (const category of BOOTSTRAP_CATEGORIES) {
       const parent = category.parentName

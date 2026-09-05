@@ -181,6 +181,12 @@ describe('POST /api/accounts', () => {
     expect(res.status).toBe(422);
   });
 
+  it('returns 422 for CASH — it is system-managed and excluded from manual creation', async () => {
+    const res = await request(app).post('/api/accounts').send({ ...VALID_BODY, accountType: 'CASH' });
+    expect(res.status).toBe(422);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
   it('returns 422 when billing cycle days are outside 1-31', async () => {
     const res = await request(app).post('/api/accounts').send({
       ...VALID_BODY,

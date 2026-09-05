@@ -28,6 +28,11 @@ vi.mock('../config/prisma', () => {
       findMany: vi.fn(),
       count: vi.fn(),
     },
+    bankAccount: {
+      findFirst: vi.fn(),
+      create: vi.fn(),
+    },
+    $transaction: vi.fn(),
   };
   return { default: mockPrisma, prisma: mockPrisma };
 });
@@ -53,6 +58,7 @@ import {
 const userMock = (prisma as any).user;
 const tokenMock = (prisma as any).refreshToken;
 const auditMock = (prisma as any).auditLog;
+const acctMock = (prisma as any).bankAccount;
 const bcryptHash = bcrypt.hash as ReturnType<typeof vi.fn>;
 
 const MOCK_USER = {
@@ -76,6 +82,9 @@ beforeEach(() => {
   tokenMock.deleteMany.mockResolvedValue({ count: 0 });
   auditMock.findMany.mockResolvedValue([]);
   auditMock.count.mockResolvedValue(0);
+  acctMock.findFirst.mockResolvedValue(null);
+  acctMock.create.mockResolvedValue({ id: 'cash-1', userId: 'u-new', isCashAccount: true });
+  (prisma as any).$transaction.mockImplementation(async (fn: any) => fn(prisma));
   bcryptHash.mockResolvedValue('hashed-password');
 });
 
@@ -117,6 +126,14 @@ describe('createUser', () => {
       expect.objectContaining({
         data: expect.objectContaining({ mustChangePassword: true, passwordHash: 'hashed-password' }),
       }),
+    );
+  });
+
+  it('provisions a cash account for the new user, atomically with user creation', async () => {
+    await createUser({ name: 'Bob', email: 'new@example.com', password: 'pass', role: 'MEMBER' });
+    expect((prisma as any).$transaction).toHaveBeenCalled();
+    expect(acctMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ userId: 'u1', isCashAccount: true }) }),
     );
   });
 });

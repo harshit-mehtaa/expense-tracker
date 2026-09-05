@@ -20,6 +20,7 @@ export const ACCOUNT_TYPE_LABELS: Record<string, string> = {
   PPF: 'PPF',
   EPF: 'EPF',
   DEMAT: 'Demat',
+  CASH: 'Cash',
 };
 
 export function accountTypeLabel(type?: string | null): string {

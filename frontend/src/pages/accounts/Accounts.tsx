@@ -21,13 +21,16 @@ const ACCOUNT_TYPE_COLORS: Record<string, string> = {
   CREDIT_CARD: 'bg-rose-100 text-rose-800', DEBIT_CARD: 'bg-sky-100 text-sky-800', PREPAID_CARD: 'bg-violet-100 text-violet-800',
   NRO: 'bg-indigo-100 text-indigo-800', PPF: 'bg-amber-100 text-amber-800',
   EPF: 'bg-orange-100 text-orange-800', DEMAT: 'bg-teal-100 text-teal-800',
+  CASH: 'bg-emerald-100 text-emerald-800',
 };
 
 const BANKS = ['HDFC Bank', 'SBI', 'ICICI Bank', 'Axis Bank', 'Kotak Bank', 'PNB', 'Bank of Baroda', 'Canara Bank', 'Yes Bank', 'IDFC First Bank', 'Other'];
 const OTHER_BANK = 'Other';
 const CARD_ACCOUNT_TYPES = ['CREDIT_CARD', 'DEBIT_CARD', 'PREPAID_CARD'] as const;
 const isCardTypeValue = (value?: string | null) => CARD_ACCOUNT_TYPES.includes(value as typeof CARD_ACCOUNT_TYPES[number]);
-const BANK_ACCOUNT_TYPES = Object.entries(ACCOUNT_TYPE_LABELS).filter(([value]) => !isCardTypeValue(value));
+// CASH is system-managed (auto-provisioned per user) and excluded from both manual
+// creation buckets — it must never appear as a selectable type in the Add Account form.
+const BANK_ACCOUNT_TYPES = Object.entries(ACCOUNT_TYPE_LABELS).filter(([value]) => !isCardTypeValue(value) && value !== 'CASH');
 const CARD_ACCOUNT_TYPE_OPTIONS = Object.entries(ACCOUNT_TYPE_LABELS).filter(([value]) => isCardTypeValue(value));
 const BANK_ACCOUNT_ACCENTS: Array<{ match: RegExp; color: string }> = [
   { match: /\bhdfc\b/i, color: '#004C8F' },
@@ -442,8 +445,12 @@ export default function AccountsPage() {
           </div>
           <div className="flex shrink-0 gap-1">
             <Button variant="ghost" size="icon" title="Reconcile balance" aria-label="Reconcile balance" onClick={() => { setReconciling(account); setReconcileBalance(String(balance)); setReconcileNote(''); }}><RefreshCw className="h-4 w-4" /></Button>
-            <Button variant="ghost" size="icon" title="Edit account" aria-label="Edit account" onClick={() => startEdit(account)}><Edit2 className="h-4 w-4" /></Button>
-            <Button variant="ghost" size="icon" title="Delete account" aria-label="Delete account" onClick={() => deleteMutation.mutate(account.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+            {!account.isCashAccount && (
+              <>
+                <Button variant="ghost" size="icon" title="Edit account" aria-label="Edit account" onClick={() => startEdit(account)}><Edit2 className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" title="Delete account" aria-label="Delete account" onClick={() => deleteMutation.mutate(account.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+              </>
+            )}
           </div>
         </div>
 

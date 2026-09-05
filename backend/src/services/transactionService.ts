@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { PaymentMode, Prisma, TransactionType } from '@prisma/client';
 import prisma from '../config/prisma';
 import { AppError } from '../utils/AppError';
+import { ensureCashAccount } from './accountService';
 import { getFYRange, getISTDateBoundary } from '../utils/financialYear';
 import { buildPaginationArgs, processPaginationResult } from '../utils/pagination';
 
@@ -395,6 +396,19 @@ export async function createTransaction(
       if (!account) throw AppError.notFound('Bank account');
     }
 
+    // Auto-resolve to the user's cash account for a cash-paid EXPENSE/INCOME with no
+    // explicit account chosen. Without this, a CASH-paymentMode transaction had
+    // bankAccountId: null and zero balance effect anywhere. TRANSFER is excluded — its
+    // source/destination accounts are always explicit (bankAccountId + transferToAccountId).
+    // Self-healing rather than a hard failure: every user-creation path provisions a cash
+    // account, but ensureCashAccount is idempotent, so falling back to it here also covers
+    // any account created before this feature shipped and never backfilled.
+    let cashResolvedBankAccountId = data.bankAccountId;
+    if (!cashResolvedBankAccountId && data.paymentMode === 'CASH' && data.type !== 'TRANSFER') {
+      const cashAccount = await ensureCashAccount(tx, userId);
+      cashResolvedBankAccountId = cashAccount.id;
+    }
+
     // TRANSFER double-entry: create debit on source + credit on destination
     if (data.type === 'TRANSFER' && data.transferToAccountId) {
       const destAccount = await tx.bankAccount.findFirst({ where: { id: data.transferToAccountId, userId } });
@@ -516,7 +530,7 @@ export async function createTransaction(
     const created = await tx.transaction.create({
       data: {
         userId,
-        bankAccountId: data.bankAccountId,
+        bankAccountId: cashResolvedBankAccountId,
         categoryId: data.categoryId,
         amount: data.amount,
         type: data.type as TransactionType,
@@ -542,10 +556,10 @@ export async function createTransaction(
     });
 
     // Update source account balance (INCOME → +, EXPENSE/TRANSFER → -)
-    if (data.bankAccountId) {
+    if (cashResolvedBankAccountId) {
       const delta = data.type === 'INCOME' ? data.amount : -data.amount;
       await tx.bankAccount.update({
-        where: { id: data.bankAccountId },
+        where: { id: cashResolvedBankAccountId },
         data: { currentBalance: { increment: delta } },
       });
     }

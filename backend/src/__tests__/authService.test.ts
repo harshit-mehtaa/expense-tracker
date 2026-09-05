@@ -26,6 +26,11 @@ vi.mock('../config/prisma', () => {
       create: vi.fn(),
       deleteMany: vi.fn(),
     },
+    bankAccount: {
+      findFirst: vi.fn(),
+      create: vi.fn(),
+    },
+    $transaction: vi.fn(),
   };
   return { default: mockPrisma, prisma: mockPrisma };
 });
@@ -56,6 +61,7 @@ import {
 
 const userMock = (prisma as any).user;
 const tokenMock = (prisma as any).refreshToken;
+const acctMock = (prisma as any).bankAccount;
 const bcryptCompare = bcrypt.compare as ReturnType<typeof vi.fn>;
 const bcryptHash = bcrypt.hash as ReturnType<typeof vi.fn>;
 const signAccess = signAccessToken as ReturnType<typeof vi.fn>;
@@ -86,6 +92,9 @@ beforeEach(() => {
   tokenMock.findUnique.mockResolvedValue(MOCK_STORED_TOKEN);
   tokenMock.create.mockResolvedValue({});
   tokenMock.deleteMany.mockResolvedValue({ count: 1 });
+  acctMock.findFirst.mockResolvedValue(null);
+  acctMock.create.mockResolvedValue({ id: 'cash-1', userId: 'u1', isCashAccount: true });
+  (prisma as any).$transaction.mockImplementation(async (fn: any) => fn(prisma));
   bcryptCompare.mockResolvedValue(true);
   bcryptHash.mockResolvedValue('hashed-pw');
   signAccess.mockReturnValue('mock-access-token');
@@ -218,6 +227,18 @@ describe('createUser (authService)', () => {
       expect.objectContaining({
         data: expect.objectContaining({ mustChangePassword: true }),
       }),
+    );
+  });
+
+  it('provisions a cash account for the new user, atomically with user creation', async () => {
+    userMock.findUnique.mockResolvedValue(null);
+    userMock.create.mockResolvedValue({ ...MOCK_USER, id: 'u-new' });
+
+    await createUser({ name: 'Bob', email: 'new@x.com', password: 'plain-pass' });
+
+    expect((prisma as any).$transaction).toHaveBeenCalled();
+    expect(acctMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ userId: 'u-new', isCashAccount: true }) }),
     );
   });
 });

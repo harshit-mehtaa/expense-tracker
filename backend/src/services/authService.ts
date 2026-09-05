@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import { User } from '@prisma/client';
 import prisma from '../config/prisma';
 import { AppError } from '../utils/AppError';
+import { ensureCashAccount } from './accountService';
 import {
   AuthPayload,
   signAccessToken,
@@ -115,15 +116,19 @@ export async function createUser(data: {
   }
 
   const passwordHash = await bcrypt.hash(data.password, BCRYPT_ROUNDS);
-  return prisma.user.create({
-    data: {
-      name: data.name,
-      email: data.email.toLowerCase().trim(),
-      passwordHash,
-      role: data.role ?? 'MEMBER',
-      colorTag: data.colorTag,
-      mustChangePassword: true,
-    },
+  return prisma.$transaction(async (tx) => {
+    const user = await tx.user.create({
+      data: {
+        name: data.name,
+        email: data.email.toLowerCase().trim(),
+        passwordHash,
+        role: data.role ?? 'MEMBER',
+        colorTag: data.colorTag,
+        mustChangePassword: true,
+      },
+    });
+    await ensureCashAccount(tx, user.id);
+    return user;
   });
 }
 

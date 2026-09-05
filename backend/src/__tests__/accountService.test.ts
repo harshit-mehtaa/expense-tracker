@@ -14,6 +14,7 @@ vi.mock('../config/prisma', () => {
     bankAccount: {
       findMany: vi.fn(),
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
     },
@@ -25,6 +26,7 @@ vi.mock('../config/prisma', () => {
   return { default: mockPrisma, prisma: mockPrisma };
 });
 
+import { Prisma } from '@prisma/client';
 import prisma from '../config/prisma';
 import {
   getAccounts,
@@ -33,6 +35,7 @@ import {
   updateAccount,
   reconcileAccount,
   deleteAccount,
+  ensureCashAccount,
 } from '../services/accountService';
 
 const acctMock = (prisma as any).bankAccount;
@@ -228,6 +231,11 @@ describe('createAccount', () => {
     expect(createCall.data.maturityDate).toBeInstanceOf(Date);
   });
 
+  it('rejects manual creation of a CASH account', async () => {
+    await expect(createAccount('u1', { bankName: 'Cash', accountType: 'CASH' })).rejects.toThrow(/system-managed/i);
+    expect(acctMock.create).not.toHaveBeenCalled();
+  });
+
   it('stores card billing cycle details', async () => {
     acctMock.create.mockResolvedValue(MOCK_ACCOUNT);
 
@@ -327,6 +335,36 @@ describe('updateAccount', () => {
     acctMock.findUnique.mockResolvedValue(null);
     await expect(updateAccount('acct-x', 'u1', 'MEMBER', {})).rejects.toThrow(/not found/i);
   });
+
+  it('rejects deactivating the cash account via isActive=false', async () => {
+    acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, isCashAccount: true });
+    await expect(updateAccount('acct-1', 'u1', 'MEMBER', { isActive: false })).rejects.toThrow(/cannot be deactivated/i);
+    expect(acctMock.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects changing the cash account\'s accountType away from CASH', async () => {
+    acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, isCashAccount: true, accountType: 'CASH' });
+    await expect(updateAccount('acct-1', 'u1', 'MEMBER', { accountType: 'SAVINGS' })).rejects.toThrow(/type cannot be changed/i);
+    expect(acctMock.update).not.toHaveBeenCalled();
+  });
+
+  it('allows a no-op accountType update (still CASH) on the cash account', async () => {
+    acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, isCashAccount: true, accountType: 'CASH' });
+    await updateAccount('acct-1', 'u1', 'MEMBER', { accountType: 'CASH' });
+    expect(acctMock.update).toHaveBeenCalled();
+  });
+
+  it('rejects converting a regular account into the cash account', async () => {
+    acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, isCashAccount: false, accountType: 'SAVINGS' });
+    await expect(updateAccount('acct-1', 'u1', 'MEMBER', { accountType: 'CASH' })).rejects.toThrow(/cannot be converted/i);
+    expect(acctMock.update).not.toHaveBeenCalled();
+  });
+
+  it('allows updating a non-isActive field on the cash account', async () => {
+    acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, isCashAccount: true });
+    await updateAccount('acct-1', 'u1', 'MEMBER', { bankName: 'Cash' });
+    expect(acctMock.update).toHaveBeenCalled();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -345,6 +383,67 @@ describe('deleteAccount', () => {
   it('propagates Forbidden from getAccountById for wrong owner', async () => {
     acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, userId: 'u2' });
     await expect(deleteAccount('acct-1', 'u1', 'MEMBER')).rejects.toThrow(/forbidden|access denied/i);
+  });
+
+  it('rejects deactivating the cash account', async () => {
+    acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, isCashAccount: true });
+    await expect(deleteAccount('acct-1', 'u1', 'MEMBER')).rejects.toThrow(/cannot be deactivated/i);
+    expect(acctMock.update).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ensureCashAccount
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('ensureCashAccount', () => {
+  it('returns the existing cash account without creating one', async () => {
+    const existing = { id: 'cash-1', userId: 'u1', isCashAccount: true };
+    acctMock.findFirst.mockResolvedValue(existing);
+
+    const result = await ensureCashAccount(prisma as any, 'u1');
+
+    expect(result).toBe(existing);
+    expect(acctMock.create).not.toHaveBeenCalled();
+  });
+
+  it('creates a cash account when none exists', async () => {
+    acctMock.findFirst.mockResolvedValue(null);
+    const created = { id: 'cash-new', userId: 'u1', isCashAccount: true, accountType: 'CASH' };
+    acctMock.create.mockResolvedValue(created);
+
+    const result = await ensureCashAccount(prisma as any, 'u1');
+
+    expect(acctMock.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'u1',
+        bankName: 'Cash',
+        accountType: 'CASH',
+        isCashAccount: true,
+        currentBalance: 0,
+        currency: 'INR',
+      },
+    });
+    expect(result).toBe(created);
+  });
+
+  it('throws a clean conflict on a concurrent-create race (P2002), without attempting to re-read', async () => {
+    // A real Postgres transaction is aborted by any error — a findFirst on the same `tx`
+    // after the P2002 could never succeed, so this must NOT attempt one (see accountService.ts).
+    acctMock.findFirst.mockResolvedValue(null);
+    acctMock.create.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '5.22.0' }),
+    );
+
+    await expect(ensureCashAccount(prisma as any, 'u1')).rejects.toThrow(/retry/i);
+    expect(acctMock.findFirst).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-throws a non-P2002 error from create unchanged', async () => {
+    acctMock.findFirst.mockResolvedValue(null);
+    acctMock.create.mockRejectedValue(new Error('connection lost'));
+
+    await expect(ensureCashAccount(prisma as any, 'u1')).rejects.toThrow('connection lost');
   });
 });
 

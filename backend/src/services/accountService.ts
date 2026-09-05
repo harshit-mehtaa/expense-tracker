@@ -1,6 +1,38 @@
-import { AccountType } from '@prisma/client';
+import { AccountType, Prisma } from '@prisma/client';
 import prisma from '../config/prisma';
 import { AppError } from '../utils/AppError';
+
+// Idempotent: finds the user's existing cash account or creates it. Must be called with
+// a transactional client (tx) so "user created but no cash account" can never happen.
+// The findFirst-then-create window is not perfectly race-proof under concurrent calls for
+// the same userId — a Postgres partial unique index backs this as defense-in-depth, so at
+// most one row is ever committed. On a race, the loser's create throws P2002; we do NOT
+// attempt to read back the winner's row here, because Postgres aborts the whole
+// transaction block on any error (25P02 on every subsequent statement on that connection,
+// including a findFirst against the same `tx`) — so that read could never succeed. The
+// caller must retry outside this transaction to observe the winner's row.
+export async function ensureCashAccount(tx: Prisma.TransactionClient, userId: string) {
+  const existing = await tx.bankAccount.findFirst({ where: { userId, isCashAccount: true } });
+  if (existing) return existing;
+
+  try {
+    return await tx.bankAccount.create({
+      data: {
+        userId,
+        bankName: 'Cash',
+        accountType: 'CASH',
+        isCashAccount: true,
+        currentBalance: 0,
+        currency: 'INR',
+      },
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      throw AppError.conflict('Cash account is being provisioned concurrently — please retry');
+    }
+    throw error;
+  }
+}
 
 function normalizeAccountNumber(value: string | undefined): string | undefined {
   const normalized = value?.replace(/[\s-]/g, '').trim();
@@ -85,6 +117,9 @@ export async function createAccount(
     upiId?: string;
   },
 ) {
+  if (data.accountType === 'CASH') {
+    throw AppError.badRequest('Cash accounts are system-managed and cannot be created manually');
+  }
   const accountNumber = normalizeAccountNumber(data.accountNumber);
   const ifscCode = normalizeIfscCode(data.ifscCode);
   return prisma.bankAccount.create({
@@ -119,6 +154,7 @@ export async function updateAccount(
     ifscCode: string;
     accountNumber: string;
     accountNumberLast4: string;
+    accountType: string;
     currentBalance: number;
     upiId: string;
     isActive: boolean;
@@ -130,7 +166,16 @@ export async function updateAccount(
     maturityDate: string;
   }>,
 ) {
-  await getAccountById(accountId, requesterId, requesterRole);
+  const account = await getAccountById(accountId, requesterId, requesterRole);
+  if (account.isCashAccount && data.isActive === false) {
+    throw AppError.badRequest('The cash account cannot be deactivated');
+  }
+  if (account.isCashAccount && data.accountType !== undefined && data.accountType !== 'CASH') {
+    throw AppError.badRequest('The cash account\'s type cannot be changed');
+  }
+  if (!account.isCashAccount && data.accountType === 'CASH') {
+    throw AppError.badRequest('An existing account cannot be converted to the cash account');
+  }
   const accountNumber = data.accountNumber !== undefined ? normalizeAccountNumber(data.accountNumber) : undefined;
   const ifscCode = data.ifscCode !== undefined ? normalizeIfscCode(data.ifscCode) : undefined;
 
@@ -138,6 +183,7 @@ export async function updateAccount(
     where: { id: accountId },
     data: {
       ...data,
+      accountType: data.accountType as AccountType | undefined,
       ...(data.ifscCode !== undefined && {
         ifscCode,
         ifscPrefix: getIfscPrefix(ifscCode),
@@ -189,7 +235,10 @@ export async function reconcileAccount(
 }
 
 export async function deleteAccount(accountId: string, requesterId: string, requesterRole: string) {
-  await getAccountById(accountId, requesterId, requesterRole);
+  const account = await getAccountById(accountId, requesterId, requesterRole);
+  if (account.isCashAccount) {
+    throw AppError.badRequest('The cash account cannot be deactivated');
+  }
 
   // Soft-delete: set isActive = false
   return prisma.bankAccount.update({

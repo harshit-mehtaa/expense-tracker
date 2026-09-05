@@ -174,3 +174,55 @@ describe('Accounts page — credit card balance sign', () => {
     expect(body.currentBalance).toBe(6547);
   });
 });
+
+// ─── Cash account: system-managed, hidden from manual creation and deactivation ─
+
+describe('Accounts page — cash account', () => {
+  const CASH_ACCOUNT = {
+    id: 'cash-1',
+    bankName: 'Cash',
+    accountType: 'CASH',
+    currentBalance: 500,
+    isActive: true,
+    isCashAccount: true,
+  };
+
+  it('does not offer CASH as a selectable type in the Add Bank Account form', async () => {
+    const user = userEvent.setup();
+    renderPage(<AccountsPage />, {
+      route: '/accounts', user: MEMBER_USER, handlers: accountHandlers([CASH_ACCOUNT]),
+    });
+    await screen.findAllByText(/^Cash$/);
+
+    await user.click(screen.getByRole('button', { name: /add bank account/i }));
+    const typeSelect = await screen.findByLabelText(/account type/i);
+    const optionValues = Array.from(typeSelect.querySelectorAll('option')).map((o) => (o as HTMLOptionElement).value);
+    expect(optionValues).not.toContain('CASH');
+  });
+
+  it('hides the delete and edit actions for the cash account row', async () => {
+    renderPage(<AccountsPage />, {
+      route: '/accounts', user: MEMBER_USER, handlers: accountHandlers([CASH_ACCOUNT]),
+    });
+    await screen.findAllByText(/^Cash$/);
+    expect(screen.queryByRole('button', { name: /delete account/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /edit account/i })).toBeNull();
+  });
+
+  it('still offers Reconcile balance for the cash account row', async () => {
+    renderPage(<AccountsPage />, {
+      route: '/accounts', user: MEMBER_USER, handlers: accountHandlers([CASH_ACCOUNT]),
+    });
+    await screen.findAllByText(/^Cash$/);
+    expect(await screen.findByRole('button', { name: /reconcile balance/i })).toBeInTheDocument();
+  });
+
+  it('shows the delete and edit actions for a regular (non-cash) account row', async () => {
+    renderPage(<AccountsPage />, {
+      route: '/accounts', user: MEMBER_USER, handlers: accountHandlers(ACCOUNTS),
+    });
+    await screen.findByText(/HDFC Bank/);
+    expect(await screen.findByRole('button', { name: /delete account/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /edit account/i })).toBeInTheDocument();
+  });
+});

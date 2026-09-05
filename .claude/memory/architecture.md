@@ -1,7 +1,7 @@
 # Codebase Architecture
 
 <!-- Cap: 150 lines. Evict oldest sections when at capacity. -->
-<!-- Last scanned: 2026-08-16 -->
+<!-- Last scanned: 2026-09-06 -->
 
 Self-hosted family finance manager for Indian households. Express + Prisma + PostgreSQL
 backend, React + Vite frontend, TypeScript throughout, run via Docker Compose.
@@ -91,3 +91,37 @@ flips GHCR package visibility to public.
 - Indian financial year (Apr 1 – Mar 31) throughout tax/reporting
   (`utils/financialYear.ts`)
 - Bank statement imports are idempotent via `importHash`
+
+## Account/Transaction Model
+- `BankAccount` (schema.prisma:334-365): per-user (`userId`), `accountType` enum incl.
+  `CASH`, `currentBalance` is a STORED field (not derived), `isActive` soft toggle (no
+  `deletedAt`). No unique constraint on (userId, accountType) in Prisma's schema — but a
+  raw-SQL partial unique index (`BankAccount_userId_isCashAccount_key`, migration
+  `20260906090100`) guarantees at most one row per user has `isCashAccount: true`.
+- Every user has exactly one system-managed cash account (`isCashAccount: true`,
+  `accountType: 'CASH'`), provisioned by `accountService.ensureCashAccount(tx, userId)` —
+  idempotent find-or-create, called from `authService.createUser`, `adminService.createUser`,
+  `prisma/seed.ts`, and self-healingly from `transactionService.createTransaction` itself.
+  Existing pre-feature users need `npm run prisma:backfill-cash` (prisma/backfill-cash-accounts.ts).
+  It cannot be created manually (`accountService.createAccount` rejects `accountType:
+  'CASH'`), deactivated, or have its `accountType` changed (`updateAccount`/`deleteAccount`
+  guards in accountService.ts).
+- `Transaction` (schema.prisma:656-711): `type` enum INCOME/EXPENSE/TRANSFER,
+  `paymentMode` enum incl. CASH (payment-mode only, distinct from `AccountType.CASH`),
+  `bankAccountId` optional and **immutable after creation** (`updateTransaction` cannot
+  change it — only `convertTransactionToTransfer` retrofits TRANSFER legs).
+- Balance mutation lives entirely in `transactionService.ts`: single-leg INCOME/EXPENSE
+  updates one account's `currentBalance` only if `bankAccountId` is set — resolved
+  automatically to the user's cash account when `paymentMode==='CASH'` and no
+  `bankAccountId` was given (both EXPENSE and INCOME, not TRANSFER). TRANSFER creates two
+  linked rows via `transferPairId` and atomically decrements source + increments
+  destination inside `prisma.$transaction`. Update and soft-delete both reverse via a
+  shared `balanceDelta()` helper, cascading to the paired TRANSFER leg.
+  `balanceImpactApplied` flag exists for admin-linked legs that shouldn't move money.
+- Double-entry via `transferPairId` is the established idiom for money moving between
+  two of a user's own accounts — a cash withdrawal/deposit is exactly this pattern
+  (frontend labels these legs "Cash Withdrawal"/"Cash Deposit" in `Transactions.tsx`'s
+  `TransferCategoryInfo`, keyed off which side of the pair the cash account is on).
+- KNOWN GAP: `recurringService.ts` also resolves CASH-paymentMode rules to the cash
+  account (fixed 2026-09-06), but the bank-statement import path
+  (`statementImportService.persistParsedStatement`) does NOT yet — see vision.md tech debt.

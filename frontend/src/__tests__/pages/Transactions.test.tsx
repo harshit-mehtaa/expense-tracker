@@ -104,6 +104,108 @@ describe('Transactions page — smoke', () => {
   });
 });
 
+/**
+ * A cash withdrawal is a TRANSFER leg whose destination account is the user's
+ * system-managed cash account. It should read as "Cash Withdrawal", not the generic
+ * "Transfer Debit" label used for an ordinary account-to-account transfer.
+ */
+const WITHDRAWAL_TX = {
+  ...TX,
+  id: 'tx-withdrawal',
+  description: 'ATM withdrawal',
+  type: 'EXPENSE',
+  transferPairId: 'pair-cash-1',
+  bankAccount: { id: 'acc-1', bankName: 'HDFC Bank', accountNumberMasked: 'XXXX1234', accountType: 'SAVINGS' },
+  transferCounterpartyAccount: { bankName: 'Cash', accountNumberLast4: null, accountType: 'CASH' },
+};
+
+// The other leg of the same withdrawal: an INCOME row sitting directly on the cash
+// account. Both legs describe the SAME event and must agree on the label — this is the
+// leg a naive `type === 'EXPENSE' ? Withdrawal : Deposit` rule gets backwards.
+const WITHDRAWAL_CREDIT_LEG_TX = {
+  ...TX,
+  id: 'tx-withdrawal-credit',
+  description: 'ATM withdrawal',
+  type: 'INCOME',
+  transferPairId: 'pair-cash-1',
+  bankAccount: { id: 'acc-cash', bankName: 'Cash', accountNumberMasked: null, accountType: 'CASH' },
+  transferCounterpartyAccount: { bankName: 'HDFC Bank', accountNumberLast4: '1234', accountType: 'SAVINGS' },
+};
+
+// A deposit is the reverse movement: cash account is the SOURCE, not the destination.
+const DEPOSIT_DEBIT_LEG_TX = {
+  ...TX,
+  id: 'tx-deposit-debit',
+  description: 'Deposit to bank',
+  type: 'EXPENSE',
+  transferPairId: 'pair-cash-2',
+  bankAccount: { id: 'acc-cash', bankName: 'Cash', accountNumberMasked: null, accountType: 'CASH' },
+  transferCounterpartyAccount: { bankName: 'HDFC Bank', accountNumberLast4: '1234', accountType: 'SAVINGS' },
+};
+
+const DEPOSIT_CREDIT_LEG_TX = {
+  ...TX,
+  id: 'tx-deposit-credit',
+  description: 'Deposit to bank',
+  type: 'INCOME',
+  transferPairId: 'pair-cash-2',
+  bankAccount: { id: 'acc-1', bankName: 'HDFC Bank', accountNumberMasked: 'XXXX1234', accountType: 'SAVINGS' },
+  transferCounterpartyAccount: { bankName: 'Cash', accountNumberLast4: null, accountType: 'CASH' },
+};
+
+const ORDINARY_TRANSFER_TX = {
+  ...TX,
+  id: 'tx-transfer',
+  description: 'Move to savings',
+  type: 'EXPENSE',
+  transferPairId: 'pair-ordinary-1',
+  bankAccount: { id: 'acc-1', bankName: 'HDFC Bank', accountNumberMasked: 'XXXX1234', accountType: 'SAVINGS' },
+  transferCounterpartyAccount: { bankName: 'SBI', accountNumberLast4: '9999', accountType: 'SAVINGS' },
+};
+
+describe('Transactions page — cash withdrawal labeling', () => {
+  it('labels the debit leg (bank account) of a withdrawal as "Cash Withdrawal"', async () => {
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers([WITHDRAWAL_TX]) });
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+
+    expect((await screen.findAllByText(/Cash Withdrawal/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^Transfer Debit$/)).toBeNull();
+    expect(screen.queryByText(/Cash Deposit/)).toBeNull();
+  });
+
+  it('labels the credit leg (cash account itself) of the SAME withdrawal as "Cash Withdrawal" too, not "Cash Deposit"', async () => {
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers([WITHDRAWAL_CREDIT_LEG_TX]) });
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+
+    expect((await screen.findAllByText(/Cash Withdrawal/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Cash Deposit/)).toBeNull();
+  });
+
+  it('labels the debit leg (cash account itself) of a deposit as "Cash Deposit", not "Cash Withdrawal"', async () => {
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers([DEPOSIT_DEBIT_LEG_TX]) });
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+
+    expect((await screen.findAllByText(/Cash Deposit/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Cash Withdrawal/)).toBeNull();
+  });
+
+  it('labels the credit leg (bank account) of the SAME deposit as "Cash Deposit" too', async () => {
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers([DEPOSIT_CREDIT_LEG_TX]) });
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+
+    expect((await screen.findAllByText(/Cash Deposit/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Cash Withdrawal/)).toBeNull();
+  });
+
+  it('keeps the generic "Transfer Debit" label for an ordinary account-to-account transfer', async () => {
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers([ORDINARY_TRANSFER_TX]) });
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+
+    expect((await screen.findAllByText(/Transfer Debit/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Cash Withdrawal/)).toBeNull();
+  });
+});
+
 const SUBSCRIPTION_RULE = {
   id: 'rule-sub', userId: 'u-member',
   frequency: 'MONTHLY', nextRunDate: '2026-09-01T00:00:00.000Z', isActive: true,

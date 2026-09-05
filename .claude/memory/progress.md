@@ -1,45 +1,46 @@
 # Task Progress
 
-## Status: idle
+## Status: plan
+## Task: Each user should have a cash account. Cash withdrawals mark the transaction accordingly, reduce balance from the source account, and add to the user's cash account. Expenses made in cash adjust the balance against the user's cash account.
+## Started: 2026-09-06
+## Steps Completed: analyze, plan, approve, implement, review (FAIL then fixed, verified PASS)
 
-No task in progress.
+## Baseline Failures: none (2353 backend / 981 frontend tests, all passing pre-change).
+## Post-implement: 2371 backend tests pass (100% branch coverage maintained except
+## pre-existing loanService.ts:457, subscriptionService.ts:402-403 gaps); 999 frontend
+## tests pass; tsc/lint clean both sides.
+## Validation Results: prisma generate succeeded (schema valid). `prisma migrate dev`
+## against a live Postgres could NOT be run — no docker/DB available in this sandbox.
+## Migration SQL manually reviewed against repo convention (ALTER TYPE ADD VALUE kept
+## in its own file, per documented precedent in 20260816120000_.../migration.sql).
+## Flagged to user for a real migration dry-run before deploy.
 
-## Series plan (9 /task runs total, user-approved order) — 9 of 9 done. Series complete.
-1. [DONE] Bug fixes: UTC snapshot key + netWorthChangePct approximation
-2. [DONE] Spend-by-category breakdown widget
-3. [DONE] Tax-deduction snapshot (80C/80D) widget
-4. [DONE] Investment/loan summary tile
-5. [DONE] Alerts "view all" link (new Reminders page)
-6. [DONE] Quick-add shortcuts (Add Expense / Add Income on Dashboard)
-7. [DONE] Fragile cash-flow month-click date parsing (was a live crash)
-8. [DONE] Per-member drill-in on family spending breakdown
-9. [DONE] Dashboard.test.tsx coverage check + gap-fill (14 new tests, 66 total)
+## Task Classification: risk_level=high, task_type=feature
 
-## Tech debt inventory (see git log for full task-by-task detail):
-- `frontend/src/lib/accountFormat.ts:46`'s owner-name-shown branch (`showOwner ?
-  (userName || fallbackOwnerName) : undefined`) has zero test coverage anywhere —
-  `showAccountOwner`/`fallbackAccountOwnerName` are passed by Dashboard.tsx but never
-  observed with a real owner name in any test. Needs an accounts fixture with a
-  distinguishable userName in AddTransactionModal.test.tsx.
-- `resolveTargetUserId` (backend) only checks `deletedAt`, not `isActive` — broader,
-  pre-existing gap affecting every caller (Task 8's deep link mitigates client-side only).
-- `spendingByCat` query in Reports.tsx has no isError handling, unlike its P&L/Trial
-  Balance siblings.
-- Primary transaction CRUD mutations (edit/delete/import/bulk/recurring-apply) still
-  don't invalidate dashboard/profit-and-loss/report-spending/accounts.
-- `CashflowMonth`/`UpcomingAlert` types independently duplicated; `useAccounts`/
-  `useCategories` duplicated 5-way; `selectedMemberName` derivation duplicated
-  (Dashboard.tsx/Transactions.tsx).
-- `computeTotalLiabilities` has an undocumented endDate filter excluding overdue loans.
-- `PageHeader` component has zero production usages.
-- No modal has role="dialog"/focus-trap/Escape-to-close; chart click-handlers are
-  mouse-only — systemic a11y gap.
-- `viewUserId` is local useState, not shared context/URL state.
-- BUDGET_ALERT rows display the budget LIMIT as "amount due".
-- 80C/80D bar-color threshold duplicated 4x. taxApi/insuranceApi/investmentsApi/loansApi
-  mostly return `Promise<any>`.
-- Backend branch-coverage gate at 99.9% (loanService.ts:457, subscriptionService.ts:402-403).
-- `''`-coerces-to-0 Zod bug class unfixed in RealEstate.tsx, Accounts.tsx, TaxCentre.tsx.
-- Dashboard's `netWorth` always today's live figure regardless of `selectedFY`.
+## Plan (condensed — full detail held in conversation, presented to user at APPROVE):
+1. [MED] Schema: add AccountType.CASH + BankAccount.isCashAccount Boolean
+2. [MED] accountService.ensureCashAccount(tx, userId) idempotent find-or-create
+3. [MED] Wrap authService.createUser + adminService.createUser in $transaction, call ensureCashAccount
+4. [LOW] Backfill script prisma/backfill-cash-accounts.ts for existing users
+5. [MED] transactionService.createTransaction: auto-resolve bankAccountId to user's
+   cash account when paymentMode=CASH, bankAccountId unset, type!==TRANSFER
+6. [MED] Guard: exclude CASH from createAccountSchema enum + accountService.createAccount
+   throw; deleteAccount throw if isCashAccount; ALSO guard updateAccount so
+   isActive=false / accountType change on a cash account throws (must_fix from challenger:
+   PUT /accounts/:id was a second unguarded deactivation path)
+6b. [LOW] Migration adds a raw-SQL partial unique index on BankAccount
+   (userId WHERE isCashAccount=true) as defense-in-depth against the ensureCashAccount
+   findFirst-then-create race (should_fix from challenger); ensureCashAccount catches
+   the unique-violation and re-findFirst's instead of erroring
+7. [LOW] Frontend: add CASH label, exclude from BANK_ACCOUNT_TYPES/CARD_ACCOUNT_TYPE_OPTIONS,
+   disable deactivate for cash rows
+8. [LOW] Frontend: label cash-funded TRANSFER/EXPENSE distinctly (Cash Withdrawal/Deposit)
+9. [LOW] Backend tests for all new branches (100% coverage gate)
+10. [LOW] Frontend tests for new branches (per-directory coverage gate)
 
-## Known Flakes: none currently tracked.
+## Decisions (resolved with user before APPROVE):
+- Import scope: DEFERRED. bulkImportTransactions (bank-statement import) will NOT be
+  wired to cash-account logic in this task; log as tech debt in vision.md.
+- Deactivation: unconditional block (cash account can never be deactivated).
+- INCOME symmetry: CASH paymentMode auto-resolves for BOTH EXPENSE and INCOME.
+- DB uniqueness: partial unique index added as defense-in-depth (step 6b).

@@ -27,6 +27,8 @@ vi.mock('../config/prisma', () => {
       update: vi.fn(),
     },
     bankAccount: {
+      findFirst: vi.fn(),
+      create: vi.fn(),
       update: vi.fn(),
     },
     user: {
@@ -312,6 +314,101 @@ describe('generateDueRecurringTransactions', () => {
     expect(result).toEqual({ generated: 2 });
     expect(ruleMock.updateMany).toHaveBeenCalledTimes(2);
     expect(txMock.create).toHaveBeenCalledTimes(2);
+  });
+
+  it('CASH paymentMode with no linked account: resolves to the cash account and debits it', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    const cashRule = { ...MOCK_RULE, bankAccountId: null, paymentMode: 'CASH' };
+    ruleMock.findMany.mockResolvedValue([cashRule]);
+    ruleMock.updateMany.mockResolvedValue({ count: 1 });
+    txMock.create.mockResolvedValue({});
+    (prisma as any).bankAccount.findFirst.mockResolvedValue({ id: 'cash-1', userId: 'u1', isCashAccount: true });
+    (prisma as any).bankAccount.update.mockResolvedValue({});
+
+    const result = await generateDueRecurringTransactions('u1');
+
+    expect(result).toEqual({ generated: 1 });
+    expect((prisma as any).bankAccount.findFirst).toHaveBeenCalledWith({ where: { userId: 'u1', isCashAccount: true } });
+    expect(txMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: 'cash-1' }) }),
+    );
+    expect((prisma as any).bankAccount.update).toHaveBeenCalledWith({
+      where: { id: 'cash-1' },
+      data: { currentBalance: { increment: -5000 } },
+    });
+  });
+
+  it('CASH paymentMode, cash account not yet provisioned: self-heals by creating it, then proceeds', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    const cashRule = { ...MOCK_RULE, bankAccountId: null, paymentMode: 'CASH' };
+    ruleMock.findMany.mockResolvedValue([cashRule]);
+    ruleMock.updateMany.mockResolvedValue({ count: 1 });
+    txMock.create.mockResolvedValue({});
+    (prisma as any).bankAccount.findFirst.mockResolvedValue(null);
+    (prisma as any).bankAccount.create.mockResolvedValue({ id: 'cash-new', userId: 'u1', isCashAccount: true });
+    (prisma as any).bankAccount.update.mockResolvedValue({});
+
+    const result = await generateDueRecurringTransactions('u1');
+
+    expect(result).toEqual({ generated: 1 });
+    expect((prisma as any).bankAccount.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ userId: 'u1', isCashAccount: true }) }),
+    );
+    expect(txMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: 'cash-new' }) }),
+    );
+  });
+
+  it('CASH paymentMode, cash-account resolution fails (e.g. a provisioning race): logs and stops generating for this rule, without throwing', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    const cashRule = { ...MOCK_RULE, bankAccountId: null, paymentMode: 'CASH' };
+    ruleMock.findMany.mockResolvedValue([cashRule]);
+    (prisma as any).bankAccount.findFirst.mockResolvedValue(null);
+    (prisma as any).bankAccount.create.mockRejectedValue(new Error('conflict'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await generateDueRecurringTransactions('u1');
+
+    expect(result).toEqual({ generated: 0 });
+    expect(txMock.create).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('failed to resolve a cash account'),
+      expect.objectContaining({ ruleId: 'rule-1', userId: 'u1' }),
+    );
+    consoleError.mockRestore();
+  });
+
+  it('logs a non-Error thrown value from cash-account resolution as-is', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    const cashRule = { ...MOCK_RULE, bankAccountId: null, paymentMode: 'CASH' };
+    ruleMock.findMany.mockResolvedValue([cashRule]);
+    (prisma as any).bankAccount.findFirst.mockResolvedValue(null);
+    (prisma as any).bankAccount.create.mockRejectedValue('raw failure string');
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await generateDueRecurringTransactions('u1');
+
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('failed to resolve a cash account'),
+      expect.objectContaining({ error: 'raw failure string' }),
+    );
+    consoleError.mockRestore();
+  });
+
+  it('does not look up a cash account when bankAccountId is already set, even with paymentMode CASH', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    const rule = { ...MOCK_RULE, bankAccountId: 'acct-1', paymentMode: 'CASH' };
+    ruleMock.findMany.mockResolvedValue([rule]);
+    ruleMock.updateMany.mockResolvedValue({ count: 1 });
+    txMock.create.mockResolvedValue({});
+    (prisma as any).bankAccount.update.mockResolvedValue({});
+
+    await generateDueRecurringTransactions('u1');
+
+    expect((prisma as any).bankAccount.findFirst).not.toHaveBeenCalled();
+    expect(txMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: 'acct-1' }) }),
+    );
   });
 
   // ─── advanceDate frequency tests (tested indirectly via updateMany nextRunDate arg) ───

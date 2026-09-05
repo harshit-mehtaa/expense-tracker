@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 import { PaymentMode, Prisma, RecurringFrequency, TransactionType } from '@prisma/client';
 import prisma from '../config/prisma';
 import { AppError } from '../utils/AppError';
+import { ensureCashAccount } from './accountService';
 import { ownerScopedWhere } from '../utils/resolveTargetUserId';
 import { priceAsOf } from '../utils/subscriptionPricing';
 
@@ -163,6 +164,27 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
       amount = new Prisma.Decimal(resolved);
     }
 
+    // Same gap createTransaction closes for manual entries: a CASH-paymentMode rule with
+    // no linked account otherwise moves no money. Resolved outside the $transaction, like
+    // the price lookup above — self-healing (provisions the cash account if missing,
+    // e.g. a pre-feature user never backfilled) rather than a permanent stall.
+    //
+    // Log rather than throw, for the same reason as the missing-price case above: throwing
+    // would abort the whole run and stop every OTHER rule this user has from generating.
+    let resolvedBankAccountId = rule.bankAccountId;
+    if (!resolvedBankAccountId && rule.paymentMode === 'CASH') {
+      try {
+        const cashAccount = await ensureCashAccount(prisma, rule.userId);
+        resolvedBankAccountId = cashAccount.id;
+      } catch (err) {
+        console.error(
+          '[recurring] failed to resolve a cash account for a CASH-paymentMode rule; billing stopped',
+          { ruleId: rule.id, userId: rule.userId, dueDate: dueDate.toISOString(), error: err instanceof Error ? err.message : err },
+        );
+        break;
+      }
+    }
+
     const created = await prisma.$transaction(async (tx) => {
       const { count } = await tx.recurringRule.updateMany({
         where: {
@@ -177,7 +199,7 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
       await tx.transaction.create({
         data: {
           userId: rule.userId,
-          bankAccountId: rule.bankAccountId,
+          bankAccountId: resolvedBankAccountId,
           categoryId: rule.categoryId,
           amount,
           type: rule.type,
@@ -203,9 +225,9 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
         subscription.status = 'ACTIVE';
       }
 
-      if (rule.bankAccountId) {
+      if (resolvedBankAccountId) {
         await tx.bankAccount.update({
-          where: { id: rule.bankAccountId },
+          where: { id: resolvedBankAccountId },
           data: { currentBalance: { increment: transactionBalanceDelta(rule.type, amount) } },
         });
       }
