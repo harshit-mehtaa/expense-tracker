@@ -32,12 +32,10 @@ No task in progress.
   updating Reminders.tsx's route map (runtime-guarded, but not
   type-safe). Needs a dedicated unification task.
 - `viewUserId` (useMemberSelector) is local `useState`, not shared
-  context/URL state — an ADMIN scoped to one member on Dashboard sees a
-  wider "All Family" view after clicking "View all" to Reminders, with
-  no visual cue the scope changed.
+  context/URL state — an ADMIN scoped to one member sees a wider "All
+  Family" view after Dashboard→Reminders navigation, no visual cue.
 - BUDGET_ALERT rows display the budget LIMIT as "amount due" (not money
-  owed), always sort to the top (daysUntilDue:0) — pre-existing backend
-  data-shape inconsistency in the alert model.
+  owed) — pre-existing backend data-shape inconsistency in alert model.
 - Admin member-selector header block (label+select+isMembersError) is
   now duplicated 14x+ across pages — component-extraction candidate.
 - The 80C/80D bar-color threshold expression duplicated 4x.
