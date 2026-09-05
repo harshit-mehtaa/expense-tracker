@@ -35,6 +35,7 @@ import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { AddTransactionModal } from '@/components/transactions/AddTransactionModal';
+import { SPENDING_TAB_ID } from '@/pages/admin/Reports';
 
 /**
  * Named + exported (not inlined in the AreaChart's onClick prop) so it can be unit
@@ -64,6 +65,21 @@ export function handleCashflowClick(
   // in any positive-offset zone lands on the previous day — the range came
   // out as 31 Jul -> 30 Aug for "Aug 26".
   navigate(`/transactions?startDate=${toDateInputValue(start)}&endDate=${toDateInputValue(end)}`);
+}
+
+/**
+ * Named + exported for the same reason as handleCashflowClick above (Recharts renders
+ * at 0x0 under jsdom). Simpler than that handler: each <Bar dataKey={member.id}> is
+ * rendered inside a per-member .map() closure, so which member was clicked is
+ * unambiguous by construction — no Recharts click payload to parse at all.
+ *
+ * memberId only ever comes from familyOverview.members here, but this function doesn't
+ * need to trust that — Reports.tsx's own mount effect is the actual security boundary
+ * (admin-gated, and re-validates targetUserId against its OWN loaded members list
+ * before calling setViewUserId), not this function.
+ */
+export function handleFamilyMemberClick(memberId: string, navigate: (path: string) => void) {
+  navigate(`/reports?tab=${SPENDING_TAB_ID}&targetUserId=${encodeURIComponent(memberId)}`);
 }
 
 export default function DashboardPage() {
@@ -719,7 +735,15 @@ export default function DashboardPage() {
               <Tooltip content={<CustomTooltip formatter={formatINRShort} />} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
               {familyOverview.members.map((member) => (
-                <Bar key={member.id} dataKey={member.id} name={member.name} stackId="members" fill={member.colorTag} />
+                <Bar
+                  key={member.id}
+                  dataKey={member.id}
+                  name={member.name}
+                  stackId="members"
+                  fill={member.colorTag}
+                  cursor="pointer"
+                  onClick={() => handleFamilyMemberClick(member.id, navigate)}
+                />
               ))}
             </BarChart>
           </ResponsiveContainer>

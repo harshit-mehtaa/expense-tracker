@@ -18,6 +18,7 @@ import { http, HttpResponse } from 'msw';
 import ReportsPage from '@/pages/admin/Reports';
 import { renderPage, failOnConsoleError } from '../support/renderPage';
 import { url } from '../support/handlers';
+import { MEMBER_USER } from '../support/fixtures';
 
 failOnConsoleError();
 
@@ -144,6 +145,77 @@ describe('Reports page — smoke', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Server exploded/i)).toBeInTheDocument();
+    });
+  });
+});
+
+describe('Reports page — deep link from Dashboard\'s family-spending chart', () => {
+  it('an ADMIN arriving via ?tab=spending&targetUserId=X lands on Spending Analysis, scoped to that member', async () => {
+    let seenTargetUserId: string | null | undefined;
+    renderPage(<ReportsPage />, {
+      route: '/reports?tab=spending&targetUserId=u-member',
+      handlers: [
+        http.get(url('/reports/spending-by-category'), ({ request }) => {
+          seenTargetUserId = new URL(request.url).searchParams.get('targetUserId');
+          return HttpResponse.json({ data: SPENDING });
+        }),
+        ...reportHandlers(),
+      ],
+    });
+
+    // Lands on Spending Analysis without clicking the tab button.
+    expect(await screen.findByText(/Spending by Category/)).toBeInTheDocument();
+    await waitFor(() => expect(seenTargetUserId).toBe('u-member'));
+  });
+
+  it('a MEMBER visiting the same deep link also lands on Spending Analysis, but targetUserId is never sent (own data only)', async () => {
+    let seenTargetUserId: string | null | undefined = 'not-called';
+    renderPage(<ReportsPage />, {
+      route: '/reports?tab=spending&targetUserId=u-member',
+      user: MEMBER_USER,
+      handlers: [
+        http.get(url('/reports/spending-by-category'), ({ request }) => {
+          seenTargetUserId = new URL(request.url).searchParams.get('targetUserId');
+          return HttpResponse.json({ data: SPENDING });
+        }),
+        ...reportHandlers(),
+      ],
+    });
+
+    expect(await screen.findByText(/Spending by Category/)).toBeInTheDocument();
+    await waitFor(() => expect(seenTargetUserId).toBeNull());
+  });
+
+  it('ignores a targetUserId that is not in the loaded members list (stale/bookmarked link to a since-removed member)', async () => {
+    let seenTargetUserId: string | null | undefined = 'not-called';
+    renderPage(<ReportsPage />, {
+      route: '/reports?tab=spending&targetUserId=u-deleted-or-deactivated',
+      handlers: [
+        http.get(url('/reports/spending-by-category'), ({ request }) => {
+          seenTargetUserId = new URL(request.url).searchParams.get('targetUserId');
+          return HttpResponse.json({ data: SPENDING });
+        }),
+        ...reportHandlers(),
+      ],
+    });
+
+    // Still lands on the Spending tab (tab-switch isn't gated on validity) — the point
+    // is that the unrecognized id is never applied as the scope, not that navigation
+    // fails outright.
+    expect(await screen.findByText(/Spending by Category/)).toBeInTheDocument();
+    await waitFor(() => expect(seenTargetUserId).toBeNull());
+  });
+
+  it('reflects the scoped member in the View: selector after arriving via the deep link', async () => {
+    renderPage(<ReportsPage />, {
+      route: '/reports?tab=spending&targetUserId=u-member',
+      handlers: reportHandlers(),
+    });
+
+    await screen.findByText(/Spending by Category/);
+    await waitFor(() => {
+      const select = screen.getByLabelText(/View:/i) as HTMLSelectElement;
+      expect(select.value).toBe('u-member');
     });
   });
 });

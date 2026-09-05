@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   AreaChart, Area,
@@ -14,6 +15,7 @@ import api from '@/lib/api';
 import { formatINRShort } from '@/lib/indianFormat';
 import { cn } from '@/lib/utils';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
+import { useAuth } from '@/contexts/AuthContext';
 import {
   useChartGradients,
   CHART_PALETTE,
@@ -26,6 +28,11 @@ import {
 } from '@/lib/chartUtils';
 
 type TabId = 'pl' | 'spending' | 'networth' | 'trialbalance';
+
+/** Single source of truth for the "spending" tab id — used by the `tabs` array below,
+ *  the deep-link mount effect's `tab === ...` check, and Dashboard.tsx's URL
+ *  construction (`handleFamilyMemberClick`), so the two files can't silently drift. */
+export const SPENDING_TAB_ID: TabId = 'spending';
 
 const LOAN_TYPE_LABELS: Record<string, string> = {
   HOME:     'Home Loan',
@@ -60,14 +67,47 @@ const GOLD_TYPE_LABELS: Record<string, string> = {
 
 export default function ReportsPage() {
   const { selectedFY } = useFY();
+  const { user } = useAuth();
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
   const { gradIds, GradDefs } = useChartGradients();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [activeTab, setActiveTab] = useState<TabId>('pl');
 
+  // Deep link from Dashboard's family-spending chart: /reports?tab=spending&targetUserId=X.
+  // `tab` is plain UI navigation state (not admin-gated) — a MEMBER visiting this link
+  // still lands on the Spending tab, just showing their own data, since `targetUserId`
+  // is the actual security boundary and is admin-gated below. Stripping is NOT itself
+  // admin-gated, so acting before `user` resolves would silently drop `targetUserId`
+  // before `isAdmin` ever becomes true — the exact bug already fixed once in
+  // Transactions.tsx's own version of this effect. Nothing here is decidable until we
+  // know who they are.
+  //
+  // targetUserId is also validated against the loaded `members` list (waiting on
+  // `isMembersLoading` for the same reason we wait on `user`) before being applied. The
+  // existing "View:" dropdown only ever offers active members, making it an implicit
+  // whitelist — this deep link is the first path that can set viewUserId to an
+  // arbitrary id, so it needs its own explicit check rather than inheriting the
+  // dropdown's safety for free. Without this, a stale/bookmarked link to a deactivated
+  // member (resolveTargetUserId only checks deletedAt, not isActive) would still
+  // silently succeed server-side.
+  useEffect(() => {
+    if (!user || isMembersLoading) return;
+
+    const tab = searchParams.get('tab');
+    const targetUserId = searchParams.get('targetUserId');
+    if (tab === SPENDING_TAB_ID) setActiveTab(SPENDING_TAB_ID);
+    if (isAdmin && targetUserId && members.some((m) => m.id === targetUserId)) {
+      setViewUserId(targetUserId);
+    }
+    if (tab || targetUserId) {
+      setSearchParams(new URLSearchParams(), { replace: true });
+    }
+  }, [user, isAdmin, isMembersLoading, members, searchParams, setSearchParams, setViewUserId]);
+
   const tabs: { id: TabId; label: string }[] = [
     { id: 'pl', label: 'P&L' },
-    { id: 'spending', label: 'Spending Analysis' },
+    { id: SPENDING_TAB_ID, label: 'Spending Analysis' },
     { id: 'networth', label: 'Net Worth (Balance Sheet)' },
     { id: 'trialbalance', label: 'Trial Balance' },
   ];

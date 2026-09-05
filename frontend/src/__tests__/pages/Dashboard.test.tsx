@@ -20,7 +20,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import DashboardPage, { handleCashflowClick } from '@/pages/Dashboard';
+import DashboardPage, { handleCashflowClick, handleFamilyMemberClick } from '@/pages/Dashboard';
 import { renderPage, failOnConsoleError } from '../support/renderPage';
 import { url } from '../support/handlers';
 import { MONEY, MONEY_FORMATTED, BUDGETS_VS_ACTUALS, MEMBER_USER } from '../support/fixtures';
@@ -837,5 +837,35 @@ describe('handleCashflowClick', () => {
     handleCashflowClick(point({ monthIndex: NaN }), navigate);
     handleCashflowClick(point({ year: NaN }), navigate);
     expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('Family Spending widget — render gating', () => {
+  it('an ADMIN with multiple family members sees the chart', async () => {
+    renderPage(<DashboardPage />, { route: '/', handlers: dashboardHandlers() });
+    await screen.findByText('55.5%');
+    expect(await screen.findByText(/Family Spending/i)).toBeInTheDocument();
+  });
+
+  it('a MEMBER never sees the Family Spending chart, regardless of family size (the click surface this task adds must not become reachable to a MEMBER)', async () => {
+    renderPage(<DashboardPage />, { route: '/', handlers: dashboardHandlers(), user: MEMBER_USER });
+    await screen.findByText('55.5%');
+    expect(screen.queryByText(/Family Spending/i)).toBeNull();
+  });
+});
+
+describe('handleFamilyMemberClick', () => {
+  it('navigates to the Spending Analysis tab pre-scoped to the clicked member', () => {
+    const navigate = vi.fn();
+    handleFamilyMemberClick('u-member', navigate);
+    expect(navigate).toHaveBeenCalledWith('/reports?tab=spending&targetUserId=u-member');
+  });
+
+  it('produces a distinct URL per member — no cross-member bleed', () => {
+    const navigate = vi.fn();
+    handleFamilyMemberClick('u-admin', navigate);
+    handleFamilyMemberClick('u-member', navigate);
+    expect(navigate).toHaveBeenNthCalledWith(1, '/reports?tab=spending&targetUserId=u-admin');
+    expect(navigate).toHaveBeenNthCalledWith(2, '/reports?tab=spending&targetUserId=u-member');
   });
 });
