@@ -17,10 +17,12 @@ import {
 } from 'recharts';
 import { CHART_PALETTE, useChartGradients, CustomTooltip, AXIS_STYLE, GRID_STYLE, reportCategoryName } from '@/lib/chartUtils';
 import { toDateInputValue } from '@/lib/dateFormat';
-import { TrendingUp, TrendingDown, ArrowUpRight, Bell, Target, Users, Tags } from 'lucide-react';
+import { TrendingUp, TrendingDown, ArrowUpRight, Bell, Target, Users, Tags, IndianRupee } from 'lucide-react';
 import { useFY } from '@/contexts/FYContext';
 import { getISTMonthKey } from '@/lib/financialYear';
 import { fetchDashboardSummary, fetchCashflow, fetchUpcomingAlerts, fetchNetWorthHistory, upsertNetWorthSnapshot, fetchFamilyOverview, fetchSpendingByCategory } from '@/api/dashboard';
+import { taxApi } from '@/api/tax';
+import { insuranceApi } from '@/api/insurance';
 import { useAuth } from '@/contexts/AuthContext';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
@@ -62,6 +64,26 @@ export default function DashboardPage() {
   const { data: spendingByCat = [] } = useQuery({
     queryKey: ['report-spending', selectedFY, viewUserId],
     queryFn: () => fetchSpendingByCategory(selectedFY, isAdmin ? viewUserId : undefined),
+  });
+
+  // Shared query keys/queryFns with TaxCentre.tsx and Tracker80DTab.tsx — byte-identical
+  // so the two pages draw from one cache entry each, not a duplicate fetch.
+  const { data: taxProfile, isLoading: taxProfileLoading, isError: taxProfileError } = useQuery({
+    queryKey: ['tax-profile', selectedFY, viewUserId],
+    queryFn: () => taxApi.getProfile(selectedFY, viewUserId),
+  });
+
+  const { data: tracker80C, isLoading: tracker80CLoading, isError: tracker80CError } = useQuery({
+    queryKey: ['tax-80c', selectedFY, viewUserId],
+    queryFn: () => taxApi.get80CTracker(selectedFY, viewUserId),
+  });
+
+  // Deliberately no `selectedFY` in the key — the backend's 80D summary has no FY concept
+  // at all (sums every eligible policy regardless of date), unlike 80C above.
+  const { data: summary80D, isLoading: summary80DLoading, isError: summary80DError } = useQuery({
+    queryKey: ['insurance', '80d', viewUserId],
+    queryFn: () => insuranceApi.get80D(viewUserId ? { targetUserId: viewUserId } : undefined),
+    staleTime: 5 * 60 * 1000,
   });
 
   const { data: familyOverview } = useQuery({
@@ -428,6 +450,113 @@ export default function DashboardPage() {
                   </div>
                 );
               })}
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* Tax Deductions (80C/80D) */}
+      <div className="rounded-xl border border-border/60 bg-card shadow-card p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <IndianRupee className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-base font-semibold">Tax Deductions</h2>
+          </div>
+          <Link to="/tax" className="text-xs text-muted-foreground hover:underline flex items-center gap-1">
+            View all <ArrowUpRight className="h-3 w-3" />
+          </Link>
+        </div>
+
+        {(() => {
+          const taxWidgetLoading = taxProfileLoading || tracker80CLoading || summary80DLoading;
+          if (taxWidgetLoading) {
+            return null;
+          }
+          if (taxProfileError) {
+            return (
+              <p className="text-sm text-muted-foreground" data-testid="tax-widget-regime-unknown">
+                Couldn&apos;t determine your tax regime — visit{' '}
+                <Link to="/tax" className="underline hover:text-foreground">Tax Centre</Link> to check deduction
+                eligibility.
+              </p>
+            );
+          }
+          // Missing/never-set-up profile defaults to OLD (matches TaxCentre.tsx's own
+          // `profile?.regime ?? 'OLD'`); a failed FETCH is a distinct case above, not
+          // silently folded into this default — showing real numbers to a possibly-New-
+          // Regime user would misrepresent a dead deduction as usable room.
+          const regime = taxProfile?.regime ?? 'OLD';
+          if (regime === 'NEW') {
+            // Deliberately hides BOTH bars, unlike TaxCentre.tsx's 80C tab (which shows
+            // this same notice ABOVE the numbers, not instead of them) — this compact
+            // card has no room for a caveat plus numbers, and matches Tracker80DTab.tsx's
+            // 80D tab instead, which already replaces its content entirely. Don't "fix"
+            // this to match the 80C tab; the two source tabs disagree with each other.
+            return (
+              <div
+                className="rounded-lg border border-amber-400 bg-amber-50 dark:bg-amber-950 p-3 text-xs text-amber-800 dark:text-amber-200"
+                data-testid="tax-widget-new-regime-notice"
+              >
+                <strong>Not applicable in New Regime.</strong> 80C/80D deductions don&apos;t reduce tax under the New
+                Tax Regime.
+              </div>
+            );
+          }
+
+          const colorFor = (pct: number) => (pct >= 100 ? 'bg-green-500' : pct >= 75 ? 'bg-yellow-500' : 'bg-red-500');
+
+          return (
+            <div className="space-y-3">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm font-medium">80C — FY {selectedFY}</span>
+                  {tracker80C && (
+                    <span className="text-xs text-muted-foreground">
+                      <INRDisplay amount={tracker80C.utilized} short className="inline" /> of{' '}
+                      <INRDisplay amount={tracker80C.limit} short className="inline" />
+                    </span>
+                  )}
+                </div>
+                {tracker80CError || !tracker80C ? (
+                  <p className="text-xs text-muted-foreground">Unable to load 80C data.</p>
+                ) : (
+                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                    <div
+                      className={cn('h-2 rounded-full transition-all', colorFor(tracker80C.pctUtilized))}
+                      style={{ width: `${Math.min(tracker80C.pctUtilized, 100)}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm font-medium">80D</span>
+                  {summary80D && (
+                    <span className="text-xs text-muted-foreground">
+                      <INRDisplay amount={summary80D.total} short className="inline" /> of{' '}
+                      <INRDisplay amount={summary80D.selfFamily.limit + summary80D.parents.limit} short className="inline" />
+                    </span>
+                  )}
+                </div>
+                {summary80DError || !summary80D ? (
+                  <p className="text-xs text-muted-foreground">Unable to load 80D data.</p>
+                ) : (
+                  (() => {
+                    const combinedLimit = summary80D.selfFamily.limit + summary80D.parents.limit;
+                    const totalPct = combinedLimit > 0 ? Math.min((summary80D.total / combinedLimit) * 100, 100) : 0;
+                    return (
+                      <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                        <div
+                          className={cn('h-2 rounded-full transition-all', colorFor(totalPct))}
+                          style={{ width: `${totalPct}%` }}
+                        />
+                      </div>
+                    );
+                  })()
+                )}
+                <p className="text-xs text-muted-foreground mt-1">Lifetime tally, not limited to this FY.</p>
+              </div>
             </div>
           );
         })()}

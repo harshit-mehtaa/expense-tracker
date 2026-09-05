@@ -7,10 +7,12 @@
  * sentinel is still a data-derived string rather than the heading, so the assertion
  * stays honest if that early return is ever removed.
  *
- * Handler count: 8 page-specific + 5 base = 13. Note POST /snapshots/net-worth, fired
+ * Handler count: 11 page-specific + 5 base = 16. Note POST /snapshots/net-worth, fired
  * from a mount effect (:77-84) whenever the current month has no snapshot — omitting it
  * trips onUnhandledRequest:'error'. GET /reports/spending-by-category backs the
- * Spend by Category widget, shared with Reports.tsx under the same query key.
+ * Spend by Category widget, shared with Reports.tsx under the same query key. GET
+ * /tax/profile, /tax/80c-tracker, /insurance/80d-summary back the Tax Deductions
+ * widget, shared with TaxCentre.tsx/Tracker80DTab.tsx under the same query keys.
  */
 import { describe, it, expect } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
@@ -81,9 +83,27 @@ const SPENDING_BY_CATEGORY = [
   { categoryId: 'cat-travel', category: { id: 'cat-travel', name: 'Travel' }, total: 10000 },
 ];
 
+const TAX_PROFILE = { id: 'prof-1', regime: 'OLD' };
+
+const TRACKER_80C = {
+  limit: 150000,
+  utilized: 90000,
+  remaining: 60000,
+  pctUtilized: 60,
+  breakdown: { elss: 50000, ppf: 40000 },
+};
+
+const SUMMARY_80D = {
+  selfFamily: { paid: 15000, limit: 25000, deductible: 15000 },
+  parents: { paid: 10000, limit: 25000, deductible: 10000 },
+  total: 25000,
+  policies: [],
+};
+
 function dashboardHandlers(over: Partial<{
   summary: unknown; cashflow: unknown; alerts: unknown;
   history: unknown; budgets: unknown; family: unknown; spending: unknown;
+  taxProfile: unknown; tracker80C: unknown; summary80D: unknown;
 }> = {}) {
   return [
     http.get(url('/dashboard/summary'), () =>
@@ -103,6 +123,12 @@ function dashboardHandlers(over: Partial<{
       HttpResponse.json({ data: over.budgets ?? FY_BUDGETS })),
     http.get(url('/reports/spending-by-category'), () =>
       HttpResponse.json({ data: over.spending ?? SPENDING_BY_CATEGORY })),
+    http.get(url('/tax/profile'), () =>
+      HttpResponse.json({ data: over.taxProfile ?? TAX_PROFILE })),
+    http.get(url('/tax/80c-tracker'), () =>
+      HttpResponse.json({ data: over.tracker80C ?? TRACKER_80C })),
+    http.get(url('/insurance/80d-summary'), () =>
+      HttpResponse.json({ data: over.summary80D ?? SUMMARY_80D })),
   ];
 }
 
@@ -273,6 +299,128 @@ describe('Dashboard page — smoke', () => {
     await waitFor(() => expect(seenTargetUserIds).toContain('u-member'));
   });
 
+  it('renders the 80C and 80D rows with correct amounts and a red bar below 75%', async () => {
+    renderPage(<DashboardPage />, { route: '/', handlers: dashboardHandlers() });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Tax Deductions/i)).closest('div.rounded-xl') as HTMLElement;
+    // TRACKER_80C: utilized 90000 of limit 150000, pctUtilized 60 (< 75 -> red).
+    expect(within(widget).getByText(/80C — FY/i)).toBeInTheDocument();
+    // SUMMARY_80D: total 25000 of combined limit 50000 (25000 self + 25000 parents), 50% (< 75 -> red).
+    expect(within(widget).getByText('80D')).toBeInTheDocument();
+    const bars = widget.querySelectorAll('.bg-red-500');
+    expect(bars).toHaveLength(2);
+  });
+
+  it('colors a bar green once its threshold reaches 100%', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({
+        tracker80C: { ...TRACKER_80C, utilized: 150000, remaining: 0, pctUtilized: 100 },
+      }),
+    });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Tax Deductions/i)).closest('div.rounded-xl') as HTMLElement;
+    expect(widget.querySelectorAll('.bg-green-500')).toHaveLength(1);
+  });
+
+  it('colors a bar yellow at exactly the 75% threshold, not red', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({
+        tracker80C: { ...TRACKER_80C, utilized: 112500, remaining: 37500, pctUtilized: 75 },
+      }),
+    });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Tax Deductions/i)).closest('div.rounded-xl') as HTMLElement;
+    expect(widget.querySelectorAll('.bg-yellow-500')).toHaveLength(1);
+    expect(widget.querySelectorAll('.bg-red-500')).toHaveLength(1); // 80D row is still 50%, unaffected
+  });
+
+  it('a MEMBER (not just ADMIN) sees the Tax Deductions widget', async () => {
+    renderPage(<DashboardPage />, { route: '/', handlers: dashboardHandlers(), user: MEMBER_USER });
+    await screen.findByText('55.5%');
+
+    expect(await screen.findByText(/Tax Deductions/i)).toBeInTheDocument();
+  });
+
+  it('replaces both bars with a New Regime notice, not misleading numbers', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({ taxProfile: { ...TAX_PROFILE, regime: 'NEW' } }),
+    });
+    await screen.findByText('55.5%');
+
+    expect(await screen.findByTestId('tax-widget-new-regime-notice')).toBeInTheDocument();
+    const widget = (await screen.findByText(/Tax Deductions/i)).closest('div.rounded-xl') as HTMLElement;
+    expect(within(widget).queryByText(/80C — FY/i)).toBeNull();
+    expect(within(widget).queryByText('80D')).toBeNull();
+  });
+
+  it('shows a distinct "regime unknown" state on a profile fetch error, instead of silently defaulting to Old Regime', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.get(url('/tax/profile'), () => HttpResponse.json({ message: 'boom' }, { status: 500 })),
+        ...dashboardHandlers(),
+      ],
+    });
+    await screen.findByText('55.5%');
+
+    expect(await screen.findByTestId('tax-widget-regime-unknown')).toBeInTheDocument();
+    const widget = (await screen.findByText(/Tax Deductions/i)).closest('div.rounded-xl') as HTMLElement;
+    // Not the New Regime notice either — a distinct third state.
+    expect(within(widget).queryByTestId('tax-widget-new-regime-notice')).toBeNull();
+    expect(within(widget).queryByText(/80C — FY/i)).toBeNull();
+  });
+
+  it('renders 0-width bars for zero usage, not NaN CSS', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({
+        tracker80C: { limit: 150000, utilized: 0, remaining: 150000, pctUtilized: 0, breakdown: {} },
+        summary80D: {
+          selfFamily: { paid: 0, limit: 25000, deductible: 0 },
+          parents: { paid: 0, limit: 25000, deductible: 0 },
+          total: 0,
+          policies: [],
+        },
+      }),
+    });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Tax Deductions/i)).closest('div.rounded-xl') as HTMLElement;
+    const bars = widget.querySelectorAll('.h-2.rounded-full.transition-all');
+    expect(bars).toHaveLength(2);
+    for (const bar of bars) {
+      expect((bar as HTMLElement).style.width).toBe('0%');
+    }
+  });
+
+  it('refetches the 80C/80D/profile queries with the new member when an ADMIN switches views', async () => {
+    const user = userEvent.setup();
+    const seenTargetUserIds: (string | null)[] = [];
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.get(url('/tax/80c-tracker'), ({ request }) => {
+          seenTargetUserIds.push(new URL(request.url).searchParams.get('targetUserId'));
+          return HttpResponse.json({ data: TRACKER_80C });
+        }),
+        ...dashboardHandlers(),
+      ],
+    });
+    await screen.findByText('55.5%');
+
+    const select = await screen.findByLabelText(/View:/i) as HTMLSelectElement;
+    await user.selectOptions(select, 'u-member');
+    await waitFor(() => expect(select.value).toBe('u-member'));
+
+    await waitFor(() => expect(seenTargetUserIds).toContain('u-member'));
+  });
+
   it('prompts to set up FY budgets when none have period FY', async () => {
     // The fixture's default period is MONTHLY, which the panel filters out.
     renderPage(<DashboardPage />, {
@@ -362,6 +510,9 @@ describe('Dashboard page — smoke', () => {
         http.get(url('/dashboard/family-overview'), () => HttpResponse.json({ data: FAMILY_OVERVIEW })),
         http.get(url('/budgets/vs-actuals'), () => HttpResponse.json({ data: FY_BUDGETS })),
         http.get(url('/reports/spending-by-category'), () => HttpResponse.json({ data: SPENDING_BY_CATEGORY })),
+        http.get(url('/tax/profile'), () => HttpResponse.json({ data: TAX_PROFILE })),
+        http.get(url('/tax/80c-tracker'), () => HttpResponse.json({ data: TRACKER_80C })),
+        http.get(url('/insurance/80d-summary'), () => HttpResponse.json({ data: SUMMARY_80D })),
         http.get(url('/snapshots/net-worth'), () => { getCount += 1; return HttpResponse.json({ data: historyState }); }),
         http.post(url('/snapshots/net-worth'), () => {
           postCount += 1;
