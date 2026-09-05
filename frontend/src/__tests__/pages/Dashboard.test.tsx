@@ -16,11 +16,11 @@
  * /investments/portfolio-summary, /loans back the Investments & Loans widget, shared
  * with Investments.tsx/Loans.tsx under the same query keys.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import DashboardPage from '@/pages/Dashboard';
+import DashboardPage, { handleCashflowClick } from '@/pages/Dashboard';
 import { renderPage, failOnConsoleError } from '../support/renderPage';
 import { url } from '../support/handlers';
 import { MONEY, MONEY_FORMATTED, BUDGETS_VS_ACTUALS, MEMBER_USER } from '../support/fixtures';
@@ -39,9 +39,15 @@ const SUMMARY = {
   totalLiabilities: 75000,
 };
 
+// month is a bare abbreviation (no year suffix) and monthIndex is 1-indexed (SQL
+// EXTRACT(MONTH...) convention, April=4) — matches backend/src/services/
+// dashboardService.ts's getCashflow exactly. A prior version of this fixture used
+// monthIndex:3/4 (0-indexed) and "Apr '25" (with a year suffix neither the backend nor
+// Dashboard.tsx's handleCashflowClick ever produces) — silently validating the wrong
+// shape for every test that rendered this chart.
 const CASHFLOW = [
-  { month: "Apr '25", monthIndex: 3, year: 2025, income: 75000, expense: 40000, net: 35000 },
-  { month: "May '25", monthIndex: 4, year: 2025, income: 80000, expense: 42000, net: 38000 },
+  { month: 'Apr', monthIndex: 4, year: 2025, income: 75000, expense: 40000, net: 35000 },
+  { month: 'May', monthIndex: 5, year: 2025, income: 80000, expense: 42000, net: 38000 },
 ];
 
 const ALERTS = [
@@ -743,5 +749,93 @@ describe('Dashboard page — smoke', () => {
     await user.click(within(modal).getByRole('button', { name: 'Add Transaction' }));
 
     await waitFor(() => expect(seenTargetUserId).toBe('u-member'));
+  });
+});
+
+/**
+ * handleCashflowClick — unit tests, not a page mount.
+ *
+ * Recharts renders at 0x0 under jsdom, so a real coordinate click can never produce
+ * activePayload, and Dashboard.tsx renders a SECOND, unrelated AreaChart (Net Worth
+ * Trend, no onClick) — a module-level recharts mock capturing "the" onClick prop would
+ * collide between the two instances. Calling the exported handler directly with a
+ * synthetic {activePayload} argument exercises the exact same runtime closure
+ * production uses, without either problem.
+ */
+describe('handleCashflowClick', () => {
+  const point = (overrides: Partial<{ month: string; monthIndex: unknown; year: unknown }>) => ({
+    activePayload: [{ payload: { month: 'Apr', monthIndex: 4, year: 2025, income: 0, expense: 0, net: 0, ...overrides } }],
+  });
+
+  it('navigates to the full-month range for a mid-year month (April)', () => {
+    const navigate = vi.fn();
+    handleCashflowClick(point({}), navigate);
+    expect(navigate).toHaveBeenCalledWith('/transactions?startDate=2025-04-01&endDate=2025-04-30');
+  });
+
+  it('navigates correctly for January, the FY-year-rollover month (monthIndex=1)', () => {
+    const navigate = vi.fn();
+    handleCashflowClick(point({ month: 'Jan', monthIndex: 1, year: 2026 }), navigate);
+    expect(navigate).toHaveBeenCalledWith('/transactions?startDate=2026-01-01&endDate=2026-01-31');
+  });
+
+  it('resolves the correct end-of-month day for a non-leap February (28 days)', () => {
+    const navigate = vi.fn();
+    handleCashflowClick(point({ month: 'Feb', monthIndex: 2, year: 2026 }), navigate);
+    expect(navigate).toHaveBeenCalledWith('/transactions?startDate=2026-02-01&endDate=2026-02-28');
+  });
+
+  it('resolves the correct end-of-month day for a leap February (29 days)', () => {
+    const navigate = vi.fn();
+    handleCashflowClick(point({ month: 'Feb', monthIndex: 2, year: 2028 }), navigate);
+    expect(navigate).toHaveBeenCalledWith('/transactions?startDate=2028-02-01&endDate=2028-02-29');
+  });
+
+  it('resolves December correctly (the day-0-of-next-month trick must not roll into January)', () => {
+    const navigate = vi.fn();
+    handleCashflowClick(point({ month: 'Dec', monthIndex: 12, year: 2025 }), navigate);
+    expect(navigate).toHaveBeenCalledWith('/transactions?startDate=2025-12-01&endDate=2025-12-31');
+  });
+
+  it('does not navigate when activePayload is absent (click missed every plotted point)', () => {
+    const navigate = vi.fn();
+    handleCashflowClick({ activePayload: undefined }, navigate);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('does not navigate when activePayload is an empty array', () => {
+    const navigate = vi.fn();
+    handleCashflowClick({ activePayload: [] }, navigate);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  // Recharts types activePayload as `any[]` — a backend field rename or deploy-skew
+  // could ship a payload shape this handler doesn't expect. Silently navigating to
+  // "?startDate=&endDate=" would be worse than not navigating at all. Split into
+  // separate cases (rather than one test with 3 calls) so a regression names the
+  // exact malformed-input case that started slipping through, not just "something did".
+  it('does not navigate when monthIndex is missing', () => {
+    const navigate = vi.fn();
+    handleCashflowClick(point({ monthIndex: undefined }), navigate);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('does not navigate when year is missing', () => {
+    const navigate = vi.fn();
+    handleCashflowClick(point({ year: undefined }), navigate);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('does not navigate when monthIndex is a non-numeric string', () => {
+    const navigate = vi.fn();
+    handleCashflowClick(point({ monthIndex: 'Apr' }), navigate);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('does not navigate when monthIndex or year is literal NaN (typeof NaN === "number", so a naive typeof guard would miss this)', () => {
+    const navigate = vi.fn();
+    handleCashflowClick(point({ monthIndex: NaN }), navigate);
+    handleCashflowClick(point({ year: NaN }), navigate);
+    expect(navigate).not.toHaveBeenCalled();
   });
 });

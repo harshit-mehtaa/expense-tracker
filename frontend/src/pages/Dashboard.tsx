@@ -20,7 +20,7 @@ import { toDateInputValue } from '@/lib/dateFormat';
 import { TrendingUp, TrendingDown, ArrowUpRight, Bell, Target, Users, Tags, IndianRupee, Landmark } from 'lucide-react';
 import { useFY } from '@/contexts/FYContext';
 import { getISTMonthKey } from '@/lib/financialYear';
-import { fetchDashboardSummary, fetchCashflow, fetchUpcomingAlerts, fetchNetWorthHistory, upsertNetWorthSnapshot, fetchFamilyOverview, fetchSpendingByCategory } from '@/api/dashboard';
+import { fetchDashboardSummary, fetchCashflow, fetchUpcomingAlerts, fetchNetWorthHistory, upsertNetWorthSnapshot, fetchFamilyOverview, fetchSpendingByCategory, type CashflowMonth } from '@/api/dashboard';
 import { taxApi } from '@/api/tax';
 import { insuranceApi } from '@/api/insurance';
 import { investmentsApi } from '@/api/investments';
@@ -36,6 +36,35 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { AddTransactionModal } from '@/components/transactions/AddTransactionModal';
 
+/**
+ * Named + exported (not inlined in the AreaChart's onClick prop) so it can be unit
+ * tested directly — Recharts renders at 0x0 under jsdom, so a real coordinate click can
+ * never produce activePayload, and Dashboard.tsx renders a SECOND, unrelated AreaChart
+ * (Net Worth Trend) with no onClick, so a module-level mock capturing "the" onClick prop
+ * would collide between the two instances. Calling this function directly with a
+ * synthetic payload exercises the exact same runtime closure production uses.
+ *
+ * monthIndex is 1-indexed (SQL EXTRACT(MONTH...) convention, see
+ * backend/src/services/dashboardService.ts's getCashflow) — JS Date's month argument is
+ * 0-indexed, hence the -1 on `start` and the bare value on `end` (day 0 = last day of
+ * the PRIOR month argument, i.e. this month).
+ */
+export function handleCashflowClick(
+  chartData: { activePayload?: Array<{ payload?: unknown }> } | undefined,
+  navigate: (path: string) => void,
+) {
+  const payload = chartData?.activePayload?.[0]?.payload as CashflowMonth | undefined;
+  // Number.isFinite, not typeof — recharts types activePayload as `any[]`, and
+  // `typeof NaN === 'number'` would let a NaN slip past this guard, through
+  // `new Date(y, NaN, 1)` (Invalid Date), and out as a silent `?startDate=&endDate=`.
+  if (!payload || !Number.isFinite(payload.monthIndex) || !Number.isFinite(payload.year)) return;
+  const start = new Date(payload.year, payload.monthIndex - 1, 1);
+  const end = new Date(payload.year, payload.monthIndex, 0);
+  // NOT toISOString(): that converts these LOCAL midnights to UTC, which
+  // in any positive-offset zone lands on the previous day — the range came
+  // out as 31 Jul -> 30 Aug for "Aug 26".
+  navigate(`/transactions?startDate=${toDateInputValue(start)}&endDate=${toDateInputValue(end)}`);
+}
 
 export default function DashboardPage() {
   const { selectedFY } = useFY();
@@ -264,21 +293,7 @@ export default function DashboardPage() {
                 data={cashflow}
                 margin={{ top: 4, right: 4, left: 0, bottom: 0 }}
                 style={{ cursor: 'pointer' }}
-                onClick={(chartData) => {
-                  if (!chartData?.activePayload?.[0]) return;
-                  const monthLabel: string = chartData.activePayload[0].payload.month; // e.g. "Apr '24"
-                  // Parse "MMM 'YY" → derive startDate/endDate for that month
-                  const [mon, yr] = monthLabel.split(' ');
-                  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-                  const monthIdx = months.indexOf(mon);
-                  const fullYear = 2000 + parseInt(yr.replace("'", ''), 10);
-                  const start = new Date(fullYear, monthIdx, 1);
-                  const end = new Date(fullYear, monthIdx + 1, 0);
-                  // NOT toISOString(): that converts these LOCAL midnights to UTC, which
-                  // in any positive-offset zone lands on the previous day — the range came
-                  // out as 31 Jul -> 30 Aug for "Aug 26".
-                  navigate(`/transactions?startDate=${toDateInputValue(start)}&endDate=${toDateInputValue(end)}`);
-                }}
+                onClick={(chartData) => handleCashflowClick(chartData, navigate)}
               >
                 <GradDefs />
                 <CartesianGrid {...GRID_STYLE} />
