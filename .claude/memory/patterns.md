@@ -65,8 +65,10 @@
   not a deletion (28 in `backend/src`). But verify unreachability empirically first: under
   Vitest's ESM mock a namespace object is a Proxy that THROWS on undefined exports, so a
   guard that looks dead against the real package can be load-bearing in tests.
-- Frontend coverage thresholds in `vite.config.ts` are a near-zero floor (3% statements)
-  — not meaningful as a quality signal. Frontend coverage is tracked as separate work.
+- Frontend coverage is a REAL, CI-enforced, per-directory gate in `vite.config.ts` (not
+  a near-zero floor — that was the old config). `**/src/pages/**` is `perFile: true`
+  at 30/30/15/30 specifically so one page's test file can't be silently deleted/gutted
+  without failing CI, even though the aggregate would still pass.
 
 ## Domain Rules (non-negotiable)
 - Money is always `Decimal`, never a JS `number` — `Decimal(15,2)` for INR amounts,

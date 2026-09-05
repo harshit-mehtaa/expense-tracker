@@ -208,6 +208,23 @@ describe('Dashboard page — smoke', () => {
     expect(within(widget).getByRole('link', { name: /View all/i })).toHaveAttribute('href', '/reminders');
   });
 
+  it('shows "Due today" when an alert is due today (daysUntilDue: 0)', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({ alerts: [{ ...ALERTS[0], daysUntilDue: 0 }] }),
+    });
+    expect(await screen.findByText(/Due today/i)).toBeInTheDocument();
+  });
+
+  it('shows "Due tomorrow" when an alert is due in exactly 1 day, not "Due in 1 days"', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({ alerts: [{ ...ALERTS[0], daysUntilDue: 1 }] }),
+    });
+    expect(await screen.findByText(/Due tomorrow/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Due in 1 days/i)).toBeNull();
+  });
+
   it('renders the FY budget health panel with the exact percentage', async () => {
     renderPage(<DashboardPage />, { route: '/', handlers: dashboardHandlers() });
 
@@ -215,6 +232,32 @@ describe('Dashboard page — smoke', () => {
 
     // BUDGETS_VS_ACTUALS[0].pctUsed === 40
     expect(await screen.findByText('(40%)')).toBeInTheDocument();
+  });
+
+  it('colors the Budget Health bar and label red once usage reaches 100%', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({ budgets: [{ ...BUDGETS_VS_ACTUALS[0], period: 'FY', pctUsed: 100 }] }),
+    });
+    await settled();
+
+    const widget = (await screen.findByText(/Budget Health/i)).closest('div.rounded-xl') as HTMLElement;
+    expect(within(widget).getByText('(100%)')).toHaveClass('text-red-600');
+    const bar = widget.querySelector('.h-2.rounded-full.transition-all') as HTMLElement;
+    expect(bar.style.background).toContain('f43f5e');
+  });
+
+  it('colors the Budget Health bar and label amber between 75% and 99% usage', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({ budgets: [{ ...BUDGETS_VS_ACTUALS[0], period: 'FY', pctUsed: 85 }] }),
+    });
+    await settled();
+
+    const widget = (await screen.findByText(/Budget Health/i)).closest('div.rounded-xl') as HTMLElement;
+    expect(within(widget).getByText('(85%)')).toHaveClass('text-yellow-600');
+    const bar = widget.querySelector('.h-2.rounded-full.transition-all') as HTMLElement;
+    expect(bar.style.background).toContain('f59e0b');
   });
 
   it('renders the Net Worth card without a trend indicator when there is no comparable snapshot', async () => {
@@ -233,6 +276,42 @@ describe('Dashboard page — smoke', () => {
     // `{subtitle && change === undefined && ...}` branch) — no percentage, no
     // trend arrow, unlike the defined-change case.
     expect(within(netWorthCard).queryByText(/%/)).toBeNull();
+  });
+
+  it('shows a down-trend (red, TrendingDown icon) on the Net Worth card when net worth declined this FY', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({ summary: { ...SUMMARY, netWorthChange: -5000, netWorthChangePct: -3.5 } }),
+    });
+    await settled();
+
+    const netWorthCard = screen.getAllByText('Net Worth')[0].closest('div.rounded-xl') as HTMLElement;
+    const trendRow = within(netWorthCard).getByText(/3\.5% vs last FY/).closest('div') as HTMLElement;
+    expect(trendRow).toHaveClass('text-red-500');
+    expect(trendRow.querySelector('.lucide-trending-down')).not.toBeNull();
+    expect(trendRow.querySelector('.lucide-trending-up')).toBeNull();
+  });
+
+  it('colors the Savings Rate card amber when the rate is between 10% and 30%', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({ summary: { ...SUMMARY, savingsRate: 20 } }),
+    });
+    await settled();
+
+    const card = screen.getByText('Savings Rate').closest('div.rounded-xl') as HTMLElement;
+    expect(card).toHaveClass('bg-amber-50');
+  });
+
+  it('colors the Savings Rate card rose when the rate is 10% or below', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({ summary: { ...SUMMARY, savingsRate: 5 } }),
+    });
+    await settled();
+
+    const card = screen.getByText('Savings Rate').closest('div.rounded-xl') as HTMLElement;
+    expect(card).toHaveClass('bg-rose-50');
   });
 
   it('renders top spend-by-category rows sorted by spend descending', async () => {
@@ -410,6 +489,76 @@ describe('Dashboard page — smoke', () => {
     expect(within(widget).queryByText(/80C — FY/i)).toBeNull();
   });
 
+  it('an independent 80C fetch failure shows "Unable to load 80C data.", distinct from the 80D row and from a profile fetch failure', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.get(url('/tax/80c-tracker'), () => HttpResponse.json({ message: 'boom' }, { status: 500 })),
+        ...dashboardHandlers(),
+      ],
+    });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Tax Deductions/i)).closest('div.rounded-xl') as HTMLElement;
+    expect(await within(widget).findByText('Unable to load 80C data.')).toBeInTheDocument();
+    // 80D, unaffected, still renders its real numbers.
+    expect(within(widget).getByText('80D')).toBeInTheDocument();
+    expect(within(widget).queryByText('Unable to load 80D data.')).toBeNull();
+  });
+
+  it('an independent 80D fetch failure shows "Unable to load 80D data.", distinct from the 80C row', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.get(url('/insurance/80d-summary'), () => HttpResponse.json({ message: 'boom' }, { status: 500 })),
+        ...dashboardHandlers(),
+      ],
+    });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Tax Deductions/i)).closest('div.rounded-xl') as HTMLElement;
+    expect(await within(widget).findByText('Unable to load 80D data.')).toBeInTheDocument();
+    // 80C, unaffected, still renders its real numbers.
+    expect(within(widget).getByText(/80C — FY/i)).toBeInTheDocument();
+    expect(within(widget).queryByText('Unable to load 80C data.')).toBeNull();
+  });
+
+  it('defaults to the OLD regime (real numbers) when the profile fetched successfully but has no regime set yet — a distinct state from both the error and NEW-regime cases', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({ taxProfile: { id: 'prof-1' } }),
+    });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Tax Deductions/i)).closest('div.rounded-xl') as HTMLElement;
+    expect(within(widget).queryByTestId('tax-widget-regime-unknown')).toBeNull();
+    expect(within(widget).queryByTestId('tax-widget-new-regime-notice')).toBeNull();
+    expect(within(widget).getByText(/80C — FY/i)).toBeInTheDocument();
+    expect(within(widget).getByText('80D')).toBeInTheDocument();
+  });
+
+  it('renders a 0-width 80D bar when both combined limits are zero, not NaN CSS (the 80D-specific divide-by-zero guard)', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({
+        summary80D: {
+          selfFamily: { paid: 0, limit: 0, deductible: 0 },
+          parents: { paid: 0, limit: 0, deductible: 0 },
+          total: 0,
+          policies: [],
+        },
+      }),
+    });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Tax Deductions/i)).closest('div.rounded-xl') as HTMLElement;
+    expect(within(widget).getByText('80D')).toBeInTheDocument();
+    const bars = widget.querySelectorAll('.h-2.rounded-full.transition-all');
+    // 80C's bar precedes 80D's in DOM order; 80D's bar (the last one) must be 0-width.
+    const eightyDBar = bars[bars.length - 1] as HTMLElement;
+    expect(eightyDBar.style.width).toBe('0%');
+  });
+
   it('renders 0-width bars for zero usage, not NaN CSS', async () => {
     renderPage(<DashboardPage />, {
       route: '/',
@@ -516,6 +665,26 @@ describe('Dashboard page — smoke', () => {
     expect(within(widget).getByText('₹2,00,000.00')).toBeInTheDocument();
   });
 
+  it('shows a distinct "Unable to load" state for the Loan row on a fetch error, not a false ₹0 (mirrors the Portfolio Value case above)', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.get(url('/loans'), () => HttpResponse.json({ message: 'boom' }, { status: 500 })),
+        ...dashboardHandlers(),
+      ],
+    });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Investments & Loans/i)).closest('div.rounded-xl') as HTMLElement;
+    // Scoped to the Loan Outstanding row specifically (not a bare widget-wide query) —
+    // both rows can render this exact text, so an unscoped getByText would become
+    // ambiguous the moment a test combines both a loans and a portfolio error.
+    const loanRow = within(widget).getByText('Loan Outstanding').closest('div.flex') as HTMLElement;
+    await waitFor(() => expect(within(loanRow).getByText('Unable to load')).toBeInTheDocument());
+    // The portfolio row, unaffected by the loans error, still renders its real value.
+    expect(within(widget).getByText('₹3,50,000.00')).toBeInTheDocument();
+  });
+
   it('prompts to set up FY budgets when none have period FY', async () => {
     // The fixture's default period is MONTHLY, which the panel filters out.
     renderPage(<DashboardPage />, {
@@ -537,6 +706,21 @@ describe('Dashboard page — smoke', () => {
     // Assert the selection took, then the subtitle that only appears once scoped.
     await waitFor(() => expect(select.value).toBe('u-member'));
     expect(await screen.findByText(/Financial overview for FY .*· Ravi/)).toBeInTheDocument();
+  });
+
+  it('shows "Could not load members" instead of the selector when the member-list fetch fails for an ADMIN', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.get(url('/users/members'), () => HttpResponse.json({ message: 'boom' }, { status: 500 })),
+        ...dashboardHandlers(),
+      ],
+    });
+    // Not settled() — the <select> that helper waits for never mounts on this branch.
+    await screen.findByText('55.5%');
+
+    expect(await screen.findByText(/Could not load members/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/View:/i)).toBeNull();
   });
 
   it('skips the snapshot write when the current month already has one', async () => {
@@ -749,6 +933,52 @@ describe('Dashboard page — smoke', () => {
     await user.click(within(modal).getByRole('button', { name: 'Add Transaction' }));
 
     await waitFor(() => expect(seenTargetUserId).toBe('u-member'));
+  });
+
+  // Prior MEMBER coverage only checked button PRESENCE (:664-670) — no test ever clicked
+  // through as a MEMBER. This proves Dashboard's own onClick wiring (setQuickAddType) and
+  // defaultType selection actually work end-to-end for a MEMBER, which is genuinely new.
+  //
+  // NOTE on scope: the targetUserId-omitted assertion below is the SAME assertion
+  // AddTransactionModal.test.tsx:158-182 already makes in isolation, and a MEMBER's
+  // viewUserId is always undefined — so this assertion alone would not catch a regression
+  // that deleted `targetUserId={viewUserId}` from Dashboard.tsx (the existing
+  // ADMIN-with-selected-member test at :858ish already catches that mutation, since
+  // viewUserId is defined there). It's kept for documentation value, not as the test's
+  // primary contribution. `showAccountOwner`/`fallbackAccountOwnerName` wiring remains
+  // untested anywhere in the repo (accountFormat.ts's owner-name branch has 0 real
+  // exercises) — out of scope for this task, logged as tech debt in progress.md.
+  it('a MEMBER can click through Dashboard\'s own Add Expense button to open and submit the quick-add modal (not just see it — click-handler and defaultType wiring, not previously exercised for MEMBER)', async () => {
+    const user = userEvent.setup();
+    let seenParams: URLSearchParams | null = null;
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.get(url('/categories'), () => HttpResponse.json({ data: [] })),
+        http.get(url('/accounts'), () => HttpResponse.json({ data: [] })),
+        http.post(url('/transactions'), ({ request }) => {
+          seenParams = new URL(request.url).searchParams;
+          return HttpResponse.json({ data: {} });
+        }),
+        ...dashboardHandlers(),
+      ],
+      user: MEMBER_USER,
+    });
+    await screen.findByText('55.5%');
+
+    await user.click(await screen.findByRole('button', { name: /Add Expense/i }));
+    const heading = await screen.findByRole('heading', { level: 2, name: 'Add Transaction' });
+    const modal = heading.closest('div.bg-background') as HTMLElement;
+    const typeSelect = modal.querySelector('select[name="type"]') as HTMLSelectElement;
+    expect(typeSelect.value).toBe('EXPENSE');
+
+    await user.type(within(modal).getByPlaceholderText(/swiggy order/i), 'Groceries');
+    const amountInput = modal.querySelector('input[name="amount"]') as HTMLInputElement;
+    await user.type(amountInput, '250');
+    await user.click(within(modal).getByRole('button', { name: 'Add Transaction' }));
+
+    await waitFor(() => expect(seenParams).not.toBeNull());
+    expect(seenParams!.has('targetUserId')).toBe(false);
   });
 });
 

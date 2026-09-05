@@ -46,10 +46,11 @@ backend, React + Vite frontend, TypeScript throughout, run via Docker Compose.
   **Coverage is 100% statements/branches/functions/lines, and CI enforces it** — the
   backend test step runs `npm run test:coverage`, so any uncovered line fails the build.
   New backend code must ship with tests; there is no slack in the threshold.
-- Frontend: Vitest, `environment: jsdom`, RTL + MSW (`mswServer.ts`). Coverage
-  thresholds in `vite.config.ts` are a near-zero floor (statements 3%, branches 50%,
-  functions 28%, lines 3%) — not a real gate, don't treat frontend coverage % as
-  meaningful.
+- Frontend: Vitest, `environment: jsdom`, RTL + MSW (`mswServer.ts`). Coverage is a
+  REAL, CI-enforced gate — per-directory thresholds in `vite.config.ts` (api/lib/hooks
+  ~95%, contexts ~95%, components 88%, pages 30% but `perFile: true` so every page's
+  OWN test file must clear the bar, not just the aggregate). Globs must use `'**/src/x/**'`
+  (Vitest matches absolute paths) or they silently match nothing and enforce nothing.
 
 ## Linting
 - Frontend: `frontend/.eslintrc.cjs` — recommended + typescript-eslint + react-hooks.
