@@ -59,6 +59,7 @@ const shellHandlers = () => [
   http.get(url('/dashboard/cashflow'), () => HttpResponse.json({ data: [] })),
   http.get(url('/dashboard/upcoming-alerts'), () => HttpResponse.json({ data: [] })),
   http.get(url('/budgets/vs-actuals'), () => HttpResponse.json({ data: [] })),
+  http.get(url('/reports/spending-by-category'), () => HttpResponse.json({ data: [] })),
   http.get(url('/snapshots/net-worth'), () => HttpResponse.json({ data: [] })),
   http.post(url('/snapshots/net-worth'), () => HttpResponse.json({ data: {} })),
   http.post(url('/auth/change-password'), () => HttpResponse.json({ data: {} })),

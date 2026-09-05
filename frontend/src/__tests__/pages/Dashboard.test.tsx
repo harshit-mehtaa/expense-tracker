@@ -7,9 +7,10 @@
  * sentinel is still a data-derived string rather than the heading, so the assertion
  * stays honest if that early return is ever removed.
  *
- * Handler count: 7 page-specific + 5 base = 12. Note POST /snapshots/net-worth, fired
+ * Handler count: 8 page-specific + 5 base = 13. Note POST /snapshots/net-worth, fired
  * from a mount effect (:77-84) whenever the current month has no snapshot — omitting it
- * trips onUnhandledRequest:'error'.
+ * trips onUnhandledRequest:'error'. GET /reports/spending-by-category backs the
+ * Spend by Category widget, shared with Reports.tsx under the same query key.
  */
 import { describe, it, expect } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
@@ -18,7 +19,7 @@ import { http, HttpResponse } from 'msw';
 import DashboardPage from '@/pages/Dashboard';
 import { renderPage, failOnConsoleError } from '../support/renderPage';
 import { url } from '../support/handlers';
-import { MONEY, MONEY_FORMATTED, BUDGETS_VS_ACTUALS } from '../support/fixtures';
+import { MONEY, MONEY_FORMATTED, BUDGETS_VS_ACTUALS, MEMBER_USER } from '../support/fixtures';
 
 failOnConsoleError();
 
@@ -74,9 +75,15 @@ const FAMILY_OVERVIEW = {
   chartData: [{ month: "Apr '25", 'u-admin': 40000, 'u-member': 20000 }],
 };
 
+const SPENDING_BY_CATEGORY = [
+  { categoryId: 'cat-food', category: { id: 'cat-food', name: 'Food' }, total: 50000 },
+  { categoryId: 'cat-rent', category: { id: 'cat-rent', name: 'Rent' }, total: 30000 },
+  { categoryId: 'cat-travel', category: { id: 'cat-travel', name: 'Travel' }, total: 10000 },
+];
+
 function dashboardHandlers(over: Partial<{
   summary: unknown; cashflow: unknown; alerts: unknown;
-  history: unknown; budgets: unknown; family: unknown;
+  history: unknown; budgets: unknown; family: unknown; spending: unknown;
 }> = {}) {
   return [
     http.get(url('/dashboard/summary'), () =>
@@ -94,6 +101,8 @@ function dashboardHandlers(over: Partial<{
       HttpResponse.json({ data: NET_WORTH_HISTORY[0] })),
     http.get(url('/budgets/vs-actuals'), () =>
       HttpResponse.json({ data: over.budgets ?? FY_BUDGETS })),
+    http.get(url('/reports/spending-by-category'), () =>
+      HttpResponse.json({ data: over.spending ?? SPENDING_BY_CATEGORY })),
   ];
 }
 
@@ -164,6 +173,104 @@ describe('Dashboard page — smoke', () => {
     // `{subtitle && change === undefined && ...}` branch) — no percentage, no
     // trend arrow, unlike the defined-change case.
     expect(within(netWorthCard).queryByText(/%/)).toBeNull();
+  });
+
+  it('renders top spend-by-category rows sorted by spend descending', async () => {
+    renderPage(<DashboardPage />, { route: '/', handlers: dashboardHandlers() });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Spend by Category/i)).closest('div.rounded-xl') as HTMLElement;
+    const rowNames = within(widget).getAllByText(/Food|Rent|Travel/).map((el) => el.textContent);
+    // SPENDING_BY_CATEGORY: Food 50000 > Rent 30000 > Travel 10000.
+    expect(rowNames).toEqual(['Food', 'Rent', 'Travel']);
+  });
+
+  it('renders "Uncategorized" for a row with no category', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({
+        spending: [{ categoryId: null, category: null, total: 15000 }],
+      }),
+    });
+    await screen.findByText('55.5%');
+
+    const widget = (await screen.findByText(/Spend by Category/i)).closest('div.rounded-xl') as HTMLElement;
+    expect(within(widget).getByText('Uncategorized')).toBeInTheDocument();
+  });
+
+  it('renders an empty state when there is no spending recorded for the FY', async () => {
+    renderPage(<DashboardPage />, { route: '/', handlers: dashboardHandlers({ spending: [] }) });
+    await screen.findByText('55.5%');
+
+    expect(await screen.findByText(/No spending recorded for FY/i)).toBeInTheDocument();
+  });
+
+  it('a MEMBER (not just ADMIN) sees the Spend by Category widget', async () => {
+    renderPage(<DashboardPage />, { route: '/', handlers: dashboardHandlers(), user: MEMBER_USER });
+    await screen.findByText('55.5%');
+
+    expect(await screen.findByText(/Spend by Category/i)).toBeInTheDocument();
+  });
+
+  it('a negative-total category (net refund) renders a 0-width bar, not negative/NaN CSS', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({
+        spending: [
+          { categoryId: 'cat-food', category: { id: 'cat-food', name: 'Food' }, total: 20000 },
+          { categoryId: 'cat-travel', category: { id: 'cat-travel', name: 'Travel' }, total: -5000 },
+        ],
+      }),
+    });
+    await screen.findByText('55.5%');
+
+    const rows = await screen.findAllByTestId('spend-category-row');
+    const travelRow = rows.find((row) => within(row).queryByText('Travel')) as HTMLElement;
+    const bar = within(travelRow).getByTestId('spend-category-bar');
+    expect(bar.style.width).toBe('0%');
+  });
+
+  it('renders every bar at 0 width when all top-5 totals are zero or negative (denominator itself is 0)', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: dashboardHandlers({
+        spending: [
+          { categoryId: 'cat-food', category: { id: 'cat-food', name: 'Food' }, total: -2000 },
+          { categoryId: 'cat-travel', category: { id: 'cat-travel', name: 'Travel' }, total: 0 },
+        ],
+      }),
+    });
+    await screen.findByText('55.5%');
+
+    const bars = await screen.findAllByTestId('spend-category-bar');
+    expect(bars).toHaveLength(2);
+    for (const bar of bars) {
+      expect(bar.style.width).toBe('0%');
+    }
+  });
+
+  it('reflects the selected member when an ADMIN switches views', async () => {
+    const user = userEvent.setup();
+    const seenTargetUserIds: (string | null)[] = [];
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        // Listed before dashboardHandlers()'s own spending-by-category handler —
+        // MSW matches the FIRST registered handler for a given request.
+        http.get(url('/reports/spending-by-category'), ({ request }) => {
+          seenTargetUserIds.push(new URL(request.url).searchParams.get('targetUserId'));
+          return HttpResponse.json({ data: SPENDING_BY_CATEGORY });
+        }),
+        ...dashboardHandlers(),
+      ],
+    });
+    await screen.findByText('55.5%');
+
+    const select = await screen.findByLabelText(/View:/i) as HTMLSelectElement;
+    await user.selectOptions(select, 'u-member');
+    await waitFor(() => expect(select.value).toBe('u-member'));
+
+    await waitFor(() => expect(seenTargetUserIds).toContain('u-member'));
   });
 
   it('prompts to set up FY budgets when none have period FY', async () => {
@@ -254,6 +361,7 @@ describe('Dashboard page — smoke', () => {
         http.get(url('/dashboard/upcoming-alerts'), () => HttpResponse.json({ data: ALERTS })),
         http.get(url('/dashboard/family-overview'), () => HttpResponse.json({ data: FAMILY_OVERVIEW })),
         http.get(url('/budgets/vs-actuals'), () => HttpResponse.json({ data: FY_BUDGETS })),
+        http.get(url('/reports/spending-by-category'), () => HttpResponse.json({ data: SPENDING_BY_CATEGORY })),
         http.get(url('/snapshots/net-worth'), () => { getCount += 1; return HttpResponse.json({ data: historyState }); }),
         http.post(url('/snapshots/net-worth'), () => {
           postCount += 1;

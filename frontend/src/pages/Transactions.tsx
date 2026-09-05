@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { useQuery, useInfiniteQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient, keepPreviousData, type QueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -32,6 +32,17 @@ import { formatINR } from '@/lib/indianFormat';
 import { avatarInitial, buildMemberColorMap, resolveAvatarColor } from '@/lib/memberAvatar';
 import { PAYMENT_MODES, PAYMENT_MODE_LABELS } from '@/lib/paymentModes';
 import { formatAccountOption } from '@/lib/accountFormat';
+
+/**
+ * Every mutation that changes a transaction's amount, category, or FY-relevance
+ * must invalidate both financial-report widgets together — Dashboard's Spend by
+ * Category card and Reports.tsx's spending tab share this pair of query keys, and
+ * a mutation that only invalidates one leaves the other silently stale.
+ */
+function invalidateFinancialReports(qc: QueryClient) {
+  qc.invalidateQueries({ queryKey: ['profit-and-loss'] });
+  qc.invalidateQueries({ queryKey: ['report-spending'] });
+}
 
 interface Transaction {
   id: string;
@@ -1495,7 +1506,7 @@ function ConvertToSIPModal({ tx, onClose }: { tx: Transaction; onClose: () => vo
       qc.invalidateQueries({ queryKey: ['budgets'] });
       qc.invalidateQueries({ queryKey: ['budgets-actuals'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
-      qc.invalidateQueries({ queryKey: ['profit-and-loss'] });
+      invalidateFinancialReports(qc);
       qc.invalidateQueries({ queryKey: ['portfolio'] });
       qc.invalidateQueries({ queryKey: ['sips'] });
       toast({ title: isEditing ? 'SIP link updated' : 'Transaction marked as SIP', variant: 'success' });
@@ -1517,7 +1528,7 @@ function ConvertToSIPModal({ tx, onClose }: { tx: Transaction; onClose: () => vo
       qc.invalidateQueries({ queryKey: ['budgets'] });
       qc.invalidateQueries({ queryKey: ['budgets-actuals'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
-      qc.invalidateQueries({ queryKey: ['profit-and-loss'] });
+      invalidateFinancialReports(qc);
       qc.invalidateQueries({ queryKey: ['portfolio'] });
       qc.invalidateQueries({ queryKey: ['sips'] });
       toast({ title: 'SIP link removed', variant: 'success' });
@@ -1642,7 +1653,7 @@ function LinkPolicyModal({ tx, onClose }: { tx: Transaction; onClose: () => void
     qc.invalidateQueries({ queryKey: ['transactions'] });
     qc.invalidateQueries({ queryKey: ['insurance'] });
     qc.invalidateQueries({ queryKey: ['dashboard'] });
-    qc.invalidateQueries({ queryKey: ['profit-and-loss'] });
+    invalidateFinancialReports(qc);
   };
 
   const linkMutation = useMutation({
@@ -1782,7 +1793,7 @@ function LinkRefundModal({ tx, onClose }: { tx: Transaction; onClose: () => void
     qc.invalidateQueries({ queryKey: ['budgets'] });
     qc.invalidateQueries({ queryKey: ['budgets-actuals'] });
     qc.invalidateQueries({ queryKey: ['dashboard'] });
-    qc.invalidateQueries({ queryKey: ['profit-and-loss'] });
+    invalidateFinancialReports(qc);
   };
 
   const linkMutation = useMutation({

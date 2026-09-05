@@ -153,3 +153,25 @@ export async function fetchTrialBalance(fy?: string, targetUserId?: string): Pro
   const res = await api.get<{ data: TrialBalance }>('/reports/trial-balance', { params });
   return res.data.data;
 }
+
+/** Deliberately minimal — mirrors the backend's own select shape
+ *  (backend/src/routes/reports.ts's /spending-by-category). `category` is
+ *  `null` for a transaction with no category assigned ("Uncategorized"). */
+export interface SpendingByCategoryRow {
+  categoryId: string | null;
+  category: { id: string; name: string } | null;
+  total: number;
+}
+
+/** Shared by Reports.tsx's Spending Analysis tab and Dashboard.tsx's spend-by-
+ *  category widget — both subscribe to the SAME query key
+ *  (['report-spending', selectedFY, viewUserId]), so this function must be
+ *  their only queryFn: identical fetch behavior by construction, not by
+ *  convention. */
+export async function fetchSpendingByCategory(fy?: string, targetUserId?: string): Promise<SpendingByCategoryRow[]> {
+  const params: Record<string, string> = {};
+  if (fy) params.fy = fy;
+  if (targetUserId) params.targetUserId = targetUserId;
+  const res = await api.get<{ data: SpendingByCategoryRow[] }>('/reports/spending-by-category', { params });
+  return res.data.data;
+}

@@ -127,3 +127,44 @@ export const GRID_STYLE = {
   stroke: 'rgba(148, 163, 184, 0.25)', // slate-400 at 25% opacity — subtle in both modes
   vertical: false,
 } as const;
+
+// ── Category-report helpers (shared by Reports.tsx and Dashboard.tsx) ─────────
+
+/** The two shapes this app's report endpoints actually return: a flat
+ *  `categoryName` (profit-and-loss) or a nested `category.name`
+ *  (spending-by-category). `PnLCategoryRow`/`SpendingByCategoryRow` in
+ *  api/dashboard.ts both satisfy this structurally. */
+interface ReportCategoryLike {
+  categoryName?: string;
+  category?: { name: string } | null;
+}
+
+interface ReportTotalLike {
+  total: number;
+}
+
+/** Falls back through both response shapes this app's report endpoints return:
+ *  a nested `category.name` (spending-by-category) or a flat `categoryName`
+ *  (profit-and-loss). Never assume one shape — both are real API responses. */
+export function reportCategoryName(item: ReportCategoryLike): string {
+  return item.categoryName ?? item.category?.name ?? 'Uncategorized';
+}
+
+export function sortReportCategories<T extends ReportCategoryLike>(items: T[]): T[] {
+  return [...items].sort((a, b) =>
+    reportCategoryName(a).localeCompare(reportCategoryName(b), undefined, { sensitivity: 'base' }),
+  );
+}
+
+/** Top N by total (descending), then re-sorted alphabetically WITHIN that
+ *  slice — correct for a legend/bar-label list where rank doesn't need to be
+ *  visually obvious, wrong for a ranked leaderboard (see Dashboard.tsx's own
+ *  spend-by-category widget, which deliberately does NOT use this — it needs
+ *  to stay in descending-total order). */
+export function topReportCategoriesByTotal<T extends ReportCategoryLike & ReportTotalLike>(items: T[], count: number): T[] {
+  return sortReportCategories(
+    [...items]
+      .sort((a, b) => Number(b.total ?? 0) - Number(a.total ?? 0))
+      .slice(0, count),
+  );
+}

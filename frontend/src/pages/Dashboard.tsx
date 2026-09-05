@@ -15,12 +15,12 @@ import {
   Pie,
   Cell,
 } from 'recharts';
-import { CHART_PALETTE, useChartGradients, CustomTooltip, AXIS_STYLE, GRID_STYLE } from '@/lib/chartUtils';
+import { CHART_PALETTE, useChartGradients, CustomTooltip, AXIS_STYLE, GRID_STYLE, reportCategoryName } from '@/lib/chartUtils';
 import { toDateInputValue } from '@/lib/dateFormat';
-import { TrendingUp, TrendingDown, ArrowUpRight, Bell, Target, Users } from 'lucide-react';
+import { TrendingUp, TrendingDown, ArrowUpRight, Bell, Target, Users, Tags } from 'lucide-react';
 import { useFY } from '@/contexts/FYContext';
 import { getISTMonthKey } from '@/lib/financialYear';
-import { fetchDashboardSummary, fetchCashflow, fetchUpcomingAlerts, fetchNetWorthHistory, upsertNetWorthSnapshot, fetchFamilyOverview } from '@/api/dashboard';
+import { fetchDashboardSummary, fetchCashflow, fetchUpcomingAlerts, fetchNetWorthHistory, upsertNetWorthSnapshot, fetchFamilyOverview, fetchSpendingByCategory } from '@/api/dashboard';
 import { useAuth } from '@/contexts/AuthContext';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
@@ -54,6 +54,15 @@ export default function DashboardPage() {
   });
 
   const { data: budgetActuals } = useBudgetsVsActuals(selectedFY, viewUserId);
+
+  // Shared query key/queryFn with Reports.tsx's Spending Analysis tab — both
+  // fetch the identical unfiltered payload; each page's own top-N/sort/slice
+  // happens locally, never inside queryFn (a documented, previously-shipped
+  // cache-poisoning bug class in this codebase).
+  const { data: spendingByCat = [] } = useQuery({
+    queryKey: ['report-spending', selectedFY, viewUserId],
+    queryFn: () => fetchSpendingByCategory(selectedFY, isAdmin ? viewUserId : undefined),
+  });
 
   const { data: familyOverview } = useQuery({
     queryKey: ['dashboard', 'family-overview', selectedFY],
@@ -369,6 +378,58 @@ export default function DashboardPage() {
             })}
           </div>
         );
+        })()}
+      </div>
+
+      {/* Spend by Category */}
+      <div className="rounded-xl border border-border/60 bg-card shadow-card p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Tags className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-base font-semibold">Spend by Category — FY {selectedFY}</h2>
+          </div>
+          <Link to="/reports" className="text-xs text-muted-foreground hover:underline flex items-center gap-1">
+            View all <ArrowUpRight className="h-3 w-3" />
+          </Link>
+        </div>
+
+        {(() => {
+          const top5 = [...spendingByCat].sort((a, b) => b.total - a.total).slice(0, 5);
+          if (top5.length === 0) {
+            return (
+              <p className="text-sm text-muted-foreground">
+                No spending recorded for FY {selectedFY} yet.
+              </p>
+            );
+          }
+          // Floored at 0: a category can legitimately have a negative total
+          // (a refund posted this FY against an expense from a prior FY), and
+          // dividing by a negative or zero denominator would produce
+          // negative-width or NaN CSS. A negative-total row renders a 0-width
+          // bar — "no share of this FY's spend" — rather than garbage.
+          const denominator = Math.max(...top5.map((r) => r.total), 0);
+          return (
+            <div className="space-y-3">
+              {top5.map((row, i) => {
+                const color = CHART_PALETTE.categorical[i % CHART_PALETTE.categorical.length];
+                const width = denominator > 0 ? (Math.max(0, row.total) / denominator) * 100 : 0;
+                return (
+                  <div key={row.categoryId ?? `uncategorized-${i}`} data-testid="spend-category-row">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-medium flex items-center gap-1.5">
+                        <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+                        {reportCategoryName(row)}
+                      </span>
+                      <INRDisplay amount={row.total} short className="text-xs text-muted-foreground" />
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                      <div className="h-2 rounded-full transition-all" data-testid="spend-category-bar" style={{ width: `${width}%`, backgroundColor: color }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
         })()}
       </div>
 

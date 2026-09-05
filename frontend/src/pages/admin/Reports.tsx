@@ -9,7 +9,7 @@ import {
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
 import { useFY } from '@/contexts/FYContext';
-import { fetchProfitAndLoss, fetchTrialBalance } from '@/api/dashboard';
+import { fetchProfitAndLoss, fetchTrialBalance, fetchSpendingByCategory } from '@/api/dashboard';
 import api from '@/lib/api';
 import { formatINRShort } from '@/lib/indianFormat';
 import { cn } from '@/lib/utils';
@@ -20,6 +20,9 @@ import {
   CustomTooltip,
   AXIS_STYLE,
   GRID_STYLE,
+  sortReportCategories,
+  topReportCategoriesByTotal,
+  reportCategoryName,
 } from '@/lib/chartUtils';
 
 type TabId = 'pl' | 'spending' | 'networth' | 'trialbalance';
@@ -55,24 +58,6 @@ const GOLD_TYPE_LABELS: Record<string, string> = {
   DIGITAL:   'Digital',
 };
 
-function reportCategoryName(item: any): string {
-  return item.categoryName ?? item.category?.name ?? 'Uncategorized';
-}
-
-function sortReportCategories<T>(items: T[]): T[] {
-  return [...items].sort((a: any, b: any) =>
-    reportCategoryName(a).localeCompare(reportCategoryName(b), undefined, { sensitivity: 'base' }),
-  );
-}
-
-function topReportCategoriesByTotal<T>(items: T[], count: number): T[] {
-  return sortReportCategories(
-    [...items]
-      .sort((a: any, b: any) => Number(b.total ?? 0) - Number(a.total ?? 0))
-      .slice(0, count),
-  );
-}
-
 export default function ReportsPage() {
   const { selectedFY } = useFY();
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
@@ -94,13 +79,12 @@ export default function ReportsPage() {
   });
 
   // ── Spending-by-category query (all users, scoped to effectiveUserId) ─────────
+  // Shared queryFn with Dashboard.tsx's spend-by-category widget, under the
+  // SAME key — both must fetch byte-identically, since neither reshapes inside
+  // queryFn (reshaping happens in each page's own component body, after).
   const { data: spendingByCat = [] } = useQuery({
     queryKey: ['report-spending', selectedFY, viewUserId],
-    queryFn: () => {
-      const params = new URLSearchParams({ fy: selectedFY });
-      if (isAdmin && viewUserId) params.set('targetUserId', viewUserId);
-      return api.get<{ data: any[] }>(`/reports/spending-by-category?${params}`).then((r) => r.data.data);
-    },
+    queryFn: () => fetchSpendingByCategory(selectedFY, isAdmin ? viewUserId : undefined),
   });
 
   // ── Net-worth query (all users, scoped to effectiveUserId) ────────────────────
@@ -161,12 +145,12 @@ export default function ReportsPage() {
   const spendingChartCategories = topReportCategoriesByTotal(spendingByCat, 15);
   const spendingPieCategories = topReportCategoriesByTotal(spendingByCat, 9);
   const spendingPieData = spendingPieCategories.map((item: any, i: number) => ({
-    name: item.category?.name ?? 'Uncategorized',
+    name: reportCategoryName(item),
     value: item.total,
     color: CHART_PALETTE.categorical[i % CHART_PALETTE.categorical.length],
   }));
   const spendingBarData = spendingChartCategories.map((item: any) => ({
-    name: item.category?.name ?? 'Uncategorized',
+    name: reportCategoryName(item),
     amount: item.total,
   }));
 
@@ -432,7 +416,7 @@ export default function ReportsPage() {
                     <div key={i} className="flex items-center justify-between text-sm py-1 border-b border-muted last:border-0">
                       <div className="flex items-center gap-2">
                         <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: CHART_PALETTE.categorical[i % CHART_PALETTE.categorical.length] }} />
-                        <span>{item.category?.name ?? 'Uncategorized'}</span>
+                        <span>{reportCategoryName(item)}</span>
                       </div>
                       <INRDisplay amount={item.total} />
                     </div>
