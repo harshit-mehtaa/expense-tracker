@@ -35,51 +35,51 @@
   successfully. Recovery from P3009 is documented and tested in DEPLOY.md.
 
 ## Tech Debt Inventory
-- [medium] Bank-statement-imported transactions with `paymentMode=CASH` bypass the
-  per-user cash-account balance logic added 2026-09. Live path is
-  `statementImportService.persistParsedStatement` (via `routes/import.ts`) — NOT
-  `transactionService.bulkImportTransactions`, which is dead (zero callers). Already
-  writes per-row inside one `$transaction`, so wiring in the auto-resolve is a small fix.
-  Deferred at task approval (2026-09-06) on a since-corrected premise (originally cited
-  the wrong, dead function). `recurringService.ts`'s equivalent gap was fixed same-day,
-  but `updateTransaction` still has none — editing paymentMode to/from CASH doesn't move
-  the balance to/from the cash account.
+- [medium] Both remaining cash-account gaps (import CASH routing, `updateTransaction`
+  CASH auto-resolve) were closed 2026-09-06. Residual: (1) the auto-resolve is one-way —
+  editing paymentMode CASH→other on an already-cash-linked transaction doesn't unlink it.
+  (2) Any row with a non-null `transferPairId` (import pairs, `convertTransactionToTransfer`
+  legs) can still have amount/type changed via `PATCH /transactions/:id` — only
+  `type==='TRANSFER'` is rejected, not "has a transferPairId" — silently desyncing the
+  pair. Frontend hides Edit for these but the API doesn't enforce it. (3) `'CASH'` is a
+  bare string literal in ~5 places instead of `PaymentMode.CASH`/`AccountType.CASH` — P1 risk.
+  (4) A linked-import CASH row (correctly or wrongly classified by `importService.ts`'s
+  `/\bcash\b/i` rule, which matches before the CARD rule) is excluded from ALL expense
+  reporting (`dashboardService.ts`, `utils/refundReporting.ts` filter `transferPairId IS
+  NULL`) for as long as it exists — correct for a real withdrawal, silent data loss for a
+  false positive (e.g. "POS PURCHASE CASH N CARRY"). Deleting it is now possible (see
+  above) but re-importing the same statement won't recreate it — dedup ignores
+  `deletedAt`. (5) Two identical CASH rows in ONE statement (same date/amount/desc) hash
+  the same and hard-fail the whole import via P2002 — pre-existing, same "please try
+  again → can never succeed" class as the once-broken synthetic-leg hash.
 - [medium] 43 raw `prisma.` calls remain in route handlers (`documents.ts` 19,
   `categories.ts` 11, `budgets.ts` 8, one each in `auth.ts`/`reports.ts`/
   `transactions.ts`/`loans.ts`/`health.ts`) — push into owning services when touched.
-- [low] Three hand-rolled duplicates of `resolveTargetUserId`'s logic (`transactions.ts:56`,
-  `loans.ts:40`, `budgets.ts:63`) should call the shared util.
-- [medium] The import insert loop (`statementImportService.ts`) is serial/unbounded
-  inside one open `$transaction` — a large statement can throw P2028. Fix with
-  `createMany` or chunking; both change dedup/atomicity semantics, needs its own plan.
-- [medium] `transactionService.bulkImportTransactions` (~:1171) is DEAD (zero non-test
-  callers) yet fully tested. Writes `bankStatementImport.filename` UNSANITIZED, and its
-  `buildImportHash` disagrees with the live `makeImportHash`. Delete it and its tests.
-- [medium] Frontend has no ERROR BOUNDARY wired in (`shared/ErrorBoundary.tsx` exists,
-  zero importers) — one-line fix in `AppShell.tsx`. `PageHeader.tsx` is likewise dead.
-- [low] `pages/Dashboard.tsx:72` builds the snapshot month key from UTC while the app
-  runs IST — skips the new month's net-worth snapshot for ~5.5h after midnight IST.
-- [low] `pages/Transactions.tsx` `?add=1` deep link broken for ADMIN (mount effect races
-  `user` resolving). Works for MEMBER. Pinned by a "known bug" test.
-- [low] `!isViewingFamilyWide` gates create buttons across 10 pages — confirm intended.
-- [medium] `frontend/src/lib/api.ts:32` `axios.create()` sets no `timeout` (bug-pattern P2).
-- [medium] No backend lint at all — `tsc --noEmit` and tests are the only backend gates.
-- [low] `frontend/src/lib/accountFormat.ts:46` owner-name-shown branch has zero test
-  coverage anywhere — needs an accounts fixture with a distinguishable userName.
-- [low] `resolveTargetUserId` (backend) only checks `deletedAt`, not `isActive`.
-  `spendingByCat` query in Reports.tsx has no isError handling, unlike siblings.
+- [low] `resolveTargetUserId`'s logic hand-duplicated in `transactions.ts:56`,
+  `loans.ts:40`, `budgets.ts:63` (should call the shared util); only checks `deletedAt`,
+  not `isActive`, everywhere it's used.
+- [medium] Import insert loop (`statementImportService.ts`) serial/unbounded in one open
+  `$transaction` — large statement can throw P2028. `createMany`/chunking needs its own plan.
+- [medium] `transactionService.bulkImportTransactions` (~:1171) is DEAD (zero callers) yet
+  fully tested; writes `bankStatementImport.filename` UNSANITIZED. Delete it + its tests.
+- [medium] Frontend ERROR BOUNDARY not wired in (`shared/ErrorBoundary.tsx`, zero
+  importers) — one-line `AppShell.tsx` fix. `PageHeader.tsx` likewise dead.
+- [low] Dashboard snapshot month key uses UTC not IST (misses ~5.5h after midnight);
+  `netWorth` ignores `selectedFY`. Transactions `?add=1` deep link broken for ADMIN only.
+- [medium] `axios.create()` (`api.ts:32`) sets no `timeout` (bug-pattern P2). No backend
+  lint at all — `tsc --noEmit`/tests are the only gates.
+- [low] `accountFormat.ts:46` owner-name branch untested. `spendingByCat` (Reports.tsx)
+  has no isError handling, unlike siblings.
 - [medium] Primary transaction CRUD mutations (edit/delete/import/bulk/recurring-apply)
   don't invalidate dashboard/profit-and-loss/report-spending/accounts query caches.
-- [low] `CashflowMonth`/`UpcomingAlert` types, `useAccounts`/`useCategories` (5-way), and
-  `selectedMemberName` (Dashboard/Transactions) are each duplicated instead of shared.
-- [low] `computeTotalLiabilities` has an undocumented endDate filter excluding overdue loans.
-- [low] No modal has role="dialog"/focus-trap/Escape-to-close; chart click-handlers are
-  mouse-only — systemic a11y gap. `viewUserId` is local useState, not shared context/URL.
-- [low] BUDGET_ALERT rows display the budget LIMIT as "amount due". 80C/80D bar-color
-  threshold duplicated 4x. taxApi/insuranceApi/investmentsApi/loansApi mostly `Promise<any>`.
-- [low] Backend branch-coverage gate tight spots: loanService.ts:457, subscriptionService.ts:402-403.
-- [low] `''`-coerces-to-0 Zod bug class unfixed in RealEstate.tsx, Accounts.tsx, TaxCentre.tsx.
-- [low] Dashboard's `netWorth` always shows today's live figure regardless of `selectedFY`.
+- [low] `CashflowMonth`/`UpcomingAlert`/`useAccounts`/`useCategories`/`selectedMemberName`
+  each duplicated instead of shared. `computeTotalLiabilities` has an undocumented
+  endDate filter excluding overdue loans. `!isViewingFamilyWide` gates create buttons
+  across 10 pages — confirm intended.
+- [low] No modal has role="dialog"/focus-trap/Escape; chart clicks are mouse-only — a11y
+  gap. `viewUserId` is local useState. BUDGET_ALERT shows the LIMIT as "amount due".
+- [low] Backend branch-coverage tight spots: loanService.ts:457, subscriptionService.ts:402-403.
+  `''`-coerces-to-0 Zod bug unfixed in RealEstate.tsx, Accounts.tsx, TaxCentre.tsx.
 
 ## What We Will NOT Do
 - No controllers layer — routes call services directly; adding one would be an

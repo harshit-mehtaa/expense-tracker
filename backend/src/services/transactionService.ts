@@ -605,6 +605,23 @@ export async function updateTransaction(
     // the paired leg's balance. Delete and re-create transfers instead.
     if (original.type === 'TRANSFER') throw AppError.badRequest('TRANSFER transactions cannot be edited. Delete and re-create them.');
 
+    // Auto-resolve to the user's cash account when a paymentMode edit turns an unlinked
+    // transaction into a CASH one — mirrors createTransaction's create-time behavior.
+    // bankAccountId otherwise remains fully immutable here: this only ever moves it from
+    // null to the cash account, and never touches an already-linked transaction (real
+    // account or already-cash) — that case stays the existing cosmetic no-op.
+    const effectivePaymentMode = data.paymentMode ?? original.paymentMode;
+    const effectiveType = data.type ?? original.type;
+    let cashResolvedBankAccountId: string | null = original.bankAccountId;
+    let cashAccountNewlyLinked = false;
+    if (!original.bankAccountId && effectivePaymentMode === 'CASH' && effectiveType !== 'TRANSFER') {
+      // original.userId, not the requester's userId — an ADMIN editing a member's
+      // transaction must resolve to the MEMBER's cash account, not their own.
+      const cashAccount = await ensureCashAccount(ptx, original.userId);
+      cashResolvedBankAccountId = cashAccount.id;
+      cashAccountNewlyLinked = true;
+    }
+
     const updated = await ptx.transaction.update({
       where: { id: transactionId },
       data: {
@@ -613,6 +630,7 @@ export async function updateTransaction(
         date: data.date ? new Date(data.date) : undefined,
         insurancePolicyId: data.type && data.type !== 'EXPENSE' ? null : undefined,
         refundForTransactionId: data.type && data.type !== 'INCOME' ? null : undefined,
+        bankAccountId: cashAccountNewlyLinked ? cashResolvedBankAccountId : undefined,
         updatedAt: new Date(),
       } as Prisma.TransactionUncheckedUpdateInput,
     });
@@ -620,7 +638,6 @@ export async function updateTransaction(
     // Recalculate balance impact if account or financial fields changed
     const amountChanged = data.amount !== undefined && data.amount !== Number(original.amount);
     const typeChanged = data.type !== undefined && data.type !== original.type;
-    const accountChanged = false; // updateTransaction does not support changing bankAccountId
 
     if (typeChanged) {
       const activeRefundCount = await ptx.transaction.count({
@@ -631,9 +648,11 @@ export async function updateTransaction(
       }
     }
 
-    if ((amountChanged || typeChanged) && original.bankAccountId) {
-      // Reverse the original delta, apply the new delta
-      const oldDelta = balanceDelta(original.type, Number(original.amount));
+    if ((amountChanged || typeChanged || cashAccountNewlyLinked) && (original.bankAccountId || cashAccountNewlyLinked)) {
+      // Reverse the original delta, apply the new delta. A newly-linked cash account had
+      // zero prior balance impact (it was unlinked), regardless of whether amount/type
+      // also changed in the same edit — so the "old" delta is 0, not a real reversal.
+      const oldDelta = cashAccountNewlyLinked ? 0 : balanceDelta(original.type, Number(original.amount));
       const newType = data.type ?? original.type;
       const newAmount = data.amount ?? Number(original.amount);
       const newDelta = balanceDelta(newType, newAmount);
@@ -641,7 +660,9 @@ export async function updateTransaction(
 
       if (netChange !== 0) {
         await ptx.bankAccount.update({
-          where: { id: original.bankAccountId },
+          // Guard above guarantees this is non-null: either original.bankAccountId was
+          // already set, or cashAccountNewlyLinked resolved cashResolvedBankAccountId.
+          where: { id: cashResolvedBankAccountId! },
           data: { currentBalance: { increment: netChange } },
         });
       }

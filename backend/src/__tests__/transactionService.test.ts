@@ -2210,6 +2210,106 @@ describe('updateTransaction', () => {
 
     expect(loanMock.update).not.toHaveBeenCalled();
   });
+
+  // ─── CASH auto-resolve on edit ───────────────────────────────────────────────
+
+  it('resolves to the cash account when paymentMode is edited to CASH on an unlinked transaction', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, bankAccountId: null, paymentMode: 'UPI', type: 'EXPENSE', amount: 400 });
+    acctMock.findFirst.mockResolvedValue({ id: 'cash-1', userId: 'u1', isCashAccount: true });
+    txMock.update.mockResolvedValue({ ...MOCK_TX, paymentMode: 'CASH' });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { paymentMode: 'CASH' });
+
+    expect(txMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: 'cash-1' }) }),
+    );
+    expect(acctMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'cash-1' }, data: { currentBalance: { increment: -400 } } }),
+    );
+  });
+
+  it('provisions the cash account when the user has none yet (self-healing)', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, bankAccountId: null, paymentMode: 'UPI', type: 'EXPENSE', amount: 400 });
+    acctMock.findFirst.mockResolvedValue(null);
+    acctMock.create.mockResolvedValue({ id: 'cash-new', userId: 'u1', isCashAccount: true });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { paymentMode: 'CASH' });
+
+    expect(acctMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ userId: 'u1', isCashAccount: true }) }),
+    );
+  });
+
+  it('applies the full new delta (not a netChange against a nonexistent prior state) when CASH resolution and an amount change happen together', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, bankAccountId: null, paymentMode: 'UPI', type: 'EXPENSE', amount: 100 });
+    acctMock.findFirst.mockResolvedValue({ id: 'cash-1', userId: 'u1', isCashAccount: true });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { paymentMode: 'CASH', amount: 250 });
+
+    expect(acctMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'cash-1' }, data: { currentBalance: { increment: -250 } } }),
+    );
+  });
+
+  it('resolves to the cash account when only the amount changes on an already-CASH, unlinked transaction', async () => {
+    // Covers the `effectivePaymentMode = data.paymentMode ?? original.paymentMode` branch
+    // where data.paymentMode is undefined but the original row is already paymentMode:CASH.
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, bankAccountId: null, paymentMode: 'CASH', type: 'EXPENSE', amount: 100 });
+    acctMock.findFirst.mockResolvedValue({ id: 'cash-1', userId: 'u1', isCashAccount: true });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { amount: 300 });
+
+    expect(acctMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'cash-1' }, data: { currentBalance: { increment: -300 } } }),
+    );
+  });
+
+  it('does not resolve to any account when an unlinked transaction is edited without involving CASH', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, bankAccountId: null, paymentMode: 'UPI', type: 'EXPENSE', amount: 100 });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { amount: 200 });
+
+    expect(acctMock.findFirst).not.toHaveBeenCalled();
+    expect(txMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: undefined }) }),
+    );
+    expect(acctMock.update).not.toHaveBeenCalled();
+  });
+
+  it('does not auto-resolve — and stays a cosmetic no-op — for a paymentMode edit on an already-linked transaction', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, bankAccountId: 'acct-1', paymentMode: 'UPI' });
+    txMock.update.mockResolvedValue({ ...MOCK_TX, paymentMode: 'CASH' });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { paymentMode: 'CASH' });
+
+    expect(acctMock.findFirst).not.toHaveBeenCalled();
+    expect(acctMock.update).not.toHaveBeenCalled();
+    expect(txMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: undefined }) }),
+    );
+  });
+
+  it('does not auto-resolve when the effective type would be TRANSFER (defensive)', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, bankAccountId: null, paymentMode: 'CASH', type: 'EXPENSE' });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { type: 'TRANSFER' as any });
+
+    expect(acctMock.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('ADMIN editing a MEMBER\'s unlinked transaction to CASH resolves the MEMBER\'s cash account, not the ADMIN\'s', async () => {
+    txMock.findUnique.mockResolvedValue({
+      ...MOCK_TX, userId: 'member-1', bankAccountId: null, paymentMode: 'UPI', type: 'EXPENSE', amount: 400,
+    });
+    acctMock.findFirst.mockResolvedValue({ id: 'member-cash-1', userId: 'member-1', isCashAccount: true });
+
+    await updateTransaction('tx-1', 'admin-1', 'ADMIN', { paymentMode: 'CASH' });
+
+    expect(acctMock.findFirst).toHaveBeenCalledWith({ where: { userId: 'member-1', isCashAccount: true } });
+    expect(acctMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'member-cash-1' } }),
+    );
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -483,7 +483,15 @@ function TransactionActionMenu({
   if (!canControl) return null;
 
   const canEditTransaction = !tx.transferPairId && !tx.sipId && !tx.sipTransactionId;
-  const canDeleteTransaction = !tx.transferPairId;
+  // Transfer pairs cannot be edited in place (would desync the paired leg — the backend
+  // rejects it with "delete and re-create them"), but CAN be deleted: softDeleteTransaction
+  // already cascades to the paired leg atomically, reversing both balances correctly.
+  // Without this, an import-created cash-withdrawal pair (or any manual transfer) that was
+  // wrongly recorded would be permanently stuck with no in-app recovery. Note the recovery
+  // is "delete, then re-enter manually" — NOT "delete, then re-import the same statement":
+  // import dedup matches on importHash regardless of deletedAt, so a re-import of the same
+  // file still treats the deleted row as already-imported and skips it.
+  const canDeleteTransaction = true;
   const itemClass = 'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none transition-colors hover:bg-muted focus:bg-muted';
   const destructiveItemClass = cn(itemClass, 'text-destructive hover:bg-destructive/10 focus:bg-destructive/10');
   const actions = [

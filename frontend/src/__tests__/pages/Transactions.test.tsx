@@ -204,6 +204,18 @@ describe('Transactions page — cash withdrawal labeling', () => {
     expect((await screen.findAllByText(/Transfer Debit/)).length).toBeGreaterThan(0);
     expect(screen.queryByText(/Cash Withdrawal/)).toBeNull();
   });
+
+  it('offers "Delete transaction" for a transfer-pair row (e.g. an import-created cash withdrawal) — softDeleteTransaction cascades to the paired leg correctly, so this must not be permanently locked', async () => {
+    const user = userEvent.setup();
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers([WITHDRAWAL_TX]) });
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+    await screen.findAllByText(/Cash Withdrawal/);
+
+    const actionsButtons = await screen.findAllByRole('button', { name: /transaction actions/i });
+    await user.click(actionsButtons[0]);
+
+    expect(await screen.findByText(/delete transaction/i)).toBeInTheDocument();
+  });
 });
 
 const SUBSCRIPTION_RULE = {

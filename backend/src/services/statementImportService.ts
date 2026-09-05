@@ -1,7 +1,9 @@
+import crypto from 'crypto';
 import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import { sanitizeFilename } from '../utils/sanitizeFilename';
 import { makeImportHash, type ParsedTransaction } from './importService';
+import { ensureCashAccount } from './accountService';
 
 /**
  * Persistence half of a bank-statement import. The route owns parsing and the audit log;
@@ -46,6 +48,13 @@ export async function persistParsedStatement(args: PersistArgs) {
       where: { id: accountId, userId: ownerUserId },
     });
     if (!account) throw AppError.notFound('Bank account');
+    // A bank statement inherently describes a real account's activity — importing one
+    // "into" the cash account itself has no meaningful semantics (a CASH row would need
+    // to pair against itself) and isn't offered anywhere in the UI. Reject rather than
+    // silently special-case it.
+    if (account.isCashAccount) {
+      throw AppError.badRequest('Cannot import a bank statement into the cash account');
+    }
   }
 
   // scopeId = accountId when linked, userId otherwise — so re-importing the same
@@ -68,6 +77,9 @@ export async function persistParsedStatement(args: PersistArgs) {
   const toCreate = txsWithHash.filter((t) => !existingHashes.has(t.hash));
   const duplicatesSkipped = txsWithHash.length - toCreate.length;
 
+  let syntheticCashLegsCreated = 0;
+  const cashDeltas: number[] = [];
+
   try {
     // Explicit timeout. Prisma's interactive-transaction default is 5s, and this is the
     // only $transaction in the repo that iterates an unbounded, user-supplied collection
@@ -76,11 +88,41 @@ export async function persistParsedStatement(args: PersistArgs) {
     // realistic statement, without holding a write transaction open for minutes.
     // The real fix is createMany/chunking; tracked as debt, deliberately not done here.
     await prisma.$transaction(async (tx) => {
+      // Resolved once per import, not per row — same idempotent helper createTransaction
+      // and recurringService use. Only looked up when at least one row needs it.
+      const anyCashRows = toCreate.some((t) => t.paymentMode === 'CASH');
+      const cashAccount = anyCashRows ? await ensureCashAccount(tx, ownerUserId) : null;
+
       for (const t of toCreate) {
+        const isCashRow = cashAccount !== null && t.paymentMode === 'CASH';
+
+        // Unlinked import + CASH row: resolves directly to the cash account, single leg
+        // — structurally identical to a manual CASH expense with no account.
+        //
+        // Linked import + CASH row (e.g. an "ATM WDL" line inside a real bank statement):
+        // the row KEEPS its real account — it already correctly debits/credits it — and
+        // gets paired via transferPairId with a synthetic counterpart leg on the cash
+        // account below. This reuses the existing double-entry TRANSFER machinery rather
+        // than inventing a new "independent cash leg" concept, so the frontend's
+        // "Cash Withdrawal"/"Cash Deposit" label (which already renders generically for
+        // ANY transfer pair with a cash-account leg) applies with zero frontend changes.
+        //
+        // Forward-only: re-importing an already-imported pre-fix statement will NOT
+        // retroactively add the missing cash leg, because dedup keys off the original
+        // row's hash, which is unchanged by this fix and already exists in the DB.
+        const pairId = isCashRow && accountId ? crypto.randomUUID() : undefined;
+
+        // Accumulated at the exact point the routing decision is made, rather than
+        // re-derived afterward from a second filter/map pass — one source of truth for
+        // "does this row affect the cash account, and in which direction."
+        if (isCashRow && !accountId) {
+          cashDeltas.push(round2(t.type === 'INCOME' ? t.amount : -t.amount));
+        }
+
         await tx.transaction.create({
           data: {
             userId: ownerUserId,
-            bankAccountId: accountId ?? null,
+            bankAccountId: isCashRow && !accountId ? cashAccount!.id : (accountId ?? null),
             amount: t.amount,
             type: t.type,
             categoryId: t.categoryId ?? null,
@@ -90,10 +132,50 @@ export async function persistParsedStatement(args: PersistArgs) {
             paymentMode: t.paymentMode ?? null,
             balanceImpactApplied: true,
             importHash: t.hash,
+            transferPairId: pairId,
           },
         });
+
+        if (isCashRow && accountId) {
+          // Synthetic counterpart leg: opposite type, on the cash account. Its hash is
+          // derived FROM the original row's own hash (t.hash, already globally unique —
+          // @@unique([importHash])) rather than re-derived from raw fields scoped to
+          // cashAccount.id: every linked-CASH row for this user would otherwise share
+          // that one scope, so two different statements (or the same row re-linked to a
+          // different account after a delete+reimport) could produce byte-identical
+          // synthetic hashes and hard-fail the whole batch with an unrecoverable P2002.
+          // Deriving from t.hash is deterministic (same original row → same synthetic
+          // hash, so re-import dedup still works) and can never collide with anything
+          // else's hash, since t.hash itself is already collision-free by construction.
+          // isCashRow already guarantees cashAccount is non-null (it's part of the
+          // condition), so `!` here is provably safe, not a suppressed nullability risk.
+          const syntheticType = t.type === 'INCOME' ? 'EXPENSE' : 'INCOME';
+          const syntheticHash = crypto.createHash('sha256').update(`${t.hash}|cash-leg`).digest('hex');
+          await tx.transaction.create({
+            data: {
+              userId: ownerUserId,
+              bankAccountId: cashAccount!.id,
+              amount: t.amount,
+              type: syntheticType,
+              categoryId: null,
+              description: t.description,
+              date: t.date,
+              // Always 'CASH' here (isCashRow's precondition) — written directly rather
+              // than `t.paymentMode ?? null`, which would leave an unreachable branch.
+              paymentMode: 'CASH',
+              balanceImpactApplied: true,
+              importHash: syntheticHash,
+              transferPairId: pairId,
+            },
+          });
+          syntheticCashLegsCreated += 1;
+          cashDeltas.push(round2(syntheticType === 'INCOME' ? t.amount : -t.amount));
+        }
       }
-      // Sync the account balance inside the same transaction as the inserts.
+
+      // Sync the linked account's balance inside the same transaction as the inserts.
+      // Unchanged: every row keeping bankAccountId: accountId (including linked-CASH
+      // rows, which correctly debit/credit it exactly as before) is counted as before.
       if (accountId && toCreate.length > 0) {
         // Round twice, deliberately. Per row, because Prisma stores each amount into
         // Decimal(15,2) independently — summing raw would drift from what the rows
@@ -114,11 +196,30 @@ export async function persistParsedStatement(args: PersistArgs) {
           });
         }
       }
+
+      // Sync the cash account's balance: unlinked-CASH rows (single leg, using the row's
+      // own type) plus synthetic legs from linked-CASH rows (using the synthetic leg's
+      // own, opposite type). Same two-stage rounding discipline as the block above.
+      if (cashAccount) {
+        const cashNetDelta = round2(cashDeltas.reduce((sum, d) => sum + d, 0));
+        if (cashNetDelta !== 0) {
+          await tx.bankAccount.update({
+            where: { id: cashAccount.id },
+            data: { currentBalance: { increment: cashNetDelta } },
+          });
+        }
+      }
     }, { timeout: 30_000, maxWait: 10_000 });
   } catch (err) {
     // $transaction is atomic, so this always means "nothing was written". Log the real
     // cause WITH identifying context here: errorHandler short-circuits operational
     // errors before its own context-rich log, so this is the only record of the failure.
+    //
+    // Includes the rare case where ensureCashAccount's own AppError.conflict (a
+    // concurrent-provisioning race on the user's cash account) lands here too — it loses
+    // its specific "retry" messaging and becomes the generic message below. Accepted
+    // deliberately rather than special-cased: the generic message already tells the user
+    // nothing was saved and a retry is safe, which is the same remedy.
     console.error('[import] batch insert failed', {
       ownerUserId,
       accountId: accountId ?? null,
@@ -142,7 +243,11 @@ export async function persistParsedStatement(args: PersistArgs) {
     );
   }
 
-  // All-or-nothing above, so every row that was going to land, landed.
+  // All-or-nothing above, so every row that was going to land, landed. `imported` counts
+  // STATEMENT rows (kept equal to toCreate.length) so `imported + duplicatesSkipped ===
+  // rowCount` stays a true invariant the UI relies on ("Rows parsed / Imported /
+  // Duplicates skipped"). Synthetic cash-credit legs are real DB rows too, but they are
+  // not statement rows — they're reported separately so nothing double-counts.
   const imported = toCreate.length;
 
   const importRecord = await prisma.bankStatementImport.create({
@@ -158,5 +263,5 @@ export async function persistParsedStatement(args: PersistArgs) {
     },
   });
 
-  return { imported, duplicatesSkipped, importRecord };
+  return { imported, duplicatesSkipped, cashLegsCreated: syntheticCashLegsCreated, importRecord };
 }

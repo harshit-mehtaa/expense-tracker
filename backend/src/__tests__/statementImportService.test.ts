@@ -5,6 +5,7 @@
  *
  * Uses named import { prisma } — dual-export mock required.
  */
+import crypto from 'crypto';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../config/prisma', () => {
@@ -30,7 +31,7 @@ const $transactionMock = (prisma as any).$transaction;
 /** Interactive-transaction client handed to the $transaction callback. */
 const txClient = {
   transaction: { create: vi.fn() },
-  bankAccount: { update: vi.fn() },
+  bankAccount: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
 };
 
 function makeTx(over: Partial<ParsedTransaction> = {}): ParsedTransaction {
@@ -60,6 +61,8 @@ beforeEach(() => {
   txMock.findMany.mockResolvedValue([]);
   importMock.create.mockResolvedValue({ id: 'imp-1' });
   txClient.transaction.create.mockResolvedValue({ id: 'tx-1' });
+  txClient.bankAccount.findFirst.mockResolvedValue(null);
+  txClient.bankAccount.create.mockResolvedValue({ id: 'cash-1', userId: 'u1', isCashAccount: true });
   txClient.bankAccount.update.mockResolvedValue({});
   // Run the callback against our fake interactive client.
   $transactionMock.mockImplementation(async (cb: any) => cb(txClient));
@@ -241,6 +244,172 @@ describe('persistParsedStatement — row shape', () => {
     await persistParsedStatement({ ...BASE, transactions: [tx] });
     const expected = makeImportHash(tx.date, tx.amount, tx.type, tx.description, 'u1');
     expect(txClient.transaction.create.mock.calls[0][0].data.importHash).toBe(expected);
+  });
+});
+
+// ─── Cash account routing ─────────────────────────────────────────────────────
+
+describe('persistParsedStatement — CASH rows, unlinked import (no accountId)', () => {
+  it('resolves a CASH EXPENSE row to the cash account (single leg) and debits it', async () => {
+    const tx = makeTx({ type: 'EXPENSE', amount: 500, paymentMode: 'CASH' as any });
+    await persistParsedStatement({ ...BASE, transactions: [tx] });
+
+    expect(txClient.bankAccount.findFirst).toHaveBeenCalledWith({ where: { userId: 'u1', isCashAccount: true } });
+    expect(txClient.transaction.create).toHaveBeenCalledTimes(1);
+    expect(txClient.transaction.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ bankAccountId: 'cash-1' }),
+    });
+    expect(txClient.bankAccount.update).toHaveBeenCalledWith({
+      where: { id: 'cash-1' },
+      data: { currentBalance: { increment: -500 } },
+    });
+  });
+
+  it('resolves a CASH INCOME row to the cash account and credits it', async () => {
+    const tx = makeTx({ type: 'INCOME', amount: 200, paymentMode: 'CASH' as any });
+    await persistParsedStatement({ ...BASE, transactions: [tx] });
+
+    expect(txClient.bankAccount.update).toHaveBeenCalledWith({
+      where: { id: 'cash-1' },
+      data: { currentBalance: { increment: 200 } },
+    });
+  });
+
+  it('provisions the cash account when the user has none yet (self-healing)', async () => {
+    txClient.bankAccount.findFirst.mockResolvedValue(null);
+    const tx = makeTx({ type: 'EXPENSE', amount: 500, paymentMode: 'CASH' as any });
+    await persistParsedStatement({ ...BASE, transactions: [tx] });
+
+    expect(txClient.bankAccount.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ userId: 'u1', isCashAccount: true }) }),
+    );
+  });
+});
+
+describe('persistParsedStatement — CASH rows, linked import (accountId present)', () => {
+  it('keeps the original row on the linked account AND creates a paired synthetic credit leg on the cash account', async () => {
+    const tx = makeTx({ type: 'EXPENSE', amount: 1000, paymentMode: 'CASH' as any, description: 'ATM WDL' });
+    const result = await persistParsedStatement({ ...BASE, accountId: 'acc1', transactions: [tx] });
+
+    expect(txClient.transaction.create).toHaveBeenCalledTimes(2);
+    const [originalCall, syntheticCall] = txClient.transaction.create.mock.calls;
+    expect(originalCall[0].data.bankAccountId).toBe('acc1');
+    expect(originalCall[0].data.type).toBe('EXPENSE');
+    expect(syntheticCall[0].data.bankAccountId).toBe('cash-1');
+    expect(syntheticCall[0].data.type).toBe('INCOME');
+    expect(syntheticCall[0].data.categoryId).toBeNull();
+
+    // Both legs are a real double-entry pair, not independent rows.
+    expect(originalCall[0].data.transferPairId).toBeDefined();
+    expect(originalCall[0].data.transferPairId).toBe(syntheticCall[0].data.transferPairId);
+
+    // Linked account debited — unchanged existing behavior.
+    expect(txClient.bankAccount.update).toHaveBeenCalledWith({
+      where: { id: 'acc1' },
+      data: { currentBalance: { increment: -1000 } },
+    });
+    // Cash account credited — new.
+    expect(txClient.bankAccount.update).toHaveBeenCalledWith({
+      where: { id: 'cash-1' },
+      data: { currentBalance: { increment: 1000 } },
+    });
+
+    // imported counts statement rows only; the synthetic leg is reported separately.
+    expect(result.imported).toBe(1);
+    expect(result.cashLegsCreated).toBe(1);
+  });
+
+  it('flips the synthetic leg\'s type for a CASH INCOME row (e.g. a cash deposit into the bank)', async () => {
+    const tx = makeTx({ type: 'INCOME', amount: 300, paymentMode: 'CASH' as any });
+    await persistParsedStatement({ ...BASE, accountId: 'acc1', transactions: [tx] });
+
+    const [, syntheticCall] = txClient.transaction.create.mock.calls;
+    expect(syntheticCall[0].data.type).toBe('EXPENSE');
+    expect(txClient.bankAccount.update).toHaveBeenCalledWith({
+      where: { id: 'cash-1' },
+      data: { currentBalance: { increment: -300 } },
+    });
+  });
+
+  it('derives the synthetic leg\'s hash from the original row\'s own hash, so it can never collide across statements/accounts', async () => {
+    const tx = makeTx({ type: 'EXPENSE', amount: 1000, paymentMode: 'CASH' as any, description: 'ATM WDL' });
+    await persistParsedStatement({ ...BASE, accountId: 'acc1', transactions: [tx] });
+
+    const [originalCall, syntheticCall] = txClient.transaction.create.mock.calls;
+    expect(originalCall[0].data.importHash).not.toBe(syntheticCall[0].data.importHash);
+    // Two different linked accounts (different scopeId) produce different original
+    // hashes, and therefore different synthetic hashes too — no shared "cashAccount.id"
+    // scope for two unrelated imports to collide on.
+    const expectedSyntheticHash = crypto
+      .createHash('sha256')
+      .update(`${originalCall[0].data.importHash}|cash-leg`)
+      .digest('hex');
+    expect(syntheticCall[0].data.importHash).toBe(expectedSyntheticHash);
+  });
+
+  it('partitions deltas correctly for a mix of CASH and non-CASH rows', async () => {
+    const upi = makeTx({ description: 'upi', type: 'EXPENSE', amount: 300, paymentMode: 'UPI' as any });
+    const cash = makeTx({ description: 'atm', type: 'EXPENSE', amount: 1000, paymentMode: 'CASH' as any });
+    await persistParsedStatement({ ...BASE, accountId: 'acc1', rowCount: 2, transactions: [upi, cash] });
+
+    // Linked account: both EXPENSE rows debit it — unchanged existing math.
+    expect(txClient.bankAccount.update).toHaveBeenCalledWith({
+      where: { id: 'acc1' },
+      data: { currentBalance: { increment: -1300 } },
+    });
+    // Cash account: only the synthetic leg from the CASH row.
+    expect(txClient.bankAccount.update).toHaveBeenCalledWith({
+      where: { id: 'cash-1' },
+      data: { currentBalance: { increment: 1000 } },
+    });
+  });
+
+  it('keeps importedCount to statement rows (not the synthetic leg), preserving imported + duplicatesSkipped === rowCount', async () => {
+    const tx = makeTx({ type: 'EXPENSE', amount: 1000, paymentMode: 'CASH' as any });
+    const result = await persistParsedStatement({ ...BASE, accountId: 'acc1', rowCount: 1, transactions: [tx] });
+
+    expect(importMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ importedCount: 1 }) }),
+    );
+    expect(result.imported).toBe(1);
+    expect(result.duplicatesSkipped).toBe(0);
+  });
+
+  it('reports the synthetic leg count separately, distinct from imported', async () => {
+    const tx = makeTx({ type: 'EXPENSE', amount: 1000, paymentMode: 'CASH' as any });
+    const result = await persistParsedStatement({ ...BASE, accountId: 'acc1', rowCount: 1, transactions: [tx] });
+
+    expect(result.cashLegsCreated).toBe(1);
+  });
+
+  it('rejects importing a statement directly into the cash account', async () => {
+    acctMock.findFirst.mockResolvedValue({ id: 'cash-1', userId: 'u1', isCashAccount: true });
+
+    await expect(
+      persistParsedStatement({ ...BASE, accountId: 'cash-1', transactions: [makeTx()] }),
+    ).rejects.toThrow(/cannot import.*cash account/i);
+    expect($transactionMock).not.toHaveBeenCalled();
+  });
+
+  it('re-importing a previously-imported linked-CASH row skips both the original and synthetic legs', async () => {
+    const tx = makeTx({ type: 'EXPENSE', amount: 1000, paymentMode: 'CASH' as any, description: 'ATM WDL' });
+    const originalHash = makeImportHash(tx.date, tx.amount, tx.type, tx.description, 'acc1');
+    txMock.findMany.mockResolvedValue([{ importHash: originalHash }]);
+
+    const result = await persistParsedStatement({ ...BASE, accountId: 'acc1', transactions: [tx] });
+
+    expect(result.imported).toBe(0);
+    expect(result.duplicatesSkipped).toBe(1);
+    expect(txClient.transaction.create).not.toHaveBeenCalled();
+    expect(txClient.bankAccount.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('persistParsedStatement — no CASH rows', () => {
+  it('never calls ensureCashAccount when no row is paymentMode CASH', async () => {
+    await persistParsedStatement({ ...BASE, transactions: [makeTx({ paymentMode: 'UPI' as any })] });
+    expect(txClient.bankAccount.findFirst).not.toHaveBeenCalled();
+    expect(txClient.bankAccount.create).not.toHaveBeenCalled();
   });
 });
 
