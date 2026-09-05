@@ -645,4 +645,103 @@ describe('Dashboard page — smoke', () => {
     // The Assets-vs-Liabilities panel renders the full net worth value.
     expect(screen.getAllByText(MONEY_FORMATTED).length).toBeGreaterThan(0);
   });
+
+  it('hides the Add Expense/Add Income buttons when an ADMIN is viewing "All Family"', async () => {
+    renderPage(<DashboardPage />, { route: '/', handlers: dashboardHandlers() });
+    await screen.findByText('55.5%');
+    await settled();
+
+    expect(screen.queryByRole('button', { name: /Add Expense/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Add Income/i })).toBeNull();
+  });
+
+  it('shows the Add Expense/Add Income buttons for a MEMBER', async () => {
+    renderPage(<DashboardPage />, { route: '/', handlers: dashboardHandlers(), user: MEMBER_USER });
+    await screen.findByText('55.5%');
+
+    expect(await screen.findByRole('button', { name: /Add Expense/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add Income/i })).toBeInTheDocument();
+  });
+
+  it('shows the buttons for an ADMIN once a specific member is selected, and clicking "Add Income" opens the modal pre-set to Income', async () => {
+    const user = userEvent.setup();
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.get(url('/categories'), () => HttpResponse.json({ data: [] })),
+        http.get(url('/accounts'), () => HttpResponse.json({ data: [] })),
+        ...dashboardHandlers(),
+      ],
+    });
+    await screen.findByText('55.5%');
+
+    const select = await screen.findByLabelText(/View:/i) as HTMLSelectElement;
+    await user.selectOptions(select, 'u-member');
+    await waitFor(() => expect(select.value).toBe('u-member'));
+
+    const incomeButton = await screen.findByRole('button', { name: /Add Income/i });
+    await user.click(incomeButton);
+
+    const heading = await screen.findByRole('heading', { level: 2, name: 'Add Transaction' });
+    const modal = heading.closest('div.bg-background') as HTMLElement;
+    const typeSelect = modal.querySelector('select[name="type"]') as HTMLSelectElement;
+    expect(typeSelect.value).toBe('INCOME');
+  });
+
+  it('clicking "Add Expense" opens the modal pre-set to Expense (the mirror of the Income case above — catches a swapped onClick)', async () => {
+    const user = userEvent.setup();
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.get(url('/categories'), () => HttpResponse.json({ data: [] })),
+        http.get(url('/accounts'), () => HttpResponse.json({ data: [] })),
+        ...dashboardHandlers(),
+      ],
+    });
+    await screen.findByText('55.5%');
+
+    const select = await screen.findByLabelText(/View:/i) as HTMLSelectElement;
+    await user.selectOptions(select, 'u-member');
+    await waitFor(() => expect(select.value).toBe('u-member'));
+
+    const expenseButton = await screen.findByRole('button', { name: /Add Expense/i });
+    await user.click(expenseButton);
+
+    const heading = await screen.findByRole('heading', { level: 2, name: 'Add Transaction' });
+    const modal = heading.closest('div.bg-background') as HTMLElement;
+    const typeSelect = modal.querySelector('select[name="type"]') as HTMLSelectElement;
+    expect(typeSelect.value).toBe('EXPENSE');
+  });
+
+  it('submits a quick-add transaction with the SELECTED member as targetUserId, not the admin\'s own id', async () => {
+    const user = userEvent.setup();
+    let seenTargetUserId: string | null | undefined;
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.get(url('/categories'), () => HttpResponse.json({ data: [] })),
+        http.get(url('/accounts'), () => HttpResponse.json({ data: [] })),
+        http.post(url('/transactions'), ({ request }) => {
+          seenTargetUserId = new URL(request.url).searchParams.get('targetUserId');
+          return HttpResponse.json({ data: {} });
+        }),
+        ...dashboardHandlers(),
+      ],
+    });
+    await screen.findByText('55.5%');
+
+    const select = await screen.findByLabelText(/View:/i) as HTMLSelectElement;
+    await user.selectOptions(select, 'u-member');
+    await waitFor(() => expect(select.value).toBe('u-member'));
+
+    await user.click(await screen.findByRole('button', { name: /Add Expense/i }));
+    const heading = await screen.findByRole('heading', { level: 2, name: 'Add Transaction' });
+    const modal = heading.closest('div.bg-background') as HTMLElement;
+    await user.type(within(modal).getByPlaceholderText(/swiggy order/i), 'Groceries');
+    const amountInput = modal.querySelector('input[name="amount"]') as HTMLInputElement;
+    await user.type(amountInput, '250');
+    await user.click(within(modal).getByRole('button', { name: 'Add Transaction' }));
+
+    await waitFor(() => expect(seenTargetUserId).toBe('u-member'));
+  });
 });

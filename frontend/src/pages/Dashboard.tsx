@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   AreaChart,
@@ -33,6 +33,8 @@ import { cn } from '@/lib/utils';
 import { useBudgetsVsActuals } from '@/hooks/useBudgetsVsActuals';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { Link, useNavigate } from 'react-router-dom';
+import { Button } from '@/components/ui/button';
+import { AddTransactionModal } from '@/components/transactions/AddTransactionModal';
 
 
 export default function DashboardPage() {
@@ -41,6 +43,11 @@ export default function DashboardPage() {
   const { gradIds, GradDefs } = useChartGradients();
   const navigate = useNavigate();
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
+  const isViewingFamilyWide = isAdmin && !viewUserId;
+  const [quickAddType, setQuickAddType] = useState<'EXPENSE' | 'INCOME' | null>(null);
+  const selectedMemberName = viewUserId
+    ? members.find((m) => m.id === viewUserId)?.name ?? (viewUserId === user?.id ? user.name : undefined)
+    : undefined;
 
   const { data: summary, isLoading: summaryLoading } = useQuery({
     queryKey: ['dashboard', 'summary', selectedFY, viewUserId],
@@ -148,32 +155,50 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       {/* Page header */}
-      <div>
-        <h1 className="text-2xl font-bold">Dashboard</h1>
-        <p className="text-muted-foreground">
-          Financial overview for FY {selectedFY}
-          {isAdmin && viewUserId
-            ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
-            : isAdmin ? ' · All Family' : ''}
-        </p>
-        {isAdmin && (
-          <div className="flex items-center gap-2 mt-3">
-            <label htmlFor="dashboard-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
-            {isMembersError ? (
-              <span className="text-xs text-destructive">Could not load members</span>
-            ) : (
-              <select
-                id="dashboard-member-select"
-                value={viewUserId ?? ''}
-                onChange={(e) => setViewUserId(e.target.value || undefined)}
-                className="rounded-md border bg-background px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-              >
-                <option value="">All Family</option>
-                {members.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
-            )}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Dashboard</h1>
+          <p className="text-muted-foreground">
+            Financial overview for FY {selectedFY}
+            {isAdmin && viewUserId
+              ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
+              : isAdmin ? ' · All Family' : ''}
+          </p>
+          {isAdmin && (
+            <div className="flex items-center gap-2 mt-3">
+              <label htmlFor="dashboard-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+              {isMembersError ? (
+                <span className="text-xs text-destructive">Could not load members</span>
+              ) : (
+                <select
+                  id="dashboard-member-select"
+                  value={viewUserId ?? ''}
+                  onChange={(e) => { setViewUserId(e.target.value || undefined); setQuickAddType(null); }}
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                >
+                  <option value="">All Family</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
+        </div>
+        {/* Hidden (not disabled) when viewing family-wide — matches the established
+            convention every other resource page uses for its own create action
+            (Accounts, Budgets, Gold, Investments, Assets, Insurance, Loans, RealEstate
+            all gate with `{!isViewingFamilyWide && <Button>...}`). */}
+        {!isViewingFamilyWide && (
+          <div className="flex gap-2 shrink-0">
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setQuickAddType('EXPENSE')}>
+              <TrendingDown className="h-3.5 w-3.5 text-rose-600" />
+              Add Expense
+            </Button>
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setQuickAddType('INCOME')}>
+              <TrendingUp className="h-3.5 w-3.5 text-emerald-600" />
+              Add Income
+            </Button>
           </div>
         )}
       </div>
@@ -684,6 +709,22 @@ export default function DashboardPage() {
             </BarChart>
           </ResponsiveContainer>
         </div>
+      )}
+
+      {quickAddType && !isViewingFamilyWide && (
+        // key forces a remount (not just a prop update) if viewUserId or quickAddType
+        // change while the modal is open — react-hook-form only reads defaultValues at
+        // init, and useAccounts(targetUserId) refetching mid-edit would otherwise leave
+        // a stale bankAccountId selected against the PREVIOUS member's account list.
+        <AddTransactionModal
+          key={`${quickAddType}-${viewUserId ?? 'self'}`}
+          onClose={() => setQuickAddType(null)}
+          budgetActuals={budgetActuals ?? []}
+          targetUserId={viewUserId}
+          showAccountOwner={isAdmin}
+          fallbackAccountOwnerName={selectedMemberName}
+          defaultType={quickAddType}
+        />
       )}
     </div>
   );

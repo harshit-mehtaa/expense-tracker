@@ -2,7 +2,7 @@
  * Transactions page — the file this coverage task exists for.
  *
  * This is one of only TWO pages in the app with a real `if (isLoading) return
- * <PageLoader/>` (Transactions.tsx:2504; Reports is the other). That matters: the
+ * <PageLoader/>` (Transactions.tsx:2303; Reports is the other). That matters: the
  * historical hook-order bug (commit aad140d) put a `useMemo` BELOW that early return,
  * so React threw "Rendered more hooks than during the previous render" the instant
  * loading completed. A test that only saw the loaded state, or only the loading state,
@@ -65,7 +65,7 @@ describe('Transactions page — smoke', () => {
   it('goes loading -> loaded (the transition that would catch a conditional hook)', async () => {
     renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers() });
 
-    // Leg 2: the early return at :2504 means the page is genuinely a loader on first
+    // Leg 2: the early return at :2303 means the page is genuinely a loader on first
     // paint. Queried SYNCHRONOUSLY — an async findBy would retry past the transition
     // and find nothing, which is exactly the no-op this bar is designed to avoid.
     expect(screen.getByRole('status')).toBeInTheDocument();
@@ -186,8 +186,9 @@ describe('Transactions page — URL-driven tabs', () => {
 
     // A MEMBER is never "viewing family-wide", so canCreateForView is true and the
     // mount effect's first branch fires.
-    // 'Add Transaction' is both the modal's h2 (:2190) and its submit button (:2275),
-    // so match the heading specifically.
+    // 'Add Transaction' is both the modal's h2 and its submit button
+    // (components/transactions/AddTransactionModal.tsx:130,215), so match the heading
+    // specifically.
     expect(
       await screen.findByRole('heading', { level: 2, name: 'Add Transaction' }),
     ).toBeInTheDocument();
