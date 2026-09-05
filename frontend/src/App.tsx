@@ -4,6 +4,7 @@ import { PageLoader } from '@/components/shared/LoadingSpinner';
 import { AppShell } from '@/components/layout/AppShell';
 import LoginPage from '@/pages/Login';
 import DashboardPage from '@/pages/Dashboard';
+import RemindersPage from '@/pages/Reminders';
 import TransactionsPage from '@/pages/Transactions';
 import AccountsPage from '@/pages/accounts/Accounts';
 import InvestmentsPage from '@/pages/investments/Investments';
@@ -55,6 +56,7 @@ export default function App() {
         }
       >
         <Route index element={<DashboardPage />} />
+        <Route path="reminders" element={<RemindersPage />} />
         <Route path="transactions" element={<TransactionsPage />} />
         <Route path="recurring" element={<Navigate to="/transactions?tab=recurring" replace />} />
         <Route path="accounts/*" element={<AccountsPage />} />

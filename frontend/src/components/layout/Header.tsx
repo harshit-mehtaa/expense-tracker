@@ -1,11 +1,11 @@
-import { Bell, Plus, Moon, Sun, LogOut, ChevronDown } from 'lucide-react';
+import { Bell, Plus, Moon, Sun, LogOut, ChevronDown, ArrowUpRight } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useFY } from '@/contexts/FYContext';
 import { formatFYLabel, listFYOptions } from '@/lib/financialYear';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { fetchUpcomingAlerts } from '@/api/dashboard';
 import { formatINR } from '@/lib/indianFormat';
@@ -124,6 +124,13 @@ export function Header() {
                   ))}
                 </div>
               )}
+              <Link
+                to="/reminders"
+                onClick={() => setShowNotifications(false)}
+                className="flex items-center justify-center gap-1 border-t border-border/60 px-4 py-2.5 text-xs font-medium text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors"
+              >
+                View all <ArrowUpRight className="h-3 w-3" />
+              </Link>
             </div>
           )}
         </div>

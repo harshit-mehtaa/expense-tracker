@@ -17,12 +17,14 @@ import {
   Home,
   Tag,
   Car,
+  Bell,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 
 const NAV_ITEMS = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', exact: true },
+  { to: '/reminders', icon: Bell, label: 'Reminders' },
   { to: '/transactions', icon: Receipt, label: 'Transactions' },
   { to: '/accounts', icon: Building2, label: 'Accounts & Deposits' },
   { to: '/investments', icon: TrendingUp, label: 'Investments' },

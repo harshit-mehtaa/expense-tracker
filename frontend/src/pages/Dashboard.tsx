@@ -323,9 +323,14 @@ export default function DashboardPage() {
       {/* Upcoming alerts */}
       {alerts && alerts.length > 0 && (
         <div className="rounded-xl border border-border/60 bg-card shadow-card p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Bell className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-base font-semibold">Upcoming This Month</h2>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Bell className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-base font-semibold">Upcoming This Month</h2>
+            </div>
+            <Link to="/reminders" className="text-xs text-muted-foreground hover:underline flex items-center gap-1">
+              View all <ArrowUpRight className="h-3 w-3" />
+            </Link>
           </div>
           <div className="space-y-2">
             {alerts.slice(0, 5).map((alert) => (
@@ -343,7 +348,7 @@ export default function DashboardPage() {
                       : `Due in ${alert.daysUntilDue} days`}
                   </p>
                 </div>
-                {alert.amount && (
+                {alert.amount != null && (
                   <INRDisplay amount={alert.amount} short className="text-sm font-semibold" />
                 )}
               </div>

@@ -194,6 +194,14 @@ describe('Dashboard page — smoke', () => {
     expect(screen.getByText(/Due in 3 days/i)).toBeInTheDocument();
   });
 
+  it('the alerts card\'s "View all" link points to /reminders', async () => {
+    renderPage(<DashboardPage />, { route: '/', handlers: dashboardHandlers() });
+    await screen.findByText('Home loan EMI');
+
+    const widget = (await screen.findByText(/Upcoming This Month/i)).closest('div.rounded-xl') as HTMLElement;
+    expect(within(widget).getByRole('link', { name: /View all/i })).toHaveAttribute('href', '/reminders');
+  });
+
   it('renders the FY budget health panel with the exact percentage', async () => {
     renderPage(<DashboardPage />, { route: '/', handlers: dashboardHandlers() });
 
