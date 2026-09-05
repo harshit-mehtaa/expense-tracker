@@ -14,7 +14,7 @@ import { normalizeInvestment, normalizeSIP, normalizeFD, normalizeRD, normalizeG
 
 describe('normalizePolicy', () => {
   const base = {
-    id: 'p1', policyType: 'TERM_LIFE', providerName: 'LIC', policyNumber: 'L1',
+    id: 'p1', userId: 'u1', policyType: 'TERM_LIFE', providerName: 'LIC', policyNumber: 'L1',
     policyName: 'Term Plan', premiumFrequency: 'ANNUALLY', startDate: '2020-01-01',
     is80cEligible: false, is80dEligible: true, isForParents: false,
   };
@@ -54,7 +54,7 @@ describe('normalizePolicy', () => {
 
 describe('normalizeLoan', () => {
   const base = {
-    id: 'l1', lenderName: 'HDFC', loanType: 'HOME', emiDate: 5,
+    id: 'l1', userId: 'u1', lenderName: 'HDFC', loanType: 'HOME', emiDate: 5,
     tenureMonths: 240, disbursementDate: '2020-01-01', endDate: '2040-01-01',
     isTaxDeductible: true, section24bEligible: true,
   };

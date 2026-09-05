@@ -12,7 +12,7 @@ import {
 /** Local-time construction — the helpers use local getters deliberately. */
 const local = (y: number, m: number, d: number, h = 12, min = 0) => new Date(y, m - 1, d, h, min);
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); });
 
 describe('formatDate', () => {
   it('pads a single-digit day AND month — the whole reason this exists', () => {
