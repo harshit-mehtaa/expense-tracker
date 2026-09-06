@@ -31,9 +31,9 @@ import type { TestUser } from './fixtures';
  */
 export function renderPage(
   ui: React.ReactElement,
-  opts: { route?: string; handlers?: RequestHandler[]; user?: TestUser } = {},
+  opts: { route?: string; handlers?: RequestHandler[]; user?: TestUser; gcTime?: number; staleTime?: number } = {},
 ): RenderResult & { queryClient: QueryClient } {
-  const { route = '/', handlers = [], user } = opts;
+  const { route = '/', handlers = [], user, gcTime = 0, staleTime = 0 } = opts;
 
   // Page-specific handlers first so they win over baseHandlers (MSW matches in order).
   server.use(...handlers, ...baseHandlers(user));
@@ -42,9 +42,14 @@ export function renderPage(
   // staleTime 5min and retry<2, so reusing it would leak cache between tests (a later
   // test renders an earlier test's data without hitting its own handlers — an invisible
   // false green) and would make 500-path tests retry past waitFor's 1s default.
+  // gcTime/staleTime are overridable (still 0/0 by default) for the rare test that
+  // specifically needs production-like cache retention to reproduce a real bug — a
+  // gcTime:0 client discards a query's data the instant it becomes unobserved, which
+  // can incidentally mask a bug that only appears when switching between two already-
+  // cached identities (e.g. TaxCentre.test.tsx's cross-member dirty-value regression).
   const queryClient = new QueryClient({
     defaultOptions: {
-      queries: { retry: false, gcTime: 0, staleTime: 0 },
+      queries: { retry: false, gcTime, staleTime },
       mutations: { retry: false },
     },
   });

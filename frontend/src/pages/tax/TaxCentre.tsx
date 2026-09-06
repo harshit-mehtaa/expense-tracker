@@ -44,7 +44,17 @@ const profileSchema = z.object({
   grossSalary: z.coerce.number().min(0).optional(),
   hraReceived: z.coerce.number().min(0).optional(),
   rentPaidMonthly: z.coerce.number().min(0).optional(),
-  cityType: z.enum(['METRO', 'NON_METRO']).optional(),
+  // TaxProfile.cityType is a nullable DB column with no default (schema.prisma), and
+  // its <select> only renders under the OLD regime — a profile first saved under NEW
+  // never registers it, so the server can hand back `null` for a real, valid profile.
+  // A bare `.optional()` rejects null (only undefined), and because zod object parsing
+  // is all-or-nothing that failure blocks the ENTIRE form from saving. Preprocessing
+  // null/'' to undefined (matching the precedent at Investments.tsx's optionalExchange)
+  // fixes that without weakening what the enum itself accepts.
+  cityType: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : v),
+    z.enum(['METRO', 'NON_METRO']).optional(),
+  ),
   deduction80C: z.coerce.number().min(0).optional(),
   deduction80D: z.coerce.number().min(0).optional(),
   deduction80E: z.coerce.number().min(0).optional(),
@@ -55,9 +65,52 @@ const profileSchema = z.object({
   taxPaidAdvance: z.coerce.number().min(0).optional(),
   taxPaidTds: z.coerce.number().min(0).optional(),
   taxPaidSelfAssessment: z.coerce.number().min(0).optional(),
+}).superRefine((val, ctx) => {
+  // Letting cityType stay unset once HRA is being claimed under the OLD regime is
+  // exactly how the silent-null-forever state got created in the first place — the
+  // <select> above has no blank option, so an unset value here now means the user
+  // saw a genuinely blank/unselected control and pressed save without choosing one.
+  const isOldRegime = val.regime !== 'NEW';
+  const claimsHRA = (val.hraReceived ?? 0) > 0 || (val.rentPaidMonthly ?? 0) > 0;
+  if (isOldRegime && claimsHRA && !val.cityType) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['cityType'], message: 'Required to compute the HRA exemption' });
+  }
 });
 
 type ProfileForm = z.infer<typeof profileSchema>;
+
+// The ONLY hydration site in this repo that fed a raw server row straight into a form
+// (`values: profile ?? {}`) — every other edit form null-coalesces per field (see
+// Loans.tsx, ScheduleCG.tsx, Settings.tsx, and this file's own HRA pre-fill below at
+// `profile.cityType ?? 'METRO'`). A `Decimal?`/`String?` Prisma column can legitimately
+// come back `null`, which a bare `.optional()` zod field does not accept as a value —
+// mapping null to undefined here means "leave this field's saved value showing" is
+// expressed the same way whether the value was never entered or was cleared server-side.
+function toProfileFormValues(profile: any): ProfileForm {
+  // Typed as Record<keyof ProfileForm, unknown> (not returned directly as ProfileForm)
+  // so a future field added to profileSchema but forgotten here is a COMPILE ERROR —
+  // every key of ProfileForm must be present in this object literal, or TS rejects it.
+  // Without this, every field being optional on ProfileForm would make an incomplete
+  // literal silently type-check, quietly re-creating this exact class of bug.
+  const mapped: Record<keyof ProfileForm, unknown> = {
+    regime: profile.regime ?? undefined,
+    grossSalary: profile.grossSalary ?? undefined,
+    hraReceived: profile.hraReceived ?? undefined,
+    rentPaidMonthly: profile.rentPaidMonthly ?? undefined,
+    cityType: profile.cityType ?? undefined,
+    deduction80C: profile.deduction80C ?? undefined,
+    deduction80D: profile.deduction80D ?? undefined,
+    deduction80E: profile.deduction80E ?? undefined,
+    deduction24B: profile.deduction24B ?? undefined,
+    deduction80G: profile.deduction80G ?? undefined,
+    nps80Ccd1B: profile.nps80Ccd1B ?? undefined,
+    otherDeductions: profile.otherDeductions ?? undefined,
+    taxPaidAdvance: profile.taxPaidAdvance ?? undefined,
+    taxPaidTds: profile.taxPaidTds ?? undefined,
+    taxPaidSelfAssessment: profile.taxPaidSelfAssessment ?? undefined,
+  };
+  return mapped as ProfileForm;
+}
 
 export default function TaxCentrePage() {
   const { selectedFY, fyOptions } = useFY();
@@ -72,7 +125,9 @@ export default function TaxCentrePage() {
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading } = useMemberSelector();
 
   // For tax, viewUserId = undefined means "my own data" (admin defaults to self, not family aggregate)
-  // The save/edit profile form is only shown when viewing own data
+  // Only changes the display text below (":240,:318") — the edit form itself is NOT
+  // gated by this; an admin can and does save another member's profile (backend
+  // permits the write via resolveWriteUserId, routes/tax.ts).
   const isViewingOther = isAdmin && viewUserId !== undefined;
 
   const { data: summary, isLoading: loadingSummary } = useQuery({
@@ -124,18 +179,31 @@ export default function TaxCentrePage() {
     .filter((l) => l.section24bEligible)
     .reduce((sum, l) => sum + (l.outstandingBalance * l.interestRate) / 100, 0);
 
-  const { register, handleSubmit, watch, setValue } = useForm<ProfileForm>({
+  // NOT resetOptions:{keepDirtyValues:true} — tried it to protect an in-flight edit
+  // from a same-identity background refetch, but it preserves dirty state by FIELD
+  // NAME, not by "whose profile this is": reproduced with a live test that with two
+  // members' profiles already cached, dirtying grossSalary as self and switching the
+  // member selector shows and then POSTS the dirty value onto the OTHER member's
+  // profile — a real, silent, cross-person data-integrity bug. `values` alone (its
+  // default behaviour) resets fully on every change, including an identity switch,
+  // which is the correct behaviour here — the narrow case this was meant to guard
+  // against (a background refetch mid-edit) is far lower-severity than writing one
+  // family member's numbers onto another's permanent tax record.
+  const { register, handleSubmit, watch, setValue, formState, reset } = useForm<ProfileForm>({
     resolver: zodResolver(profileSchema),
-    values: profile ?? {},
+    values: profile ? toProfileFormValues(profile) : {},
   });
 
   const selectedRegime = watch('regime') ?? profile?.regime ?? 'OLD';
 
   const saveMutation = useMutation({
     mutationFn: (data: ProfileForm) => taxApi.saveProfile(selectedFY, data, viewUserId),
-    onSuccess: () => {
+    onSuccess: (saved) => {
       qc.invalidateQueries({ queryKey: ['tax-summary', selectedFY, viewUserId] });
       qc.invalidateQueries({ queryKey: ['tax-profile', selectedFY, viewUserId] });
+      // Adopts the authoritative saved values immediately rather than waiting on the
+      // invalidated query's own refetch round trip.
+      reset(toProfileFormValues(saved));
     },
   });
 
@@ -320,8 +388,8 @@ export default function TaxCentrePage() {
             <form onSubmit={handleSubmit((data) => saveMutation.mutate(data))} className="space-y-4">
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                   <div className="space-y-1 col-span-full md:col-span-1">
-                    <Label required>Tax Regime</Label>
-                    <select {...register('regime')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                    <Label htmlFor="tax-regime" required>Tax Regime</Label>
+                    <select id="tax-regime" {...register('regime')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
                       <option value="OLD">Old Regime — with deductions</option>
                       <option value="NEW">New Regime — lower slabs, fewer deductions</option>
                     </select>
@@ -332,26 +400,30 @@ export default function TaxCentrePage() {
                     </div>
                   )}
                   <div className="space-y-1">
-                    <Label>Gross Salary (₹)</Label>
-                    <Input {...register('grossSalary')} type="number" placeholder="Annual CTC" />
+                    <Label htmlFor="tax-gross-salary">Gross Salary (₹)</Label>
+                    <Input id="tax-gross-salary" {...register('grossSalary')} type="number" placeholder="Annual CTC" />
                   </div>
                   {/* Old-regime-only deductions — hidden when NEW regime selected */}
                   {selectedRegime !== 'NEW' && (
                     <>
                       <div className="space-y-1">
-                        <Label>HRA Received (₹)</Label>
-                        <Input {...register('hraReceived')} type="number" />
+                        <Label htmlFor="tax-hra-received">HRA Received (₹)</Label>
+                        <Input id="tax-hra-received" {...register('hraReceived')} type="number" />
                       </div>
                       <div className="space-y-1">
-                        <Label>Rent Paid / Month (₹)</Label>
-                        <Input {...register('rentPaidMonthly')} type="number" />
+                        <Label htmlFor="tax-rent-paid">Rent Paid / Month (₹)</Label>
+                        <Input id="tax-rent-paid" {...register('rentPaidMonthly')} type="number" />
                       </div>
                       <div className="space-y-1">
-                        <Label required>City Type</Label>
-                        <select {...register('cityType')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                        <Label htmlFor="tax-city-type" required>City Type</Label>
+                        <select id="tax-city-type" {...register('cityType')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
+                          <option value="">Select…</option>
                           <option value="METRO">Metro (Mumbai/Delhi/Kolkata/Chennai)</option>
                           <option value="NON_METRO">Non-Metro</option>
                         </select>
+                        {formState.errors.cityType && (
+                          <p className="text-xs text-destructive">{formState.errors.cityType.message}</p>
+                        )}
                       </div>
                       <div className="space-y-1">
                         <Label>80C — Investments &amp; Ins. (₹)</Label>
@@ -415,6 +487,20 @@ export default function TaxCentrePage() {
                     <Input {...register('taxPaidSelfAssessment')} type="number" />
                   </div>
                 </div>
+                {/* Form-level, not per-field: the field that fails validation can be
+                    hidden (e.g. cityType under NEW regime), so a per-field-only error
+                    has nowhere to render. This is what makes a rejected submit visible
+                    at all — without it, Save silently does nothing. */}
+                {Object.keys(formState.errors).length > 0 && (
+                  <div role="alert" className="rounded-md border border-destructive/50 bg-destructive/5 px-4 py-2.5 text-sm text-destructive">
+                    <p className="font-medium">Fix the following before saving:</p>
+                    <ul className="list-disc list-inside">
+                      {Object.entries(formState.errors).map(([field, err]) => (
+                        <li key={field}>{err?.message?.toString() ?? `${field} is invalid`}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <div className="flex items-center justify-end gap-3">
                   {saveMutation.isSuccess && (
                     <span className="flex items-center gap-1 text-sm text-green-600">

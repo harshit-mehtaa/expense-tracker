@@ -1,36 +1,43 @@
 # Task Progress
 
 ## Status: review
-## Task: Rename Assets-page tabs, move Real Estate under Assets as a third tab
+## Task: Tax summary — tax profile should be editable
 ## Started: 2026-09-06
 
-## Approach: 3-tab /assets page (default "Vehicles & Other", ?tab=gold "Gold",
-?tab=real-estate "Real Estate"). RealEstate.tsx zero-diff (embeds like GoldPage did).
-Tab-1 internal copy updated to match its rename (Add Item/No items added yet/Add-Edit
-Item modal titles) per user decision. Tab machinery generalized to TABS tuple +
-TAB_META + isTab membership guard (NOT object-lookup — verified real Object.prototype
-trap). Sidebar Real Estate item + Home import removed; App.tsx /real-estate -> redirect.
+## Approach: Bugfix (edit capability already existed). Root cause: raw `values: profile
+?? {}` hydration + cityType schema rejecting legitimate server null + zero error
+surfacing. Fixed: hydration mapper (compile-enforced exhaustive via
+Record<keyof ProfileForm,unknown>), cityType preprocess, blank option + superRefine,
+form-level error banner (role=alert), onSuccess reset. NOT resetOptions:
+{keepDirtyValues:true} — tried, found to cause a real cross-member data leak (see below),
+reverted.
 
-## Validation Results: 1021/1021 frontend tests pass (1013 baseline + 8 new: 6 in
-Assets.test.tsx net (added 8, one selector fixed not counted as new)... exact count:
-Assets.test.tsx 21->27 (+6), App.test.tsx +1, Sidebar.test.tsx +1 = +8, 1013+8=1021.
-tsc clean, lint clean (0 warnings), typecheck:tests clean. 3 greps confirm: no stray
-'/real-estate' in production code, RealEstatePage imported only by Assets.tsx (App.tsx
-import removed), 'realestate' query key only in RealEstate.tsx. Coverage: Assets.tsx
-97.53/87.38/81.25/97.53, RealEstate.tsx 77.5/65.93/36.84/77.5 (zero-diff, unchanged),
-Gold.tsx unchanged — all well above the 30/30/15/30 perFile floor. Production build
-succeeds. Verified 2 new tests actually catch their regressions by temporarily
-reintroducing the bug (Object.prototype trap via isTab, modal-reset effect) — both
-failed as expected, then restored.
+## Review: quality FAIL (1 HIGH), adversarial RESILIENT (conflicting verdicts on the
+same finding). Resolved via my OWN fresh reproduction, not by trusting either reviewer:
+wrote a real test with a production-matching QueryClient (staleTime 5min/gcTime 10min,
+matching lib/queryClient.ts) and CONFIRMED the HIGH finding — with both members' profiles
+pre-warmed in cache, an edited-but-unsaved field for self was shown as AND posted to a
+different member after a selector switch. The standard test harness's gcTime:0 masks
+this (adversarial reviewer's refutation used that harness, hence missed it). Fixed by
+removing keepDirtyValues entirely rather than trying to scope it correctly (attempted a
+targeted reset-on-identity-change effect first; it did NOT fully close the leak on
+retest — dropping the option outright did). Added a permanent regression test; extended
+renderPage() with optional gcTime/staleTime overrides to make it testable. Verified the
+fix by reverting and confirming red, then restoring.
 
-## Review: quality PASS_WITH_NOTES, adversarial RESILIENT. No critical/high findings.
-Co-Founder Filter applied — fixed: 3 toast strings + 1 tooltip still said "asset" in
-the renamed "Vehicles & Other" tab (both reviewers independently flagged this), added
-required `Child` field to TAB_META closing a real compile-silent exhaustiveness gap for
-future tabs (verified: removing it now fails tsc), softened a doc-comment contradiction,
-removed an unused MSW handler + added a URL assertion to the real-estate redirect test.
-Deferred (logged in vision.md): 3 independent per-tab member-selector scopes, amplified
-2->3 by this move — pre-existing since the Gold move, not introduced here.
-1021/1021 tests pass post-fix, tsc/lint/build clean.
+Also fixed: architecture.md documented the bug as still present (quoted deleted code) —
+corrected; also restored concrete symbol names an earlier same-session compression had
+dropped (npm run prisma:backfill-cash, authService.createUser, balanceImpactApplied,
+etc.) per adversarial's drive-by finding. Mapper exhaustiveness gap (P3 bug-pattern class)
+closed via Record<keyof ProfileForm,unknown> typing — verified a missing field now fails
+tsc. Added the missing positive-path test (cityType round-trips correctly — no prior test
+would have caught it being silently dropped). Added role="alert" to the banner.
+
+Declined (documented, not blocking): per-field label prefixes in banner messages, dup
+inline+banner cityType error, htmlFor on the other 10 unlabeled fields, backend
+route.tax.ts hardening (adversarial's own reasoning: current strictness is correct).
+
+1028/1028 tests pass post-fix (was 1021 baseline + 7 new), tsc/lint/build clean, coverage
+94.09/76.15/55.55/94.09 well above floor.
 
 ## Steps Completed: analyze, plan, approve, implement, review

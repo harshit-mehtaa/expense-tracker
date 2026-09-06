@@ -21,13 +21,13 @@ backend, React + Vite frontend, TypeScript throughout, run via Docker Compose.
 - `backend/src/services/` — business logic; all Prisma access lives here
 - `backend/src/middleware/` — auth.ts (requireAuth, role check), errorHandler.ts
 - `backend/src/utils/` — AppError, asyncHandler, response, financialYear, indianFormat
-- `backend/prisma/` — schema.prisma (1026 lines), 18 migrations, seed.ts
+- `backend/prisma/` — schema.prisma, 18+ migrations, seed.ts
 - `frontend/src/pages/` — route-level views (accounts/, admin/, budgets/, insurance/,
   investments/, loans/, tax/, transactions/, Dashboard.tsx, Login.tsx, Settings.tsx)
 - `frontend/src/components/` — layout/, shared/, ui/ (shadcn-style primitives)
 - `frontend/src/contexts/` — AuthContext, FYContext, ToastContext
-- `shared/types/index.ts` — DTOs shared frontend/backend via `@shared/*` alias
-- No `controllers/` layer — routes call services directly
+- `shared/types/index.ts` — DTOs shared frontend/backend via `@shared/*` alias. No
+  `controllers/` layer — routes call services directly
 
 ## Build & Run
 - Backend dev: `npm run dev` (ts-node-dev) · build: `npm run build` (tsc) · start: `npm start`
@@ -57,16 +57,14 @@ backend, React + Vite frontend, TypeScript throughout, run via Docker Compose.
   (180 pre-existing sites). `react-hooks/rules-of-hooks` kept as `error` — it caught a
   real conditional-hook bug in `Transactions.tsx` that `tsc` and a green test suite
   both missed (component wasn't rendered by either check).
-- Backend: **no ESLint config or lint script at all.** Quality enforced only via
-  `tsc --noEmit` and tests.
+- Backend: **no ESLint config or lint script at all** — `tsc --noEmit` and tests only.
 - No Prettier anywhere in the repo.
 
 ## CI/CD (.github/workflows/docker-publish.yml)
-Triggers on push/PR to `main`. `quality` job (backend tsc + test:coverage @100%,
-frontend lint+tsc+test)
-gates every other job. On PRs, only `quality` runs. On push to `main`: additionally
-mirrors base images to GHCR, builds+pushes backend/frontend multi-arch images, then
-flips GHCR package visibility to public.
+Triggers on push/PR to `main`. `quality` job (backend tsc + test:coverage @100%, frontend
+lint+tsc+test) gates every other job. On PRs, only `quality` runs. On push to `main`:
+additionally mirrors base images to GHCR, builds+pushes backend/frontend multi-arch
+images, then flips GHCR package visibility to public.
 
 ## Coding Patterns
 - **Error handling**: `AppError` (`backend/src/utils/AppError.ts`) with static factories
@@ -75,13 +73,12 @@ flips GHCR package visibility to public.
   per-field, AppError → its own status, else generic 500 (stack hidden in prod). Async
   routes wrapped in `asyncHandler()`.
 - **API envelope**: `{ success, data, message?, pagination? }` via `utils/response.ts`
-  helpers (sendSuccess, sendPaginated, sendCreated, sendNoContent).
-- **Validation**: Zod schemas inline per route file, reusable preprocess helpers for
-  empty-string coercion.
+  helpers (sendSuccess, sendPaginated, sendCreated, sendNoContent). **Validation**: Zod
+  schemas inline per route file, reusable preprocess helpers for empty-string coercion.
 - **Auth**: JWT + HttpOnly cookies, `requireAuth` middleware sets `req.user`, ADMIN role
   check where needed. Routes mount `router.use(requireAuth)`.
-- **Naming**: route/service files share resource names (accounts.ts ↔ accountService.ts).
-  Route-level tests in `__tests__/routes/*.routes.test.ts`, separate from unit tests.
+- **Naming**: route/service files share resource names (accounts.ts ↔ accountService.ts);
+  route-level tests in `__tests__/routes/*.routes.test.ts`, separate from unit tests.
 
 ## Domain Rules
 - Money is always `Decimal`, never float — `Decimal(15,2)` INR, `Decimal(15,4)`
@@ -98,53 +95,56 @@ flips GHCR package visibility to public.
   raw-SQL partial unique index (`BankAccount_userId_isCashAccount_key`, migration
   `20260906090100`) guarantees at most one row per user has `isCashAccount: true`.
 - Every user has exactly one system-managed cash account (`isCashAccount: true`,
-  `accountType: 'CASH'`), provisioned by `accountService.ensureCashAccount(tx, userId)` —
-  idempotent find-or-create, called from `authService.createUser`, `adminService.createUser`,
-  `prisma/seed.ts`, and self-healingly from `transactionService.createTransaction` itself.
-  Existing pre-feature users need `npm run prisma:backfill-cash` (prisma/backfill-cash-accounts.ts).
-  It cannot be created manually (`accountService.createAccount` rejects `accountType:
-  'CASH'`), deactivated, or have its `accountType` changed (`updateAccount`/`deleteAccount`
-  guards in accountService.ts).
-- `Transaction` (schema.prisma:656-711): `type` enum INCOME/EXPENSE/TRANSFER,
-  `paymentMode` enum incl. CASH (payment-mode only, distinct from `AccountType.CASH`),
-  `bankAccountId` optional and **immutable after creation** (`updateTransaction` cannot
-  change it — only `convertTransactionToTransfer` retrofits TRANSFER legs).
+  `accountType: 'CASH'`), provisioned by idempotent `accountService.ensureCashAccount`
+  (called from `authService.createUser`, `adminService.createUser`, `prisma/seed.ts`, and
+  self-healingly from `createTransaction`); cannot be created manually, deactivated, or
+  retyped (guards in `accountService.ts`). Pre-feature users need
+  `npm run prisma:backfill-cash` (`prisma/backfill-cash-accounts.ts`).
+- `Transaction` (schema.prisma:656-711): `type` INCOME/EXPENSE/TRANSFER, `paymentMode`
+  incl. CASH (distinct from `AccountType.CASH`), `bankAccountId` optional and **immutable
+  after creation** (only `convertTransactionToTransfer` retrofits TRANSFER legs).
 - Balance mutation lives entirely in `transactionService.ts`: single-leg INCOME/EXPENSE
-  updates one account's `currentBalance` only if `bankAccountId` is set — resolved
-  automatically to the user's cash account when `paymentMode==='CASH'` and no
-  `bankAccountId` was given (both EXPENSE and INCOME, not TRANSFER). TRANSFER creates two
-  linked rows via `transferPairId` and atomically decrements source + increments
-  destination inside `prisma.$transaction`. Update and soft-delete both reverse via a
-  shared `balanceDelta()` helper, cascading to the paired TRANSFER leg.
-  `balanceImpactApplied` flag exists for admin-linked legs that shouldn't move money.
-- Double-entry via `transferPairId` is the established idiom for money moving between
-  two of a user's own accounts — a cash withdrawal/deposit is exactly this pattern
-  (frontend labels these legs "Cash Withdrawal"/"Cash Deposit" in `Transactions.tsx`'s
-  `TransferCategoryInfo`, keyed off which side of the pair the cash account is on).
-- KNOWN GAP: `recurringService.ts` also resolves CASH-paymentMode rules to the cash
-  account (fixed 2026-09-06), but the bank-statement import path
-  (`statementImportService.persistParsedStatement`) does NOT yet — see vision.md tech debt.
+  updates one account only if `bankAccountId` is set (auto-resolved to the cash account
+  for `paymentMode==='CASH'`); TRANSFER creates two `transferPairId`-linked rows,
+  atomically debiting/crediting inside one `$transaction`. Update/soft-delete both
+  reverse via shared `balanceDelta()`, cascading to the paired leg (`balanceImpactApplied`
+  flag exists for admin-linked legs that shouldn't move money). Double-entry via
+  `transferPairId` is the established idiom for money moving between a user's own
+  accounts — a cash withdrawal/deposit is exactly this pattern (labeled "Cash
+  Withdrawal"/"Cash Deposit" in `Transactions.tsx`'s `TransferCategoryInfo`).
+- KNOWN GAP: `statementImportService.persistParsedStatement` (bank-statement import)
+  doesn't route CASH the way `recurringService.ts` does — see vision.md tech debt.
 
 ## Investments/Assets Pages (frontend/src/pages/investments/)
-- `Assets.tsx`, `Gold.tsx`, `RealEstate.tsx` live under `pages/investments/`. As of
-  2026-09-06, `/assets` hosts THREE URL-backed tabs: default "Vehicles & Other", `?tab=gold`
-  "Gold", `?tab=real-estate` "Real Estate" (`TABS`/`TAB_META`/`isTab` in `Assets.tsx` —
-  membership guard via `.includes`, NOT an object-key lookup, which would wrongly accept
-  prototype-chain keys like `?tab=constructor`). `GoldPage`/`RealEstatePage` are both
-  unmodified, rendered conditionally as children — neither needs a query `enabled` gate
-  (their hooks don't exist while unmounted) nor a state-reset effect (unmount discards it
-  for free); only `Assets.tsx`'s OWN modal state needs the reset effect, because it lives
-  in the always-mounted parent. `/gold` and `/real-estate` are both `Navigate` redirects
-  inside `AppShell` (auth still gates them). **This tab set is closed** — `realEstateId`/
-  `goldHoldingId` on `Asset` are the only `@unique` identity FKs to a detail tracker;
-  `insurancePolicyId` is a non-unique reference FK and does not qualify (see schema
-  comment on `Asset`). No other page is a candidate.
-- `Asset` (schema.prisma:861-927) is a coarser "what secures a loan" record; its linked-FK
-  detail trackers avoid net-worth double-counting (`Assets.tsx:70` filters them out of the
-  Vehicles & Other grid). `AssetType.GOLD` still exists in the shared `ASSET_TYPES` map
-  (Loans.tsx's inline collateral creator depends on it) but is excluded from the Assets
-  page's OWN creation form (edit-time carve-out for pre-existing unlinked GOLD assets) — an
-  unlinked GOLD Asset created via Loans can still appear on the grid, a documented gap.
-  `assetService.recordAssetSale` rejects selling a linked asset directly. Gold's and
-  RealEstate's APIs/services stay under `/investments` — these frontend moves never
-  touched the backend. `Loans.tsx` queries `['gold', viewUserId]`, same key `Gold.tsx` uses.
+- `/assets` hosts THREE URL-backed tabs (`TABS`/`TAB_META`/`isTab` in `Assets.tsx`,
+  membership guard via `.includes` not object-lookup): default "Vehicles & Other",
+  `?tab=gold` "Gold", `?tab=real-estate` "Real Estate". `GoldPage`/`RealEstatePage` render
+  conditionally as unmodified children (no query `enabled` gate/reset effect needed —
+  unmount discards their state for free; only `Assets.tsx`'s own modal state, which lives
+  in the always-mounted parent, needs one). `/gold`/`/real-estate` are `Navigate`
+  redirects inside `AppShell`. **Tab set is closed**: `realEstateId`/`goldHoldingId` on
+  `Asset` are the only `@unique` identity FKs to a detail tracker (`insurancePolicyId` is
+  a non-unique reference FK, doesn't qualify).
+- `Asset` (schema.prisma:861-927) avoids net-worth double-counting via those FKs
+  (`Assets.tsx:70` filters linked rows out of the Vehicles & Other grid). `AssetType.GOLD`
+  stays in the shared `ASSET_TYPES` map (`Loans.tsx`'s inline collateral creator needs it)
+  but is excluded from Assets' OWN creation form — an unlinked GOLD Asset from Loans can
+  still appear on the grid, a documented gap. Gold/RealEstate APIs stay under
+  `/investments`, untouched by the frontend moves. `Loans.tsx` queries `['gold',
+  viewUserId]`, same key `Gold.tsx` uses.
+
+## Tax Centre (frontend/src/pages/tax/TaxCentre.tsx, backend/src/routes/tax.ts)
+- `TaxProfile` (schema.prisma:961-994, unique per user+fyYear) drives regime/HRA/
+  deductions/tax-paid. Editable form on the default "Tax Summary" tab upserts via
+  `POST /tax/profile` -> `taxService.upsertTaxProfile`. RHF hydrates through
+  `toProfileFormValues()`, which null-coalesces every field — never feed a raw server
+  row into `values` directly; a `Decimal?`/`String?` column returning `null` breaks
+  zod's all-or-nothing object parsing (fixed 2026-09-06 for `cityType`, the one field
+  with an enum-only, non-nullable zod type). `formState.errors` renders both inline and
+  as a form-level banner (the banner is mandatory: a conditionally-unmounted field, e.g.
+  `cityType` under NEW regime, has nowhere to show a per-field error). Do NOT add
+  `resetOptions:{keepDirtyValues:true}` to this form's `useForm` — tried once, reverted:
+  it preserves dirty state by field NAME across an identity change (switching
+  selectedFY/viewUserId), so an unsaved edit for one member can be silently shown as and
+  saved onto a DIFFERENT member's profile once both are cached. `values`'s default full
+  reset on every change is what's actually correct here.

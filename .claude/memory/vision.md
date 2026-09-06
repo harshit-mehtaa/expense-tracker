@@ -9,15 +9,13 @@
 - Thin routes, fat services — routes are validation + delegation, business logic and all
   DB access live in `services/`.
 - Idempotency where users can plausibly repeat an action (bank statement re-import).
-- Prefer a shared source of truth (`shared/types/`) over parallel definitions that can
-  drift between frontend and backend.
+- Prefer a shared source of truth (`shared/types/`) over parallel definitions that drift.
 
 ## Architectural Invariants
 - No Prisma calls in route handlers — routes call a `services/*.ts` function. No raw SQL.
 - Every currency field is `Decimal(15,2)`; rates/NAV/unit prices are `Decimal(15,4)`.
 - Every thrown error is an `AppError`; the central `errorHandler` middleware is the only
-  place that formats an error response.
-- Every async route handler is wrapped in `asyncHandler()`.
+  place that formats an error response. Every async route handler wraps in `asyncHandler()`.
 - Transactions and tax records are soft-deleted (`deletedAt`). **But this is NOT universal:
   investments, FDs, RDs, SIPs, gold, real estate, insurance policies and loans are HARD
   deleted** (8 `.delete({` calls in `services/`). For those, the `*ForAudit` snapshot in
@@ -30,8 +28,8 @@
   `utils/response.ts` — never a hand-built response shape.
 
 ## Operational Notes
-- A failed migration takes the whole stack down: backend `depends_on` migrate completing
-  successfully. Recovery from P3009 is documented and tested in DEPLOY.md.
+- A failed migration takes the whole stack down (backend `depends_on` migrate completing).
+  Recovery from P3009 is documented and tested in DEPLOY.md.
 
 ## Tech Debt Inventory
 - [medium] Both remaining cash-account gaps (import CASH routing, `updateTransaction`
@@ -79,11 +77,13 @@
   Loans' collateral creator) can still render on the Vehicles & Other grid. `/assets`
   now has THREE independent per-tab `viewUserId` scopes (local useState, amplified 2->3
   by this move) — an admin's selection on one tab doesn't carry to another.
-- [low] `''`-coerces-to-0 Zod bug unfixed in RealEstate.tsx, Accounts.tsx, TaxCentre.tsx.
+- [low] `''`-coerces-to-0 Zod bug in RealEstate.tsx, Accounts.tsx, TaxCentre.tsx — only
+  the user-CLEARS-a-field half remains (2026-09-06 fixed the server-null half in
+  TaxCentre via a hydration mapper). Needs backend `.nullable()` + tests in all 3 files;
+  a frontend-only `''->undefined` fix would silently revert an intentional clear.
 
 ## What We Will NOT Do
-- No controllers layer — routes call services directly; adding one would be an
-  unrequested abstraction over a small, working layering.
+- No controllers layer — routes call services directly; an unrequested abstraction.
 - No hand-built response shapes — always go through `utils/response.ts`.
 - No float/JS `number` for money, ever, even "just for display."
 - No NEW hard deletes on financial records (8 already exist — see Invariants; don't add more).

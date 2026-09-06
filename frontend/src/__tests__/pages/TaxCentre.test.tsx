@@ -179,6 +179,225 @@ describe('TaxCentre — smoke', () => {
   });
 });
 
+// ─── Profile editing ────────────────────────────────────────────────────────────
+
+/**
+ * Regression suite for a real, reachable bug: a profile whose `cityType` is `null`
+ * (legitimate — the DB column is nullable with no default, and the <select> that sets
+ * it only renders under the OLD regime, so a first save under NEW regime omits it)
+ * permanently locked the ENTIRE form from saving, with zero visible feedback — zod's
+ * `.optional()` rejects `null` (only `undefined`), object parsing is all-or-nothing,
+ * and the form had no `formState.errors` rendering anywhere. Fixed by hydrating via a
+ * null-coalescing mapper (matching every other edit form in this repo) instead of
+ * feeding the raw server row into RHF, plus a form-level error banner so this class of
+ * failure can no longer be silent for any field, present or future.
+ */
+describe('TaxCentre — profile editing', () => {
+  it('round-trips a real cityType value in the save payload (the positive path)', async () => {
+    // All the other new tests assert absence/rejection of cityType — none of them would
+    // fail if a regression silently dropped cityType from every payload. This is the one
+    // that would.
+    const user = userEvent.setup();
+    const calls: any[] = [];
+    mount([
+      http.post(url('/tax/profile'), async ({ request }) => {
+        calls.push(await request.json());
+        return HttpResponse.json({ data: TAX_PROFILE });
+      }),
+    ]);
+    await screen.findByText('Gross Income Components');
+
+    await user.selectOptions(screen.getByLabelText(/city type/i), 'NON_METRO');
+    await user.click(screen.getByRole('button', { name: /calculate & save/i }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0].cityType).toBe('NON_METRO');
+  });
+
+  it('saves a profile whose cityType is null from the server (the core lockout bug)', async () => {
+    const user = userEvent.setup();
+    const calls: any[] = [];
+    mount([
+      http.get(url('/tax/profile'), () => HttpResponse.json({ data: { ...TAX_PROFILE, cityType: null } })),
+      http.post(url('/tax/profile'), async ({ request }) => {
+        calls.push(await request.json());
+        return HttpResponse.json({ data: { ...TAX_PROFILE, cityType: null } });
+      }),
+    ]);
+    await screen.findByText('Gross Income Components');
+
+    // Genuinely red before the fix: this assertion is on the desired behaviour (the
+    // POST actually firing), not on the absence of one — "no POST fires" would pass
+    // vacuously against the broken code (or for an unrelated reason, e.g. a bad
+    // selector), proving nothing.
+    await user.clear(screen.getByLabelText(/gross salary/i));
+    await user.type(screen.getByLabelText(/gross salary/i), '600000');
+    await user.click(screen.getByRole('button', { name: /calculate & save/i }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).not.toHaveProperty('cityType');
+    expect(calls[0]).toMatchObject({ grossSalary: 600000 });
+  });
+
+  it('still rejects a corrupted enum value from the server, and shows the error banner', async () => {
+    const user = userEvent.setup();
+    const calls: any[] = [];
+    mount([
+      http.get(url('/tax/profile'), () => HttpResponse.json({ data: { ...TAX_PROFILE, cityType: 'PLUTO' } })),
+      http.post(url('/tax/profile'), async ({ request }) => {
+        calls.push(await request.json());
+        return HttpResponse.json({ data: TAX_PROFILE });
+      }),
+    ]);
+    await screen.findByText('Gross Income Components');
+
+    await user.click(screen.getByRole('button', { name: /calculate & save/i }));
+
+    await screen.findByText(/fix the following before saving/i);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('blocks save when HRA is claimed under OLD regime with no city type selected', async () => {
+    const user = userEvent.setup();
+    const calls: any[] = [];
+    mount([
+      // No prior profile — the create path, same as a brand-new user.
+      http.get(url('/tax/profile'), () => HttpResponse.json({ data: null })),
+      http.post(url('/tax/profile'), async ({ request }) => {
+        calls.push(await request.json());
+        return HttpResponse.json({ data: TAX_PROFILE });
+      }),
+    ]);
+    await screen.findByText('Gross Income Components');
+
+    // Regime defaults to OLD (the <select>'s first option); claim HRA without picking
+    // a city — the blank "Select…" option is exactly the state a null-cityType profile
+    // renders as post-fix, so this proves that state can no longer be silently saved.
+    await user.type(screen.getByLabelText(/hra received/i), '20000');
+    await user.click(screen.getByRole('button', { name: /calculate & save/i }));
+
+    // Appears twice by design: inline next to the (visible) City Type field, and in
+    // the form-level banner — the latter is what makes hidden-field failures visible.
+    await waitFor(() => {
+      expect(screen.getAllByText(/required to compute the hra exemption/i).length).toBeGreaterThan(0);
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects a negative gross salary — the reachable case for the new error banner', async () => {
+    const user = userEvent.setup();
+    const calls: any[] = [];
+    mount([
+      http.post(url('/tax/profile'), async ({ request }) => {
+        calls.push(await request.json());
+        return HttpResponse.json({ data: TAX_PROFILE });
+      }),
+    ]);
+    await screen.findByText('Gross Income Components');
+
+    // No native `min` on the input, so a negative number passes the browser and is
+    // only caught by zod — exactly the always-visible field a real user can hit.
+    await user.clear(screen.getByLabelText(/gross salary/i));
+    await user.type(screen.getByLabelText(/gross salary/i), '-5');
+    await user.click(screen.getByRole('button', { name: /calculate & save/i }));
+
+    await screen.findByText(/fix the following before saving/i);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('first save under NEW regime omits cityType, and the resulting profile stays editable', async () => {
+    const user = userEvent.setup();
+    const calls: any[] = [];
+    const first = mount([
+      http.get(url('/tax/profile'), () => HttpResponse.json({ data: null })),
+      http.post(url('/tax/profile'), async ({ request }) => {
+        calls.push(await request.json());
+        return HttpResponse.json({ data: { id: 'prof-new', regime: 'NEW', cityType: null } });
+      }),
+    ]);
+    await screen.findByText('Gross Income Components');
+
+    await user.selectOptions(screen.getByLabelText(/tax regime/i), 'NEW');
+    await user.click(screen.getByRole('button', { name: /calculate & save/i }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).not.toHaveProperty('cityType');
+    first.unmount();
+
+    // The full round trip: re-mount as if the invalidated query refetched the
+    // now-null-cityType profile, and confirm it is still editable (the original bug's
+    // reproduction path, not just its symptom in isolation).
+    const calls2: any[] = [];
+    mount([
+      http.get(url('/tax/profile'), () => HttpResponse.json({ data: { id: 'prof-new', regime: 'NEW', cityType: null } })),
+      http.post(url('/tax/profile'), async ({ request }) => {
+        calls2.push(await request.json());
+        return HttpResponse.json({ data: { id: 'prof-new', regime: 'NEW', cityType: null } });
+      }),
+    ]);
+    await screen.findByText('Gross Income Components');
+    await user.click(screen.getByRole('button', { name: /calculate & save/i }));
+    await waitFor(() => expect(calls2).toHaveLength(1));
+  });
+
+  it('does not leak an unsaved edit onto a different member after switching the selector', async () => {
+    // Regression for a real bug found in review: `resetOptions:{keepDirtyValues:true}`
+    // (tried as a fix for a different, narrower problem) preserves dirty state by FIELD
+    // NAME, not by "whose profile this is" — an edited-but-unsaved grossSalary for self
+    // survived a member-selector switch and was both DISPLAYED as and POSTED for a
+    // different family member, PROVIDED both profiles were already cached (a fresh
+    // gcTime:0 client masks this — the query-key change is then a genuine cache miss,
+    // and the resulting loading transition incidentally clears dirty state as a side
+    // effect). Reproducing it for real needs production-like cache retention; see the
+    // gcTime/staleTime override on renderPage. Fixed by dropping keepDirtyValues —
+    // `values` alone resets fully on every change, including an identity switch.
+    const user = userEvent.setup();
+    const calls: any[] = [];
+    const SELF = { ...TAX_PROFILE, grossSalary: 111111 };
+    const OTHER = { ...TAX_PROFILE, id: 'prof-other', grossSalary: 222222 };
+    renderPage(<TaxCentrePage />, {
+      route: '/tax',
+      gcTime: 10 * 60 * 1000,
+      staleTime: 5 * 60 * 1000,
+      handlers: [
+        http.get(url('/tax/profile'), ({ request }) => {
+          const target = new URL(request.url).searchParams.get('targetUserId');
+          return HttpResponse.json({ data: target === 'u-member' ? OTHER : SELF });
+        }),
+        http.post(url('/tax/profile'), async ({ request }) => {
+          const target = new URL(request.url).searchParams.get('targetUserId');
+          calls.push({ target, body: await request.json() });
+          return HttpResponse.json({ data: SELF });
+        }),
+        ...taxHandlers(),
+      ],
+    });
+    await screen.findByText('Gross Income Components');
+    await waitFor(() => expect(document.querySelector('#tax-member-select')).toBeInTheDocument());
+
+    // Warm BOTH profiles into cache before dirtying anything (switch to the other
+    // member and back), matching the exact conditions that reproduce the bug.
+    await user.selectOptions(document.querySelector('#tax-member-select') as HTMLSelectElement, 'u-member');
+    await waitFor(() => expect(screen.getByLabelText(/gross salary/i)).toHaveValue(222222));
+    await user.selectOptions(document.querySelector('#tax-member-select') as HTMLSelectElement, '');
+    await waitFor(() => expect(screen.getByLabelText(/gross salary/i)).toHaveValue(111111));
+
+    // Dirty self's grossSalary without saving, then switch to the other member.
+    const salaryInput = screen.getByLabelText(/gross salary/i) as HTMLInputElement;
+    await user.clear(salaryInput);
+    await user.type(salaryInput, '999999');
+
+    await user.selectOptions(document.querySelector('#tax-member-select') as HTMLSelectElement, 'u-member');
+    // Must show the OTHER member's real value, not the leaked dirty one.
+    await waitFor(() => expect(screen.getByLabelText(/gross salary/i)).toHaveValue(222222));
+
+    await user.click(screen.getByRole('button', { name: /calculate & save/i }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0].target).toBe('u-member');
+    expect(calls[0].body.grossSalary).toBe(222222);
+  });
+});
+
 // ─── Tab loop ─────────────────────────────────────────────────────────────────
 
 /**
