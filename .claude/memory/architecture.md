@@ -125,3 +125,23 @@ flips GHCR package visibility to public.
 - KNOWN GAP: `recurringService.ts` also resolves CASH-paymentMode rules to the cash
   account (fixed 2026-09-06), but the bank-statement import path
   (`statementImportService.persistParsedStatement`) does NOT yet — see vision.md tech debt.
+
+## Investments/Assets Pages (frontend/src/pages/investments/)
+- `Assets.tsx`, `Gold.tsx`, `RealEstate.tsx` live under `pages/investments/`. As of
+  2026-09-06, Gold is no longer a top-level route/nav item — it's a URL-backed tab on
+  `/assets` (`?tab=gold`, `useSearchParams`, mirrors `Transactions.tsx`'s `?tab=recurring`
+  pattern). `GoldPage` itself is unchanged, just rendered conditionally from `Assets.tsx`.
+  `/gold` is a `Navigate` redirect to `/assets?tab=gold` (`App.tsx`, inside `AppShell` so
+  auth still gates it). `RealEstate.tsx` remains its own top-level route/nav item — an
+  intentionally NOT-addressed asymmetry (see vision.md tech debt).
+- `Asset` (schema.prisma:861-927) is a coarser "what secures a loan" record with optional
+  `realEstateId`/`goldHoldingId` FKs (both `@unique`) linking to the detailed trackers, so
+  net worth doesn't double-count. `Assets.tsx:70` filters OUT any Asset with those FKs set.
+  `AssetType.GOLD` still exists in the shared `ASSET_TYPES` map (Loans.tsx's inline
+  collateral creator depends on it) but is excluded from the Assets page's OWN creation
+  form (edit-time carve-out for pre-existing unlinked GOLD assets) — an unlinked GOLD
+  Asset created via Loans can still appear on the Assets grid, a documented residual gap.
+  `assetService.recordAssetSale` rejects selling a linked asset directly.
+- Gold's API/service stay under `/investments` (`routes/investments.ts:286-333`,
+  `investmentService.ts:537-625`) — the frontend move didn't touch the backend.
+  `Loans.tsx:685-728` queries `['gold', viewUserId]`, same key `Gold.tsx` uses.

@@ -96,6 +96,24 @@ describe('App routing — ProtectedRoute', () => {
   });
 });
 
+describe('App routing — legacy /gold redirect', () => {
+  it('redirects an authenticated visitor from /gold to the Assets page\'s Gold tab', async () => {
+    authState.user = ADMIN_USER;
+    authState.isAuthenticated = true;
+    renderPage(<App />, {
+      route: '/gold',
+      handlers: [
+        ...shellHandlers(),
+        http.get(url('/assets'), () => HttpResponse.json({ data: [] })),
+        http.get(url('/investments/gold'), () => HttpResponse.json({ data: { holdings: [], summary: null } })),
+      ],
+    });
+
+    expect(await screen.findByRole('heading', { level: 1, name: /^assets$/i })).toBeInTheDocument();
+    expect(screen.getByText(/no gold holdings added yet/i)).toBeInTheDocument();
+  });
+});
+
 describe('App routing — AdminRoute', () => {
   it('renders a loader while auth resolves on an admin route', () => {
     authState.isLoading = true;

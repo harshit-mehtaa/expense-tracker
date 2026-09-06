@@ -25,4 +25,17 @@ describe('Sidebar', () => {
       unmount();
     }
   });
+
+  it('has no dedicated Gold nav item — Gold moved under the Assets tab', async () => {
+    for (const user of [ADMIN_USER, MEMBER_USER]) {
+      const { unmount } = renderPage(<Sidebar />, { user });
+      await waitFor(() => expect(screen.getByText('Settings')).toBeInTheDocument());
+
+      expect(screen.queryByRole('link', { name: /^gold$/i })).not.toBeInTheDocument();
+      expect(screen.queryAllByRole('link').map((l) => l.getAttribute('href'))).not.toContain('/gold');
+      expect(screen.getByRole('link', { name: /^assets$/i })).toHaveAttribute('href', '/assets');
+
+      unmount();
+    }
+  });
 });

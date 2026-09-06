@@ -10,12 +10,20 @@ import { describe, it, expect, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
+import { useSearchParams } from 'react-router-dom';
 import AssetsPage from '@/pages/investments/Assets';
 import { renderPage, failOnConsoleError } from '../support/renderPage';
 import { url } from '../support/handlers';
 import { MEMBER_USER } from '../support/fixtures';
 
 failOnConsoleError();
+
+// Asserts the `?tab=` param actually round-trips through the URL, not just component
+// state — the entire reason this uses useSearchParams over useState.
+function SearchParamsProbe() {
+  const [params] = useSearchParams();
+  return <div data-testid="search-params">{params.toString()}</div>;
+}
 
 const VEHICLE = {
   id: 'a-1',
@@ -55,6 +63,127 @@ const HEALTH_POLICY = { id: 'ip-2', userId: 'u-member', policyType: 'HEALTH', pr
 const insuranceHandlers = (policies: unknown[] = [VEHICLE_POLICY, HEALTH_POLICY]) => [
   http.get(url('/insurance'), () => HttpResponse.json({ data: policies })),
 ];
+
+// Legitimately exists: created via the Loans page's inline collateral creator without
+// linking it to a real GoldHolding (Loans.tsx's picker is optional). Renders on this
+// page because Assets.tsx:70 only filters out goldHoldingId-LINKED rows.
+const UNLINKED_GOLD_ASSET = {
+  id: 'a-3',
+  userId: 'u-member',
+  assetType: 'GOLD',
+  name: 'Loose gold coins',
+  value: 150000,
+  realEstateId: null,
+  goldHoldingId: null,
+  loans: [],
+};
+
+const HOLDING = {
+  id: 'g-1',
+  type: 'PHYSICAL',
+  description: 'Wedding bangles',
+  quantityGrams: 20,
+  purchasePricePerGram: 5000,
+  currentPricePerGram: 6250,
+  purchaseDate: '2024-05-01T00:00:00.000Z',
+  notes: 'Locker A',
+};
+
+const goldHandlers = (holdings: unknown[] = [HOLDING]) => [
+  http.get(url('/investments/gold'), () => HttpResponse.json({
+    data: { holdings, summary: { totalGrams: 20, totalCurrentValue: 125000, totalPurchaseValue: 100000, gain: 25000, gainPct: 25 } },
+  })),
+];
+
+describe('Assets page — Gold tab', () => {
+  it('defaults to the assets tab: shows the vehicle grid, not gold holdings', async () => {
+    renderPage(<AssetsPage />, { route: '/assets', handlers: [...assetHandlers(), ...goldHandlers()] });
+    await screen.findByText('Honda City');
+    expect(screen.queryByText(/gold holdings/i)).not.toBeInTheDocument();
+  });
+
+  it('?tab=gold mounts the Gold page', async () => {
+    renderPage(<AssetsPage />, { route: '/assets?tab=gold', handlers: [...assetHandlers(), ...goldHandlers()] });
+    expect(await screen.findByText('Wedding bangles')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add asset/i })).not.toBeInTheDocument();
+  });
+
+  it('clicking the Gold tab swaps the content and the URL', async () => {
+    const user = userEvent.setup();
+    renderPage(<><AssetsPage /><SearchParamsProbe /></>, { route: '/assets', handlers: [...assetHandlers(), ...goldHandlers()] });
+    await screen.findByText('Honda City');
+    expect(screen.getByTestId('search-params')).toHaveTextContent('');
+
+    await user.click(screen.getByRole('button', { name: /^gold$/i }));
+
+    expect(await screen.findByText('Wedding bangles')).toBeInTheDocument();
+    expect(screen.queryByText('Honda City')).not.toBeInTheDocument();
+    expect(screen.getByTestId('search-params')).toHaveTextContent('tab=gold');
+  });
+
+  it('the Add-Asset form offers no GOLD option', async () => {
+    const user = userEvent.setup();
+    renderPage(<AssetsPage />, {
+      route: '/assets', user: MEMBER_USER, handlers: [...assetHandlers(), ...insuranceHandlers(), ...goldHandlers()],
+    });
+    await screen.findByText('Honda City');
+    await user.click(screen.getByRole('button', { name: /add asset/i }));
+
+    const typeSelect = await screen.findByLabelText(/^type/i);
+    const options = Array.from(typeSelect.querySelectorAll('option')).map((o) => o.getAttribute('value'));
+    expect(options).not.toContain('GOLD');
+  });
+
+  it('editing an existing unlinked GOLD asset keeps GOLD selected, not silently rewritten', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    renderPage(<AssetsPage />, {
+      route: '/assets',
+      user: MEMBER_USER,
+      handlers: [
+        ...assetHandlers([VEHICLE, UNLINKED_GOLD_ASSET]),
+        ...insuranceHandlers(),
+        ...goldHandlers(),
+        http.put(url('/assets/a-3'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: { ...UNLINKED_GOLD_ASSET, ...body } });
+        }),
+      ],
+    });
+    await screen.findByText('Loose gold coins');
+    const editButtons = screen.getAllByTitle(/edit asset/i);
+    await user.click(editButtons[1]);
+
+    const typeSelect = (await screen.findByLabelText(/^type/i)) as HTMLSelectElement;
+    expect(typeSelect.value).toBe('GOLD');
+
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(body).toBeDefined());
+    // Must round-trip unchanged — the regression this guards is a silent fallback to
+    // the dropdown's first option (PROPERTY) when GOLD isn't among its <option>s.
+    expect(body.assetType).toBe('GOLD');
+  });
+
+  it('resets modal state on tab switch — does not silently reappear on return', async () => {
+    const user = userEvent.setup();
+    renderPage(<AssetsPage />, {
+      route: '/assets', user: MEMBER_USER, handlers: [...assetHandlers(), ...insuranceHandlers(), ...goldHandlers()],
+    });
+    await screen.findByText('Honda City');
+    await user.click(screen.getByRole('button', { name: /add asset/i }));
+    await screen.findByRole('heading', { name: /add asset/i });
+
+    await user.click(screen.getByRole('button', { name: /^gold$/i }));
+    await screen.findByText('Wedding bangles');
+    expect(screen.queryByRole('heading', { name: /add asset/i })).not.toBeInTheDocument();
+
+    // The round trip is the actual test: the fragment-unmount alone would already hide
+    // the modal on the gold tab, but only the reset effect prevents it reappearing here.
+    await user.click(screen.getByRole('button', { name: /^assets$/i }));
+    await screen.findByText('Honda City');
+    expect(screen.queryByRole('heading', { name: /add asset/i })).not.toBeInTheDocument();
+  });
+});
 
 describe('Assets page — smoke', () => {
   it('renders the page heading', async () => {

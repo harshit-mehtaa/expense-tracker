@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Plus, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, Car, Gem } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,9 +12,11 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
+import { cn } from '@/lib/utils';
 import { toDateInputValue, formatDate } from '@/lib/dateFormat';
 import { assetsApi, ASSET_TYPES, VEHICLE_TYPES, FUEL_TYPES, type Asset } from '@/api/assets';
 import { insuranceApi } from '@/api/insurance';
+import GoldPage from '@/pages/investments/Gold';
 
 /**
  * Vehicles and other unsecured items — the one asset kind with no dedicated page before
@@ -26,6 +29,13 @@ import { insuranceApi } from '@/api/insurance';
  * form doesn't collect), and showing the same property twice with two different edit
  * forms would invite the two records to disagree. Same filter net worth's own asset
  * query already applies, for the same reason.
+ *
+ * Gold lives here as a second, URL-backed tab (`?tab=gold`) rendering the untouched
+ * `GoldPage` component — same pattern as Transactions.tsx's `?tab=recurring`. GoldPage
+ * is not merged into this file: it keeps its own coverage measurement and its own
+ * member-selector/heading, matching the Transactions/RecurringRules precedent, which
+ * accepts two independent member selectors and two <h1>s across the pair of tabs
+ * (see Transactions.test.tsx) rather than forcing one page's identity onto the other.
  */
 
 const assetSchema = z.object({
@@ -50,6 +60,8 @@ const assetSchema = z.object({
 
 type AssetForm = z.infer<typeof assetSchema>;
 
+const EMPTY_ASSET_FORM = { assetType: 'VEHICLE', value: 0, name: '', notes: '' } as const;
+
 export default function AssetsPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -63,14 +75,43 @@ export default function AssetsPage() {
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
   const isViewingFamilyWide = isAdmin && !viewUserId;
 
+  // Explicit equality, not `?? 'assets'`: any value other than the literal 'gold'
+  // (including a bogus/stale query param) must fall back to the assets tab, never
+  // render neither.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get('tab') === 'gold' ? 'gold' : 'assets';
+  function setActiveTab(tab: 'assets' | 'gold') {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (tab === 'assets') next.delete('tab');
+      else next.set('tab', tab);
+      return next;
+    }, { replace: true });
+  }
+
   const { data: allAssets = [] } = useQuery({
     queryKey: ['assets', viewUserId],
     queryFn: () => assetsApi.getAll(viewUserId),
+    enabled: activeTab === 'assets',
   });
   const assets = allAssets.filter((a) => !a.realEstateId && !a.goldHoldingId);
 
-  const form = useForm<AssetForm>({ resolver: zodResolver(assetSchema), defaultValues: { assetType: 'VEHICLE', value: 0 } });
+  const form = useForm<AssetForm>({ resolver: zodResolver(assetSchema), defaultValues: EMPTY_ASSET_FORM });
   const watchedAssetType = form.watch('assetType');
+
+  // Defense-in-depth, not a currently-reachable path: tab switches go through
+  // setActiveTab ({replace:true}), so browser Back can't return here mid-modal, and
+  // the full-screen modal overlays currently obscure the tab bar anyway. Kept so a
+  // future navigation path (or a modal that stops being full-screen) can't leave a
+  // stale/possibly-deleted asset id sitting in state, silently resubmitted later.
+  useEffect(() => {
+    if (activeTab !== 'assets') {
+      setShowForm(false);
+      setEditingAsset(null);
+      setSellingAsset(null);
+      form.reset(EMPTY_ASSET_FORM);
+    }
+  }, [activeTab, form]);
 
   // Who the linked policy must belong to — the asset's actual owner when editing (not
   // necessarily the requester, e.g. an ADMIN editing a member's asset), else whoever the
@@ -104,7 +145,7 @@ export default function AssetsPage() {
     qc.invalidateQueries({ queryKey: ['insurance'] });
   };
 
-  const closeForm = () => { setShowForm(false); setEditingAsset(null); form.reset({ assetType: 'VEHICLE', value: 0, name: '', notes: '' }); };
+  const closeForm = () => { setShowForm(false); setEditingAsset(null); form.reset(EMPTY_ASSET_FORM); };
 
   const createMutation = useMutation({
     mutationFn: (data: AssetForm) => assetsApi.create(data, viewUserId ? { targetUserId: viewUserId } : undefined),
@@ -161,33 +202,61 @@ export default function AssetsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Assets</h1>
-          <p className="text-muted-foreground text-sm mt-1">Vehicles and other items you own outright.</p>
-          {isAdmin && !isMembersLoading && (
-            <div className="flex items-center gap-2 mt-2">
-              <label htmlFor="assets-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
-              {isMembersError ? (
-                <span className="text-xs text-destructive">Could not load members</span>
-              ) : (
-                <select
-                  id="assets-member-select"
-                  value={viewUserId ?? ''}
-                  onChange={(e) => setViewUserId(e.target.value || undefined)}
-                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
-                >
-                  <option value="">All Family</option>
-                  {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
+          {activeTab === 'assets' && (
+            <>
+              <p className="text-muted-foreground text-sm mt-1">Vehicles and other items you own outright.</p>
+              {isAdmin && !isMembersLoading && (
+                <div className="flex items-center gap-2 mt-2">
+                  <label htmlFor="assets-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+                  {isMembersError ? (
+                    <span className="text-xs text-destructive">Could not load members</span>
+                  ) : (
+                    <select
+                      id="assets-member-select"
+                      value={viewUserId ?? ''}
+                      onChange={(e) => setViewUserId(e.target.value || undefined)}
+                      className="rounded-md border bg-background px-3 py-1.5 text-sm"
+                    >
+                      <option value="">All Family</option>
+                      {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    </select>
+                  )}
+                </div>
               )}
-            </div>
+            </>
           )}
         </div>
-        {!isViewingFamilyWide && (
+        {activeTab === 'assets' && !isViewingFamilyWide && (
           <Button size="sm" onClick={() => { setEditingAsset(null); setShowForm(true); }}>
             <Plus className="h-4 w-4 mr-1" /> Add Asset
           </Button>
         )}
       </div>
 
+      {/* Tab switcher — Gold lives here as a second tab instead of its own nav item;
+          GoldPage is untouched, rendered as-is below. */}
+      <div className="flex border-b border-border">
+        {(['assets', 'gold'] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={cn(
+              'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+              activeTab === tab
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30',
+            )}
+          >
+            {tab === 'assets' ? <Car className="h-4 w-4" /> : <Gem className="h-4 w-4" />}
+            {tab === 'assets' ? 'Assets' : 'Gold'}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'gold' && <GoldPage />}
+
+      {activeTab === 'assets' && (
+      <>
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
         {assets.map((a) => (
           <div key={a.id} className="rounded-lg border bg-card p-4 space-y-2">
@@ -311,8 +380,18 @@ export default function AssetsPage() {
             >
               <div className="space-y-1">
                 <Label htmlFor="asset-type" required>Type</Label>
+                {/* GOLD is excluded here — a real gold holding belongs on the Gold tab
+                    (grams/price-per-gram/P&L), and letting this generic form create a
+                    bare GOLD asset would be a strictly worse duplicate record. Kept
+                    selectable only when editing an asset that is ALREADY GOLD (created
+                    via the Loans collateral picker, which still offers the full
+                    ASSET_TYPES map — that flow is unaffected by this exclusion), so an
+                    uncontrolled <select> can't silently fall back to its first option
+                    and rewrite the asset's type on save. */}
                 <select id="asset-type" {...form.register('assetType')} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
-                  {Object.entries(ASSET_TYPES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  {Object.entries(ASSET_TYPES)
+                    .filter(([v]) => v !== 'GOLD' || editingAsset?.assetType === 'GOLD')
+                    .map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
               </div>
               <div className="space-y-1">
@@ -403,6 +482,8 @@ export default function AssetsPage() {
             </form>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

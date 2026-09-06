@@ -55,30 +55,30 @@
 - [medium] 43 raw `prisma.` calls remain in route handlers (`documents.ts` 19,
   `categories.ts` 11, `budgets.ts` 8, one each in `auth.ts`/`reports.ts`/
   `transactions.ts`/`loans.ts`/`health.ts`) — push into owning services when touched.
-- [low] `resolveTargetUserId`'s logic hand-duplicated in `transactions.ts:56`,
-  `loans.ts:40`, `budgets.ts:63` (should call the shared util); only checks `deletedAt`,
-  not `isActive`, everywhere it's used.
+  `resolveTargetUserId` logic is similarly hand-duplicated in `transactions.ts:56`,
+  `loans.ts:40`, `budgets.ts:63` instead of calling the shared util; only checks
+  `deletedAt`, not `isActive`, everywhere it's used.
 - [medium] Import insert loop (`statementImportService.ts`) serial/unbounded in one open
-  `$transaction` — large statement can throw P2028. `createMany`/chunking needs its own plan.
-- [medium] `transactionService.bulkImportTransactions` (~:1171) is DEAD (zero callers) yet
-  fully tested; writes `bankStatementImport.filename` UNSANITIZED. Delete it + its tests.
-- [medium] Frontend ERROR BOUNDARY not wired in (`shared/ErrorBoundary.tsx`, zero
-  importers) — one-line `AppShell.tsx` fix. `PageHeader.tsx` likewise dead.
-- [low] Dashboard snapshot month key uses UTC not IST (misses ~5.5h after midnight);
-  `netWorth` ignores `selectedFY`. Transactions `?add=1` deep link broken for ADMIN only.
-- [medium] `axios.create()` (`api.ts:32`) sets no `timeout` (bug-pattern P2). No backend
-  lint at all — `tsc --noEmit`/tests are the only gates.
-- [low] `accountFormat.ts:46` owner-name branch untested. `spendingByCat` (Reports.tsx)
-  has no isError handling, unlike siblings.
+  `$transaction` — large statement can throw P2028. `transactionService.bulkImportTransactions`
+  (~:1171) is DEAD (zero callers) yet fully tested; writes `filename` UNSANITIZED — delete both.
+- [low] `PageHeader.tsx` is dead (zero importers). `axios.create()` (`api.ts:32`) sets no
+  `timeout` (bug-pattern P2). No backend lint at all — tsc/tests are the only gates.
+- [low] Dashboard snapshot month key uses UTC not IST; `netWorth` ignores `selectedFY`.
+  Transactions `?add=1` deep link broken for ADMIN only. `accountFormat.ts:46` owner-name
+  branch untested; `spendingByCat` (Reports.tsx) has no isError handling, unlike siblings.
+  `Transactions.tsx:2138`'s `?tab=bogus` renders neither tab — `?? 'transactions'`
+  fallback, unlike `Assets.tsx`'s explicit `=== 'gold'` equality for the same pattern.
 - [medium] Primary transaction CRUD mutations (edit/delete/import/bulk/recurring-apply)
   don't invalidate dashboard/profit-and-loss/report-spending/accounts query caches.
 - [low] `CashflowMonth`/`UpcomingAlert`/`useAccounts`/`useCategories`/`selectedMemberName`
-  each duplicated instead of shared. `computeTotalLiabilities` has an undocumented
-  endDate filter excluding overdue loans. `!isViewingFamilyWide` gates create buttons
-  across 10 pages — confirm intended.
-- [low] No modal has role="dialog"/focus-trap/Escape; chart clicks are mouse-only; neither
-  `Sidebar.tsx` `<nav>` has `aria-label` — a11y gaps. `viewUserId` is local useState.
-  BUDGET_ALERT shows the LIMIT as "amount due".
+  each duplicated instead of shared; `computeTotalLiabilities` has an undocumented endDate
+  filter excluding overdue loans; `!isViewingFamilyWide` gates create buttons across 10 pages.
+  No modal has role="dialog"/focus-trap/Escape; neither `Sidebar.tsx` `<nav>` has
+  `aria-label`; `viewUserId` is local useState; BUDGET_ALERT shows the LIMIT as "amount due".
+- [low] Gold moved under `/assets?tab=gold` (2026-09-06); Real Estate stays top-level
+  despite being structurally identical — asymmetric IA, flagged not fixed. An unlinked
+  `assetType:'GOLD'` Asset (from Loans' collateral creator) can still render on the
+  Assets grid alongside the real Gold tab — that other creation path wasn't touched.
 - [low] `''`-coerces-to-0 Zod bug unfixed in RealEstate.tsx, Accounts.tsx, TaxCentre.tsx.
 
 ## What We Will NOT Do
