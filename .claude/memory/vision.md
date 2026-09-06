@@ -13,8 +13,7 @@
   drift between frontend and backend.
 
 ## Architectural Invariants
-- No Prisma calls in route handlers — routes call a `services/*.ts` function.
-- No raw SQL.
+- No Prisma calls in route handlers — routes call a `services/*.ts` function. No raw SQL.
 - Every currency field is `Decimal(15,2)`; rates/NAV/unit prices are `Decimal(15,4)`.
 - Every thrown error is an `AppError`; the central `errorHandler` middleware is the only
   place that formats an error response.
@@ -63,22 +62,23 @@
   (~:1171) is DEAD (zero callers) yet fully tested; writes `filename` UNSANITIZED — delete both.
 - [low] `PageHeader.tsx` is dead (zero importers). `axios.create()` (`api.ts:32`) sets no
   `timeout` (bug-pattern P2). No backend lint at all — tsc/tests are the only gates.
-- [low] Dashboard snapshot month key uses UTC not IST; `netWorth` ignores `selectedFY`.
+  Dashboard snapshot month key uses UTC not IST; `netWorth` ignores `selectedFY`.
   Transactions `?add=1` deep link broken for ADMIN only. `accountFormat.ts:46` owner-name
   branch untested; `spendingByCat` (Reports.tsx) has no isError handling, unlike siblings.
   `Transactions.tsx:2138`'s `?tab=bogus` renders neither tab — `?? 'transactions'`
-  fallback, unlike `Assets.tsx`'s explicit `=== 'gold'` equality for the same pattern.
+  fallback, unlike `Assets.tsx`'s explicit membership guard for the same pattern.
 - [medium] Primary transaction CRUD mutations (edit/delete/import/bulk/recurring-apply)
   don't invalidate dashboard/profit-and-loss/report-spending/accounts query caches.
 - [low] `CashflowMonth`/`UpcomingAlert`/`useAccounts`/`useCategories`/`selectedMemberName`
   each duplicated instead of shared; `computeTotalLiabilities` has an undocumented endDate
   filter excluding overdue loans; `!isViewingFamilyWide` gates create buttons across 10 pages.
   No modal has role="dialog"/focus-trap/Escape; neither `Sidebar.tsx` `<nav>` has
-  `aria-label`; `viewUserId` is local useState; BUDGET_ALERT shows the LIMIT as "amount due".
-- [low] Gold moved under `/assets?tab=gold` (2026-09-06); Real Estate stays top-level
-  despite being structurally identical — asymmetric IA, flagged not fixed. An unlinked
-  `assetType:'GOLD'` Asset (from Loans' collateral creator) can still render on the
-  Assets grid alongside the real Gold tab — that other creation path wasn't touched.
+  `aria-label`; BUDGET_ALERT shows the LIMIT as "amount due".
+- [low] Gold and Real Estate both moved under `/assets` as tabs (2026-09-06, resolving
+  the IA asymmetry previously tracked here). An unlinked `assetType:'GOLD'` Asset (from
+  Loans' collateral creator) can still render on the Vehicles & Other grid. `/assets`
+  now has THREE independent per-tab `viewUserId` scopes (local useState, amplified 2->3
+  by this move) — an admin's selection on one tab doesn't carry to another.
 - [low] `''`-coerces-to-0 Zod bug unfixed in RealEstate.tsx, Accounts.tsx, TaxCentre.tsx.
 
 ## What We Will NOT Do

@@ -14,7 +14,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import React from 'react';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes, useLocation } from 'react-router-dom';
 import { AppShell } from '@/components/layout/AppShell';
 import { http, HttpResponse } from 'msw';
 import { url } from './support/handlers';
@@ -42,6 +42,11 @@ const { renderPage, failOnConsoleError } = await import('./support/renderPage');
 const { default: App } = await import('@/App');
 
 failOnConsoleError();
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location">{location.pathname + location.search}</div>;
+}
 
 beforeEach(() => {
   authState.user = null;
@@ -111,6 +116,27 @@ describe('App routing — legacy /gold redirect', () => {
 
     expect(await screen.findByRole('heading', { level: 1, name: /^assets$/i })).toBeInTheDocument();
     expect(screen.getByText(/no gold holdings added yet/i)).toBeInTheDocument();
+  });
+});
+
+describe('App routing — legacy /real-estate redirect', () => {
+  it('redirects an authenticated visitor from /real-estate to the Assets page\'s Real Estate tab', async () => {
+    authState.user = ADMIN_USER;
+    authState.isAuthenticated = true;
+    renderPage(<><App /><LocationProbe /></>, {
+      route: '/real-estate',
+      handlers: [
+        ...shellHandlers(),
+        http.get(url('/investments/real-estate'), () => HttpResponse.json({ data: { properties: [], summary: null } })),
+      ],
+    });
+
+    expect(await screen.findByRole('heading', { level: 1, name: /^assets$/i })).toBeInTheDocument();
+    // Not just "landed somewhere that renders Assets content" — proves the redirect
+    // target is exactly /assets?tab=real-estate, not e.g. a default-tab landing that
+    // happens to satisfy the h1 assertion.
+    expect(screen.getByTestId('location')).toHaveTextContent('/assets?tab=real-estate');
+    expect(screen.getByText(/no properties added yet/i)).toBeInTheDocument();
   });
 });
 

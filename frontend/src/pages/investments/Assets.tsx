@@ -4,7 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Plus, Pencil, Trash2, Car, Gem } from 'lucide-react';
+import { Plus, Pencil, Trash2, Car, Gem, Home } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -17,25 +18,39 @@ import { toDateInputValue, formatDate } from '@/lib/dateFormat';
 import { assetsApi, ASSET_TYPES, VEHICLE_TYPES, FUEL_TYPES, type Asset } from '@/api/assets';
 import { insuranceApi } from '@/api/insurance';
 import GoldPage from '@/pages/investments/Gold';
+import RealEstatePage from '@/pages/investments/RealEstate';
 
 /**
- * Vehicles and other unsecured items — the one asset kind with no dedicated page before
- * this. `assetsApi` already had full CRUD (it backs the Loans page's collateral picker);
- * this page is the first place to reach it standalone, for something you own outright
- * with no loan attached.
+ * Vehicles and other unsecured items, plus Gold and Real Estate as sibling tabs — the
+ * three kinds of thing an `Asset` row can be. `assetsApi` already had full CRUD (it
+ * backs the Loans page's collateral picker); the "Vehicles & Other" tab is the first
+ * place to reach it standalone, for something you own outright with no loan attached.
  *
- * Deliberately excludes assets that represent a RealEstate or GoldHolding row — those
- * already have their own page (with the fuller purchase-price/date detail this generic
- * form doesn't collect), and showing the same property twice with two different edit
- * forms would invite the two records to disagree. Same filter net worth's own asset
- * query already applies, for the same reason.
+ * Deliberately excludes assets that represent a RealEstate or GoldHolding row from the
+ * "Vehicles & Other" grid — those already have their own tab (with the fuller
+ * purchase-price/date detail this generic form doesn't collect), and showing the same
+ * property twice with two different edit forms would invite the two records to
+ * disagree. Same filter net worth's own asset query already applies, for the same
+ * reason.
  *
- * Gold lives here as a second, URL-backed tab (`?tab=gold`) rendering the untouched
- * `GoldPage` component — same pattern as Transactions.tsx's `?tab=recurring`. GoldPage
- * is not merged into this file: it keeps its own coverage measurement and its own
- * member-selector/heading, matching the Transactions/RecurringRules precedent, which
- * accepts two independent member selectors and two <h1>s across the pair of tabs
- * (see Transactions.test.tsx) rather than forcing one page's identity onto the other.
+ * Gold and Real Estate live here as URL-backed tabs (`?tab=gold` / `?tab=real-estate`)
+ * rendering the untouched `GoldPage`/`RealEstatePage` components — same pattern as
+ * Transactions.tsx's `?tab=recurring`. Neither is merged into this file: both keep
+ * their own coverage measurement and their own member-selector/heading, matching the
+ * Transactions/RecurringRules precedent, which accepts multiple independent member
+ * selectors and multiple <h1>s across a page's tabs (see Transactions.test.tsx) rather
+ * than forcing one tab's identity onto another. Neither child needs an `enabled` gate
+ * on its own queries (unlike this page's own `assets` query below, which lives in the
+ * always-mounted parent) — a conditionally-rendered child's hooks simply don't exist
+ * while unmounted. Neither needs a state-reset effect either: unmounting on tab switch
+ * discards their internal state for free — which is why this page's OWN modal state
+ * (living in the parent, so it survives a tab switch) carries the defensive reset
+ * effect below instead.
+ *
+ * The set of tabs is closed: `realEstateId`/`goldHoldingId` on `Asset` are the only
+ * `@unique` "identity" FKs to a detail tracker (schema.prisma's comment on `Asset`
+ * distinguishes these from `insurancePolicyId`, a non-unique "reference" FK — Insurance
+ * never participates in net worth and does not belong here). No other page qualifies.
  */
 
 const assetSchema = z.object({
@@ -62,6 +77,29 @@ type AssetForm = z.infer<typeof assetSchema>;
 
 const EMPTY_ASSET_FORM = { assetType: 'VEHICLE', value: 0, name: '', notes: '' } as const;
 
+// Tab ids are the frozen URL contract (`?tab=<id>`) — old links/redirects depend on
+// them, so they don't change even when a label does. Labels are free to change.
+const TABS = ['assets', 'gold', 'real-estate'] as const;
+type AssetsTab = (typeof TABS)[number];
+const DEFAULT_TAB: AssetsTab = 'assets';
+// `Child` is required, not optional — a future tab MUST decide it either way. Leaving
+// it optional would let a new tab compile clean, render a clickable button, and show
+// an empty body, the same silent-gap class `isTab` exists to prevent for bad input.
+// `null` means "rendered inline below" (only true for the complex default tab); every
+// other tab's body is exactly `<Child />`, with no separate render guard needed.
+const TAB_META: Record<AssetsTab, { label: string; icon: LucideIcon; Child: (() => JSX.Element) | null }> = {
+  assets: { label: 'Vehicles & Other', icon: Car, Child: null },
+  gold: { label: 'Gold', icon: Gem, Child: GoldPage },
+  'real-estate': { label: 'Real Estate', icon: Home, Child: RealEstatePage },
+};
+// Array membership, NOT an object-key lookup (`TAB_META[raw]`): a plain object's
+// inherited keys ('constructor', 'toString', '__proto__', ...) are truthy lookups too,
+// which would wrongly accept `?tab=constructor` as a valid tab. `TABS.includes` has no
+// prototype chain to fall into.
+function isTab(v: string): v is AssetsTab {
+  return (TABS as readonly string[]).includes(v);
+}
+
 export default function AssetsPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -75,15 +113,18 @@ export default function AssetsPage() {
   const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
   const isViewingFamilyWide = isAdmin && !viewUserId;
 
-  // Explicit equality, not `?? 'assets'`: any value other than the literal 'gold'
-  // (including a bogus/stale query param) must fall back to the assets tab, never
-  // render neither.
+  // Any value not in TABS (missing, bogus, or a stale/hand-typed query param) must
+  // fall back to the default tab, never render neither. Deliberately not normalized
+  // back into the URL — an invalid `?tab=` stays visible in the address bar even
+  // though the UI shows the default tab, which is an acceptable tradeoff against the
+  // extra effect it would take to rewrite the URL out from under the user.
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = searchParams.get('tab') === 'gold' ? 'gold' : 'assets';
-  function setActiveTab(tab: 'assets' | 'gold') {
+  const rawTab = searchParams.get('tab');
+  const activeTab: AssetsTab = rawTab && isTab(rawTab) ? rawTab : DEFAULT_TAB;
+  function setActiveTab(tab: AssetsTab) {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      if (tab === 'assets') next.delete('tab');
+      if (tab === DEFAULT_TAB) next.delete('tab');
       else next.set('tab', tab);
       return next;
     }, { replace: true });
@@ -150,13 +191,13 @@ export default function AssetsPage() {
   const createMutation = useMutation({
     mutationFn: (data: AssetForm) => assetsApi.create(data, viewUserId ? { targetUserId: viewUserId } : undefined),
     onSuccess: () => { invalidate(); closeForm(); },
-    onError: (err: any) => toast({ title: err?.response?.data?.message ?? 'Failed to add asset', variant: 'error' }),
+    onError: (err: any) => toast({ title: err?.response?.data?.message ?? 'Failed to add item', variant: 'error' }),
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: AssetForm }) => assetsApi.update(id, data),
     onSuccess: () => { invalidate(); closeForm(); },
-    onError: (err: any) => toast({ title: err?.response?.data?.message ?? 'Failed to update asset', variant: 'error' }),
+    onError: (err: any) => toast({ title: err?.response?.data?.message ?? 'Failed to update item', variant: 'error' }),
   });
 
   const deleteMutation = useMutation({
@@ -164,7 +205,7 @@ export default function AssetsPage() {
     onSuccess: () => invalidate(),
     // The 409 from securing an active loan is the useful case to surface — without
     // this a blocked delete just silently does nothing.
-    onError: (err: any) => toast({ title: err?.response?.data?.message ?? 'Failed to delete asset', variant: 'error' }),
+    onError: (err: any) => toast({ title: err?.response?.data?.message ?? 'Failed to delete item', variant: 'error' }),
   });
 
   const sellMutation = useMutation({
@@ -197,6 +238,8 @@ export default function AssetsPage() {
     setShowForm(true);
   };
 
+  const ActiveChild = TAB_META[activeTab].Child;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -228,32 +271,35 @@ export default function AssetsPage() {
         </div>
         {activeTab === 'assets' && !isViewingFamilyWide && (
           <Button size="sm" onClick={() => { setEditingAsset(null); setShowForm(true); }}>
-            <Plus className="h-4 w-4 mr-1" /> Add Asset
+            <Plus className="h-4 w-4 mr-1" /> Add Item
           </Button>
         )}
       </div>
 
-      {/* Tab switcher — Gold lives here as a second tab instead of its own nav item;
-          GoldPage is untouched, rendered as-is below. */}
+      {/* Tab switcher — Gold and Real Estate live here instead of their own nav items;
+          GoldPage/RealEstatePage are untouched, rendered as-is below. */}
       <div className="flex border-b border-border">
-        {(['assets', 'gold'] as const).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={cn(
-              'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
-              activeTab === tab
-                ? 'border-primary text-primary'
-                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30',
-            )}
-          >
-            {tab === 'assets' ? <Car className="h-4 w-4" /> : <Gem className="h-4 w-4" />}
-            {tab === 'assets' ? 'Assets' : 'Gold'}
-          </button>
-        ))}
+        {TABS.map((tab) => {
+          const Icon = TAB_META[tab].icon;
+          return (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+                activeTab === tab
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30',
+              )}
+            >
+              <Icon className="h-4 w-4" />
+              {TAB_META[tab].label}
+            </button>
+          );
+        })}
       </div>
 
-      {activeTab === 'gold' && <GoldPage />}
+      {ActiveChild && <ActiveChild />}
 
       {activeTab === 'assets' && (
       <>
@@ -300,7 +346,7 @@ export default function AssetsPage() {
                 )}
               </div>
               <div className="flex items-center gap-1">
-                <Button variant="ghost" size="icon" onClick={() => openEdit(a)} title="Edit asset">
+                <Button variant="ghost" size="icon" onClick={() => openEdit(a)} title="Edit item">
                   <Pencil className="h-4 w-4" />
                 </Button>
                 {!a.soldAt && (
@@ -335,7 +381,7 @@ export default function AssetsPage() {
         ))}
         {assets.length === 0 && (
           <div className="col-span-full text-center py-8 border rounded-lg text-muted-foreground">
-            No assets added yet
+            No items added yet
           </div>
         )}
       </div>
@@ -372,7 +418,7 @@ export default function AssetsPage() {
       {showForm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-background rounded-lg border shadow-xl w-full max-w-md p-6">
-            <h2 className="text-xl font-semibold mb-4">{editingAsset ? 'Edit Asset' : 'Add Asset'}</h2>
+            <h2 className="text-xl font-semibold mb-4">{editingAsset ? 'Edit Item' : 'Add Item'}</h2>
             <form
               onSubmit={form.handleSubmit((data) =>
                 editingAsset ? updateMutation.mutate({ id: editingAsset.id, data }) : createMutation.mutate(data))}

@@ -1104,7 +1104,7 @@ export default function LoansPage() {
 
                         {newAsset.assetType === 'PROPERTY' && (
                           <p className="text-xs text-muted-foreground">
-                            Already added on the Real Estate page? It's already listed in
+                            Already added on the Real Estate tab? It's already listed in
                             "Secured Against" above — only add one here if this property
                             isn't tracked there, or you'll end up with a duplicate that
                             counts twice toward net worth.

@@ -95,6 +95,24 @@ const goldHandlers = (holdings: unknown[] = [HOLDING]) => [
   })),
 ];
 
+const PROPERTY = {
+  id: 're-1',
+  propertyName: 'Koramangala Flat',
+  location: 'Bengaluru',
+  propertyType: 'RESIDENTIAL',
+  purchasePrice: 5000000,
+  currentValue: 8000000,
+  purchaseDate: '2020-06-01T00:00:00.000Z',
+  currentValueShare: 8000000,
+  owners: [{ userId: 'u-member', userName: 'Member', sharePercent: 100 }],
+};
+
+const reHandlers = (properties: unknown[] = [PROPERTY]) => [
+  http.get(url('/investments/real-estate'), () => HttpResponse.json({
+    data: { properties, summary: { totalCurrent: 8000000, totalPurchase: 5000000, unrealisedGain: 3000000, totalMonthlyRental: 0 } },
+  })),
+];
+
 describe('Assets page — Gold tab', () => {
   it('defaults to the assets tab: shows the vehicle grid, not gold holdings', async () => {
     renderPage(<AssetsPage />, { route: '/assets', handlers: [...assetHandlers(), ...goldHandlers()] });
@@ -105,7 +123,7 @@ describe('Assets page — Gold tab', () => {
   it('?tab=gold mounts the Gold page', async () => {
     renderPage(<AssetsPage />, { route: '/assets?tab=gold', handlers: [...assetHandlers(), ...goldHandlers()] });
     expect(await screen.findByText('Wedding bangles')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /add asset/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add item/i })).not.toBeInTheDocument();
   });
 
   it('clicking the Gold tab swaps the content and the URL', async () => {
@@ -127,7 +145,7 @@ describe('Assets page — Gold tab', () => {
       route: '/assets', user: MEMBER_USER, handlers: [...assetHandlers(), ...insuranceHandlers(), ...goldHandlers()],
     });
     await screen.findByText('Honda City');
-    await user.click(screen.getByRole('button', { name: /add asset/i }));
+    await user.click(screen.getByRole('button', { name: /add item/i }));
 
     const typeSelect = await screen.findByLabelText(/^type/i);
     const options = Array.from(typeSelect.querySelectorAll('option')).map((o) => o.getAttribute('value'));
@@ -151,7 +169,7 @@ describe('Assets page — Gold tab', () => {
       ],
     });
     await screen.findByText('Loose gold coins');
-    const editButtons = screen.getAllByTitle(/edit asset/i);
+    const editButtons = screen.getAllByTitle(/edit item/i);
     await user.click(editButtons[1]);
 
     const typeSelect = (await screen.findByLabelText(/^type/i)) as HTMLSelectElement;
@@ -170,18 +188,87 @@ describe('Assets page — Gold tab', () => {
       route: '/assets', user: MEMBER_USER, handlers: [...assetHandlers(), ...insuranceHandlers(), ...goldHandlers()],
     });
     await screen.findByText('Honda City');
-    await user.click(screen.getByRole('button', { name: /add asset/i }));
-    await screen.findByRole('heading', { name: /add asset/i });
+    await user.click(screen.getByRole('button', { name: /add item/i }));
+    await screen.findByRole('heading', { name: /add item/i });
 
     await user.click(screen.getByRole('button', { name: /^gold$/i }));
     await screen.findByText('Wedding bangles');
-    expect(screen.queryByRole('heading', { name: /add asset/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /add item/i })).not.toBeInTheDocument();
 
     // The round trip is the actual test: the fragment-unmount alone would already hide
     // the modal on the gold tab, but only the reset effect prevents it reappearing here.
-    await user.click(screen.getByRole('button', { name: /^assets$/i }));
+    await user.click(screen.getByRole('button', { name: /vehicles & other/i }));
     await screen.findByText('Honda City');
-    expect(screen.queryByRole('heading', { name: /add asset/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /add item/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('Assets page — Real Estate tab', () => {
+  it('?tab=real-estate mounts the property grid', async () => {
+    renderPage(<AssetsPage />, { route: '/assets?tab=real-estate', handlers: [...assetHandlers(), ...reHandlers()] });
+    expect(await screen.findByText('Koramangala Flat')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add item/i })).not.toBeInTheDocument();
+  });
+
+  it('does not fetch /assets while landing directly on the real-estate tab', async () => {
+    // Deliberately NO assetHandlers() — under MSW onUnhandledRequest:'error', a stray
+    // GET /assets while landing directly on the real-estate tab would fail the test.
+    // This is the actual proof of the `enabled: activeTab === 'assets'` gate, not just
+    // a passing render that could hide a broken gate behind a registered handler.
+    renderPage(<><AssetsPage /><SearchParamsProbe /></>, { route: '/assets?tab=real-estate', handlers: reHandlers() });
+
+    expect(await screen.findByText('Koramangala Flat')).toBeInTheDocument();
+    expect(screen.getByTestId('search-params')).toHaveTextContent('tab=real-estate');
+  });
+
+  it('from the Gold tab, clicking Real Estate swaps the URL param rather than appending it', async () => {
+    const user = userEvent.setup();
+    renderPage(<><AssetsPage /><SearchParamsProbe /></>, {
+      route: '/assets?tab=gold', handlers: [...assetHandlers(), ...goldHandlers(), ...reHandlers()],
+    });
+    await screen.findByText('Wedding bangles');
+
+    await user.click(screen.getByRole('button', { name: /real estate/i }));
+
+    expect(await screen.findByText('Koramangala Flat')).toBeInTheDocument();
+    expect(screen.queryByText('Wedding bangles')).not.toBeInTheDocument();
+    expect(screen.getByTestId('search-params')).toHaveTextContent('tab=real-estate');
+    // The bug this catches: appending instead of replacing would leave the stale
+    // tab=gold param alongside the new one.
+    expect(screen.getByTestId('search-params').textContent).not.toContain('gold');
+  });
+
+  it('an unknown ?tab value falls back to Vehicles & Other, never a blank page', async () => {
+    renderPage(<AssetsPage />, { route: '/assets?tab=bogus', handlers: [...assetHandlers(), ...goldHandlers(), ...reHandlers()] });
+    await screen.findByText('Honda City');
+    expect(screen.queryByText('Koramangala Flat')).not.toBeInTheDocument();
+    expect(screen.queryByText(/gold holdings/i)).not.toBeInTheDocument();
+  });
+
+  it('?tab=constructor also falls back — an object-key lookup would wrongly accept it', async () => {
+    // The reason the tab guard is TABS.includes(v), not TAB_META[v]: a plain object's
+    // inherited keys (constructor, toString, __proto__, ...) are truthy lookups too.
+    renderPage(<AssetsPage />, { route: '/assets?tab=constructor', handlers: [...assetHandlers(), ...goldHandlers(), ...reHandlers()] });
+    await screen.findByText('Honda City');
+    expect(screen.queryByText('Koramangala Flat')).not.toBeInTheDocument();
+    expect(screen.queryByText(/gold holdings/i)).not.toBeInTheDocument();
+  });
+
+  it('discards RealEstatePage modal state on tab switch — unmount, not a reset effect', async () => {
+    const user = userEvent.setup();
+    renderPage(<AssetsPage />, {
+      route: '/assets?tab=real-estate', user: MEMBER_USER, handlers: [...assetHandlers(), ...reHandlers()],
+    });
+    await screen.findByText('Koramangala Flat');
+    await user.click(screen.getByRole('button', { name: /add property/i }));
+    await screen.findByRole('heading', { name: /add property/i });
+
+    await user.click(screen.getByRole('button', { name: /vehicles & other/i }));
+    await screen.findByText('Honda City');
+
+    await user.click(screen.getByRole('button', { name: /real estate/i }));
+    await screen.findByText('Koramangala Flat');
+    expect(screen.queryByRole('heading', { name: /add property/i })).not.toBeInTheDocument();
   });
 });
 
@@ -200,7 +287,7 @@ describe('Assets page — smoke', () => {
   it('shows the empty state when there are no unsecured assets', async () => {
     renderPage(<AssetsPage />, { route: '/assets', handlers: assetHandlers([LINKED_PROPERTY_ASSET]) });
     await waitFor(() => {
-      expect(screen.getByText(/no assets added yet/i)).toBeInTheDocument();
+      expect(screen.getByText(/no items added yet/i)).toBeInTheDocument();
     });
   });
 
@@ -221,7 +308,7 @@ describe('Assets page — smoke', () => {
     });
     await screen.findByText('Honda City');
 
-    await user.click(screen.getByRole('button', { name: /add asset/i }));
+    await user.click(screen.getByRole('button', { name: /add item/i }));
     await user.type(await screen.findByLabelText(/^name/i), 'Royal Enfield');
     await user.type(screen.getByLabelText(/current value/i), '250000');
     // Defaults to VEHICLE (see AssetsPage's defaultValues), which now requires a
@@ -250,7 +337,7 @@ describe('Assets page — smoke', () => {
     await screen.findByText('Honda City');
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
-    await user.click(screen.getByRole('button', { name: /add asset/i }));
+    await user.click(screen.getByRole('button', { name: /add item/i }));
     await user.type(await screen.findByLabelText(/^name/i), 'Royal Enfield');
     await user.type(screen.getByLabelText(/current value/i), '250000');
     await user.selectOptions(screen.getByLabelText(/vehicle type/i), 'TWO_WHEELER');
@@ -278,7 +365,7 @@ describe('Assets page — smoke', () => {
     });
     await screen.findByText('Honda City');
 
-    await user.click(screen.getByRole('button', { name: /add asset/i }));
+    await user.click(screen.getByRole('button', { name: /add item/i }));
     await user.type(await screen.findByLabelText(/^name/i), 'Royal Enfield');
     await user.type(screen.getByLabelText(/current value/i), '250000');
     await user.selectOptions(screen.getByLabelText(/vehicle type/i), 'TWO_WHEELER');
@@ -300,7 +387,7 @@ describe('Assets page — smoke', () => {
     });
     await screen.findByText('Honda City');
 
-    await user.click(screen.getByRole('button', { name: /add asset/i }));
+    await user.click(screen.getByRole('button', { name: /add item/i }));
     await user.type(await screen.findByLabelText(/^name/i), 'Royal Enfield');
     await user.click(screen.getByRole('button', { name: /^add$/i }));
 
@@ -336,7 +423,7 @@ describe('Assets page — smoke', () => {
     });
     await screen.findByText('Honda City');
 
-    await user.click(screen.getByTitle(/edit asset/i));
+    await user.click(screen.getByTitle(/edit item/i));
 
     const dateInput = (await screen.findByLabelText(/purchase date/i)) as HTMLInputElement;
     expect(dateInput.value).toBe('2022-05-01');
@@ -372,7 +459,7 @@ describe('Assets page — smoke', () => {
       ],
     });
     await screen.findByText('Honda City');
-    await user.click(screen.getByTitle(/edit asset/i));
+    await user.click(screen.getByTitle(/edit item/i));
 
     const insuranceSelect = (await screen.findByLabelText(/insurance policy/i)) as HTMLSelectElement;
     // The regression this guards: the picker's options arrive from an async query gated
@@ -403,7 +490,7 @@ describe('Assets page — smoke', () => {
       ],
     });
     await screen.findByText('Honda City');
-    await user.click(screen.getByTitle(/edit asset/i));
+    await user.click(screen.getByTitle(/edit item/i));
 
     const dateInput = (await screen.findByLabelText(/purchase date/i)) as HTMLInputElement;
     await user.clear(dateInput);

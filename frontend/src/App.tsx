@@ -17,7 +17,6 @@ import FamilyMembersPage from '@/pages/admin/FamilyMembers';
 import ReportsPage from '@/pages/admin/Reports';
 import CategoriesPage from '@/pages/admin/Categories';
 import SettingsPage from '@/pages/Settings';
-import RealEstatePage from '@/pages/investments/RealEstate';
 import AssetsPage from '@/pages/investments/Assets';
 import ChangePasswordPage from '@/pages/ChangePassword';
 
@@ -61,7 +60,7 @@ export default function App() {
         <Route path="accounts/*" element={<AccountsPage />} />
         <Route path="investments/*" element={<InvestmentsPage />} />
         <Route path="gold" element={<Navigate to="/assets?tab=gold" replace />} />
-        <Route path="real-estate" element={<RealEstatePage />} />
+        <Route path="real-estate" element={<Navigate to="/assets?tab=real-estate" replace />} />
         <Route path="assets" element={<AssetsPage />} />
         <Route path="insurance" element={<InsurancePage />} />
         <Route path="budgets" element={<BudgetsPage />} />

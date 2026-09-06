@@ -11,10 +11,9 @@ backend, React + Vite frontend, TypeScript throughout, run via Docker Compose.
 - Auth: jsonwebtoken 9.0.2 + bcryptjs 2.4.3, cookie-parser (JWT via HttpOnly cookies)
 - Imports: multer + papaparse (CSV) + pdf-parse (PDF bank statements)
 - Frontend: React 18.2.0, Vite 5.1.0, react-router-dom 6.22.1
-- Data/forms: @tanstack/react-query 5.20.0, @tanstack/react-table 8.13.0,
-  react-hook-form 7.50.1 + zod resolvers
-- UI: Radix primitives, tailwindcss 3.4.1, lucide-react, recharts, cmdk
-- Package manager: npm (package-lock.json both sides; CI uses `npm ci`)
+- Data/forms: @tanstack/react-query 5.20.0, @tanstack/react-table 8.13.0, react-hook-form
+  7.50.1 + zod resolvers. UI: Radix primitives, tailwindcss 3.4.1, lucide-react, recharts,
+  cmdk. Package manager: npm (package-lock.json both sides; CI uses `npm ci`)
 
 ## Directory Structure
 - `backend/src/index.ts` — Express bootstrap; exports `app` for supertest
@@ -128,20 +127,24 @@ flips GHCR package visibility to public.
 
 ## Investments/Assets Pages (frontend/src/pages/investments/)
 - `Assets.tsx`, `Gold.tsx`, `RealEstate.tsx` live under `pages/investments/`. As of
-  2026-09-06, Gold is no longer a top-level route/nav item — it's a URL-backed tab on
-  `/assets` (`?tab=gold`, `useSearchParams`, mirrors `Transactions.tsx`'s `?tab=recurring`
-  pattern). `GoldPage` itself is unchanged, just rendered conditionally from `Assets.tsx`.
-  `/gold` is a `Navigate` redirect to `/assets?tab=gold` (`App.tsx`, inside `AppShell` so
-  auth still gates it). `RealEstate.tsx` remains its own top-level route/nav item — an
-  intentionally NOT-addressed asymmetry (see vision.md tech debt).
-- `Asset` (schema.prisma:861-927) is a coarser "what secures a loan" record with optional
-  `realEstateId`/`goldHoldingId` FKs (both `@unique`) linking to the detailed trackers, so
-  net worth doesn't double-count. `Assets.tsx:70` filters OUT any Asset with those FKs set.
-  `AssetType.GOLD` still exists in the shared `ASSET_TYPES` map (Loans.tsx's inline
-  collateral creator depends on it) but is excluded from the Assets page's OWN creation
-  form (edit-time carve-out for pre-existing unlinked GOLD assets) — an unlinked GOLD
-  Asset created via Loans can still appear on the Assets grid, a documented residual gap.
-  `assetService.recordAssetSale` rejects selling a linked asset directly.
-- Gold's API/service stay under `/investments` (`routes/investments.ts:286-333`,
-  `investmentService.ts:537-625`) — the frontend move didn't touch the backend.
-  `Loans.tsx:685-728` queries `['gold', viewUserId]`, same key `Gold.tsx` uses.
+  2026-09-06, `/assets` hosts THREE URL-backed tabs: default "Vehicles & Other", `?tab=gold`
+  "Gold", `?tab=real-estate` "Real Estate" (`TABS`/`TAB_META`/`isTab` in `Assets.tsx` —
+  membership guard via `.includes`, NOT an object-key lookup, which would wrongly accept
+  prototype-chain keys like `?tab=constructor`). `GoldPage`/`RealEstatePage` are both
+  unmodified, rendered conditionally as children — neither needs a query `enabled` gate
+  (their hooks don't exist while unmounted) nor a state-reset effect (unmount discards it
+  for free); only `Assets.tsx`'s OWN modal state needs the reset effect, because it lives
+  in the always-mounted parent. `/gold` and `/real-estate` are both `Navigate` redirects
+  inside `AppShell` (auth still gates them). **This tab set is closed** — `realEstateId`/
+  `goldHoldingId` on `Asset` are the only `@unique` identity FKs to a detail tracker;
+  `insurancePolicyId` is a non-unique reference FK and does not qualify (see schema
+  comment on `Asset`). No other page is a candidate.
+- `Asset` (schema.prisma:861-927) is a coarser "what secures a loan" record; its linked-FK
+  detail trackers avoid net-worth double-counting (`Assets.tsx:70` filters them out of the
+  Vehicles & Other grid). `AssetType.GOLD` still exists in the shared `ASSET_TYPES` map
+  (Loans.tsx's inline collateral creator depends on it) but is excluded from the Assets
+  page's OWN creation form (edit-time carve-out for pre-existing unlinked GOLD assets) — an
+  unlinked GOLD Asset created via Loans can still appear on the grid, a documented gap.
+  `assetService.recordAssetSale` rejects selling a linked asset directly. Gold's and
+  RealEstate's APIs/services stay under `/investments` — these frontend moves never
+  touched the backend. `Loans.tsx` queries `['gold', viewUserId]`, same key `Gold.tsx` uses.
