@@ -44,6 +44,8 @@ const ADMIN_NAV_ITEMS = [
   { to: '/family', icon: Users, label: 'Family Members' },
 ];
 
+// Renders an <li>; must be used inside a <ul>/<ol> or the browser default list
+// marker (disc) shows up, since Tailwind preflight only resets list-style on ul/ol.
 function NavItem({ to, icon: Icon, label, exact }: { to: string; icon: ElementType; label: string; exact?: boolean }) {
   return (
     <li>
@@ -110,7 +112,9 @@ export function Sidebar() {
 
       {/* Bottom: Settings */}
       <div className="border-t border-border/60 p-3">
-        <NavItem to="/settings" icon={Settings} label="Settings" />
+        <ul className="space-y-0.5">
+          <NavItem to="/settings" icon={Settings} label="Settings" />
+        </ul>
       </div>
     </aside>
   );

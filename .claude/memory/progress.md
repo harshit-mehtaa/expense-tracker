@@ -1,9 +1,12 @@
 # Task Progress
 
 ## Status: idle
-## Last Task: Diagnosed and fixed "/api/accounts erroring out" — pending Prisma
-## migrations (20260906090000_cash_account_type, 20260906090100_cash_account_flag)
-## had never been applied to the local dev database. Applied via `prisma migrate
-## deploy`; no code changes needed (migrations were already committed in f6d968b).
+## Last Task: Removed the stray bullet marker next to "Settings" in the sidebar nav.
+## Root cause: NavItem's <li> root rendered outside any <ul>/<ol>, so it kept the
+## browser's default disc marker instead of picking up Tailwind's list-style reset
+## (preflight resets ul/ol only). Fixed by wrapping in <ul>, documented NavItem's
+## list-parent contract, added a regression test (Sidebar.test.tsx). Reviewed
+## PASS (quality: PASS_WITH_NOTES, adversarial: RESILIENT); a11y nav-label gap
+## logged as deferred tech debt in vision.md.
 ## Last Completed: 2026-09-06
 ## Steps Completed: all

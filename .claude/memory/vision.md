@@ -76,8 +76,9 @@
   each duplicated instead of shared. `computeTotalLiabilities` has an undocumented
   endDate filter excluding overdue loans. `!isViewingFamilyWide` gates create buttons
   across 10 pages — confirm intended.
-- [low] No modal has role="dialog"/focus-trap/Escape; chart clicks are mouse-only — a11y
-  gap. `viewUserId` is local useState. BUDGET_ALERT shows the LIMIT as "amount due".
+- [low] No modal has role="dialog"/focus-trap/Escape; chart clicks are mouse-only; neither
+  `Sidebar.tsx` `<nav>` has `aria-label` — a11y gaps. `viewUserId` is local useState.
+  BUDGET_ALERT shows the LIMIT as "amount due".
 - [low] `''`-coerces-to-0 Zod bug unfixed in RealEstate.tsx, Accounts.tsx, TaxCentre.tsx.
 
 ## What We Will NOT Do
