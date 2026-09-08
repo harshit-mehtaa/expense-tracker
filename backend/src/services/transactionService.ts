@@ -1197,7 +1197,11 @@ export async function softDeleteTransaction(
 
     const deleted = await ptx.transaction.update({
       where: { id: transactionId },
-      data: { deletedAt: new Date() },
+      // Free the importHash slot on delete: @@unique([importHash]) is enforced even for
+      // soft-deleted rows (Prisma/Postgres only treat NULL as non-conflicting), so
+      // without this a re-import of the same statement after deleting this row would
+      // hard-fail the whole batch on the unique constraint instead of recreating it.
+      data: { deletedAt: new Date(), importHash: original.importHash ? null : undefined },
     });
 
     // Reverse the balance impact of this transaction
@@ -1215,7 +1219,10 @@ export async function softDeleteTransaction(
         where: { transferPairId: original.transferPairId, id: { not: transactionId }, deletedAt: null },
       });
       if (paired) {
-        await ptx.transaction.update({ where: { id: paired.id }, data: { deletedAt: new Date() } });
+        await ptx.transaction.update({
+          where: { id: paired.id },
+          data: { deletedAt: new Date(), importHash: paired.importHash ? null : undefined },
+        });
         if (paired.bankAccountId && paired.balanceImpactApplied !== false) {
           const pairedReversal = -balanceDelta(paired.type, Number(paired.amount));
           await ptx.bankAccount.update({

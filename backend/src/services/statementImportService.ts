@@ -66,16 +66,30 @@ export async function persistParsedStatement(args: PersistArgs) {
     hash: makeImportHash(tx.date, tx.amount, tx.type, tx.description, scopeId),
   }));
 
-  // One query for every hash rather than one per row.
+  // One query for every hash rather than one per row. deletedAt: null so a soft-deleted
+  // row's hash doesn't permanently block re-importing that same row — softDeleteTransaction
+  // nulls a deleted row's own importHash for the same reason (frees the DB-level
+  // @@unique([importHash]) slot; Prisma/Postgres only treat NULL as non-conflicting).
   const hashes = txsWithHash.map((t) => t.hash);
   const existingHashes = new Set(
     (await prisma.transaction.findMany({
-      where: { importHash: { in: hashes } },
+      where: { importHash: { in: hashes }, deletedAt: null },
       select: { importHash: true },
     })).map((r) => r.importHash!),
   );
 
-  const toCreate = txsWithHash.filter((t) => !existingHashes.has(t.hash));
+  // Dedup against the DB AND against hashes already accepted earlier in this same
+  // batch — two identical rows in one statement (same date/amount/type/description)
+  // previously both survived into toCreate and collided on insert (P2002), hard-failing
+  // the whole import with a deterministic, unrecoverable "please try again". Counting
+  // the second occurrence as a duplicate here (rather than letting it reach the DB)
+  // keeps `imported + duplicatesSkipped === rowCount` true with no separate bookkeeping.
+  const seenInBatch = new Set<string>();
+  const toCreate = txsWithHash.filter((t) => {
+    if (existingHashes.has(t.hash) || seenInBatch.has(t.hash)) return false;
+    seenInBatch.add(t.hash);
+    return true;
+  });
   const duplicatesSkipped = txsWithHash.length - toCreate.length;
 
   let syntheticCashLegsCreated = 0;
@@ -182,11 +196,9 @@ export async function persistParsedStatement(args: PersistArgs) {
       // table with no ordering dependency between them, so there's no reason to pay two
       // round trips when one covers both. Still inside this same $transaction, so
       // atomicity is unchanged: either the whole batch lands and the balance syncs below
-      // run, or nothing here was ever written. No skipDuplicates — dedup against
-      // existing DB rows already happened above; an intra-file hash collision (two
-      // parsed rows hashing identically) should still hard-fail the whole batch exactly
-      // as it did before, not be silently dropped and desync
-      // `imported + duplicatesSkipped === rowCount`.
+      // run, or nothing here was ever written. No skipDuplicates needed — toCreate is
+      // already deduped both against the DB and within the batch itself (see
+      // seenInBatch above), so createMany should never see a same-hash collision here.
       const allRows = [...normalRows, ...syntheticRows];
       if (allRows.length > 0) await tx.transaction.createMany({ data: allRows });
       syntheticCashLegsCreated = syntheticRows.length;

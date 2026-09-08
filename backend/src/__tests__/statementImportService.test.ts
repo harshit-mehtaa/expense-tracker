@@ -125,7 +125,7 @@ describe('persistParsedStatement — dedup scope', () => {
 
     const expected = makeImportHash(tx.date, tx.amount, tx.type, tx.description, 'acc1');
     expect(txMock.findMany).toHaveBeenCalledWith({
-      where: { importHash: { in: [expected] } },
+      where: { importHash: { in: [expected] }, deletedAt: null },
       select: { importHash: true },
     });
   });
@@ -136,7 +136,7 @@ describe('persistParsedStatement — dedup scope', () => {
 
     const expected = makeImportHash(tx.date, tx.amount, tx.type, tx.description, 'u1');
     expect(txMock.findMany).toHaveBeenCalledWith({
-      where: { importHash: { in: [expected] } },
+      where: { importHash: { in: [expected] }, deletedAt: null },
       select: { importHash: true },
     });
   });
@@ -200,6 +200,49 @@ describe('persistParsedStatement — dedup outcomes', () => {
     const result = await persistParsedStatement({ ...BASE, rowCount: 0, transactions: [] });
     expect(result.imported).toBe(0);
     expect(result.duplicatesSkipped).toBe(0);
+  });
+
+  // A soft-deleted row's hash must not permanently block re-importing that same row —
+  // the dedup query filters deletedAt: null (softDeleteTransaction nulls the deleted
+  // row's own importHash too, for the same reason at the DB-constraint level).
+  it('recreates a row whose hash matches only a soft-deleted transaction (deletedAt filter)', async () => {
+    const tx = makeTx();
+    // findMany itself is mocked to resolve with whatever matches its own `where` filter
+    // in real Prisma; here we simulate "deletedAt: null" already excluding the deleted
+    // row by having the mock return no matches at all.
+    txMock.findMany.mockResolvedValue([]);
+
+    const result = await persistParsedStatement({ ...BASE, transactions: [tx] });
+
+    expect(txMock.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ deletedAt: null }) }),
+    );
+    expect(result.imported).toBe(1);
+    expect(result.duplicatesSkipped).toBe(0);
+  });
+
+  // Two identical rows in ONE statement previously both survived into toCreate and
+  // collided on insert (P2002), hard-failing the whole batch with a deterministic,
+  // unrecoverable "please try again". They must now be deduped pre-insert instead.
+  it('dedupes an intra-batch duplicate (two identical rows in one statement) instead of colliding on insert', async () => {
+    const a = makeTx({ description: 'Coffee' });
+    const duplicate = makeTx({ description: 'Coffee' }); // byte-identical -> same hash
+
+    const result = await persistParsedStatement({ ...BASE, rowCount: 2, transactions: [a, duplicate] });
+
+    expect(result.imported).toBe(1);
+    expect(result.duplicatesSkipped).toBe(1);
+    expect(txClient.transaction.createMany).toHaveBeenCalledTimes(1);
+    expect(txClient.transaction.createMany.mock.calls[0][0].data).toHaveLength(1);
+  });
+
+  it('dedupes THREE identical intra-batch rows down to one, counting the other two as duplicates', async () => {
+    const rows = [makeTx({ description: 'Rent' }), makeTx({ description: 'Rent' }), makeTx({ description: 'Rent' })];
+    const result = await persistParsedStatement({ ...BASE, rowCount: 3, transactions: rows });
+
+    expect(result.imported).toBe(1);
+    expect(result.duplicatesSkipped).toBe(2);
+    expect(txClient.transaction.createMany.mock.calls[0][0].data).toHaveLength(1);
   });
 });
 

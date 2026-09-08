@@ -2500,6 +2500,45 @@ describe('softDeleteTransaction', () => {
     );
   });
 
+  // @@unique([importHash]) is enforced even for soft-deleted rows (Postgres only treats
+  // NULL as non-conflicting) — without nulling it here, re-importing the same statement
+  // after deleting an imported row would hard-fail on the unique constraint instead of
+  // recreating it.
+  it('nulls importHash on soft-delete when the row was import-linked', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, importHash: 'hash-abc' });
+    await softDeleteTransaction('tx-1', 'u1', 'MEMBER');
+    expect(txMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ importHash: null }) }),
+    );
+  });
+
+  it('leaves importHash untouched (undefined in the update) for a manually-created row', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, importHash: null });
+    await softDeleteTransaction('tx-1', 'u1', 'MEMBER');
+    expect(txMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ importHash: undefined }) }),
+    );
+  });
+
+  it('also nulls the paired leg\'s importHash on cascade delete', async () => {
+    const pairedTx = {
+      ...MOCK_TX, id: 'tx-2', type: 'INCOME', amount: 10000,
+      bankAccountId: 'acct-dest', transferPairId: 'pair-1', deletedAt: null, importHash: 'hash-synthetic',
+    };
+    txMock.findUnique.mockResolvedValue({
+      ...MOCK_TX, id: 'tx-1', type: 'EXPENSE', amount: 10000,
+      bankAccountId: 'acct-src', transferPairId: 'pair-1', importHash: 'hash-original',
+    });
+    txMock.findFirst.mockResolvedValue(pairedTx);
+
+    await softDeleteTransaction('tx-1', 'u1', 'MEMBER');
+
+    expect(txMock.update).toHaveBeenCalledWith({
+      where: { id: 'tx-2' },
+      data: { deletedAt: expect.any(Date), importHash: null },
+    });
+  });
+
   it('reverses INCOME as negative on soft-delete', async () => {
     // original INCOME 500 → reversal = -500
     txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'INCOME', amount: 500, bankAccountId: 'acct-1' });
