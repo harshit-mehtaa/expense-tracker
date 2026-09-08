@@ -1,20 +1,21 @@
 /**
  * Reports page — smoke.
  *
- * One of only two pages with a genuine `if (isLoading) return <PageLoader />` (:124-125),
- * so awaiting the <h1> here really does prove the transition. The sentinel is still
- * data-derived for consistency with every other page test.
+ * One of only two pages with a genuine `if (isLoading) return <PageLoader />`
+ * (the `isLoading = isPnLLoading || (isAdmin && isMembersLoading)` gate), so awaiting
+ * the <h1> here really does prove the transition. The sentinel is still data-derived
+ * for consistency with every other page test.
  *
- * The trial-balance query is gated on `activeTab === 'trialbalance'` (:121), so its
+ * The trial-balance query is gated on `enabled: activeTab === 'trialbalance'`, so its
  * handler must be registered before the tab is clicked — with onUnhandledRequest:'error'
  * a missing one is a hard failure, not a silent empty table.
  *
- * Handler count: 4 page-specific + 5 base = 9.
+ * Handler count: 4 page-specific + 6 base = 10.
  */
 import { describe, it, expect } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { http, HttpResponse } from 'msw';
+import { http, HttpResponse, delay } from 'msw';
 import ReportsPage from '@/pages/admin/Reports';
 import { renderPage, failOnConsoleError } from '../support/renderPage';
 import { url } from '../support/handlers';
@@ -22,7 +23,7 @@ import { MEMBER_USER } from '../support/fixtures';
 
 failOnConsoleError();
 
-/** Mirrors the literal `tabs` array at Reports.tsx:83-88. */
+/** Mirrors the literal `tabs` array in Reports.tsx. */
 // `marker` must appear ONLY in the tab BODY. Matching the tab label instead would be
 // satisfied by the button itself, which is on screen before the click — the assertion
 // would pass even with tab switching completely broken.
@@ -125,7 +126,7 @@ describe('Reports page — smoke', () => {
     });
     await screen.findByRole('heading', { level: 1, name: /reports/i });
 
-    // Gated by `enabled: activeTab === 'trialbalance'` (:121).
+    // Gated by `enabled: activeTab === 'trialbalance'`.
     expect(tbCalls).toBe(0);
 
     await user.click(screen.getByRole('button', { name: 'Trial Balance' }));
@@ -143,9 +144,104 @@ describe('Reports page — smoke', () => {
       ],
     });
 
+    // Two independent signals on the same failure: the global toast (this app's
+    // interceptor-driven `api:error` dispatch, NOT the dormant queryCache handler —
+    // renderPage's test QueryClient has no queryCache at all) fires the raw server
+    // message, while the page's OWN inline banner (rendered from `isPnLError`) shows
+    // its own fixed copy. Both must be asserted — a toast firing doesn't prove the
+    // in-page error state (with its Retry button) actually rendered.
     await waitFor(() => {
       expect(screen.getByText(/Server exploded/i)).toBeInTheDocument();
     });
+    expect(await screen.findByText('Failed to load P&L data')).toBeInTheDocument();
+  });
+});
+
+describe('Reports page — Spending Analysis error/loading states', () => {
+  it('shows a persistent, retriable banner on failure — not the misleading empty state', async () => {
+    renderPage(<ReportsPage />, {
+      // Deliberately NOT ?targetUserId= — that would re-key the query and defeat any
+      // call-counting in a sibling test relying on the same handler shape.
+      route: '/reports?tab=spending',
+      handlers: [
+        // Deliberately a DIFFERENT message than the banner's own fixed copy: if they
+        // matched, the assertion below could be satisfied by the transient global
+        // toast instead of the actual in-page banner — a false-green that wouldn't
+        // catch a regression where the banner itself never renders.
+        http.get(url('/reports/spending-by-category'), () =>
+          HttpResponse.json({ message: 'Spending blew up' }, { status: 500 })),
+        ...reportHandlers(),
+      ],
+    });
+
+    expect(await screen.findByText('Failed to load spending data')).toBeInTheDocument();
+    expect(screen.queryByText('No spending data for this FY')).not.toBeInTheDocument();
+  });
+
+  it('shows a loading state while in flight — not the misleading empty state', async () => {
+    renderPage(<ReportsPage />, {
+      route: '/reports?tab=spending',
+      handlers: [
+        http.get(url('/reports/spending-by-category'), async () => {
+          await delay(200);
+          return HttpResponse.json({ data: SPENDING });
+        }),
+        ...reportHandlers(),
+      ],
+    });
+
+    expect(await screen.findByText(/Loading spending data/)).toBeInTheDocument();
+    expect(screen.queryByText('No spending data for this FY')).not.toBeInTheDocument();
+
+    expect(await screen.findByText('Food')).toBeInTheDocument();
+  });
+
+  it('Retry actually refetches — recovers to real data, or correctly falls through to the empty state', async () => {
+    const user = userEvent.setup();
+    let call = 0;
+    renderPage(<ReportsPage />, {
+      route: '/reports?tab=spending',
+      handlers: [
+        http.get(url('/reports/spending-by-category'), () => {
+          call += 1;
+          if (call === 1) return HttpResponse.json({ message: 'Spending blew up' }, { status: 500 });
+          return HttpResponse.json({ data: SPENDING });
+        }),
+        ...reportHandlers(),
+      ],
+    });
+
+    await screen.findByText('Failed to load spending data');
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+    // Legend list text, not chart internals — recharts' ResponsiveContainer renders at
+    // 0x0 under jsdom regardless of data, so it can never be a meaningful assertion
+    // target here.
+    expect(await screen.findByText('Food')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load spending data')).not.toBeInTheDocument();
+    expect(call).toBe(2);
+  });
+
+  it('Retry succeeding with genuinely empty data falls through to the empty state, not the banner', async () => {
+    const user = userEvent.setup();
+    let call = 0;
+    renderPage(<ReportsPage />, {
+      route: '/reports?tab=spending',
+      handlers: [
+        http.get(url('/reports/spending-by-category'), () => {
+          call += 1;
+          if (call === 1) return HttpResponse.json({ message: 'Spending blew up' }, { status: 500 });
+          return HttpResponse.json({ data: [] });
+        }),
+        ...reportHandlers(),
+      ],
+    });
+
+    await screen.findByText('Failed to load spending data');
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText('No spending data for this FY')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load spending data')).not.toBeInTheDocument();
   });
 });
 

@@ -57,12 +57,13 @@
   `deletedAt`, not `isActive`, everywhere it's used.
 - [medium] Import insert loop (`statementImportService.ts`) serial/unbounded in one open
   `$transaction` — large statement can throw P2028.
-- [low] No backend lint AND no `typecheck:tests` (unlike frontend) — a type-only stale
-  import in a backend test file is invisible to every gate. Dashboard snapshot month
-  key uses UTC not IST; `netWorth` ignores `selectedFY`.
-  `accountFormat.ts:46` owner-name branch untested; `spendingByCat` (Reports.tsx) has no
-  isError handling, unlike siblings. `Transactions.tsx:2138`'s `?tab=bogus` renders
-  neither tab (`?? 'transactions'`, unlike `Assets.tsx`'s explicit membership guard).
+- [low] No backend lint AND no `typecheck:tests` (unlike frontend). Dashboard snapshot
+  month key uses UTC not IST; `netWorth` (Reports.tsx) ignores `selectedFY` AND
+  conflates loading/error into a permanent "Loading net worth data..." — no banner,
+  unlike siblings. `Dashboard.tsx:118,495` has the IDENTICAL `spendingByCat` no-isError
+  bug just fixed in Reports.tsx (same `['report-spending',...]` key) — now WORSE:
+  Reports shows a correct banner, Dashboard still silently "No spending recorded" for
+  the same cached error. Same fix shape.
 - [medium] Primary transaction CRUD mutations (edit/delete/import/bulk/recurring-apply)
   don't invalidate dashboard/profit-and-loss/report-spending/accounts query caches.
 - [low] `CashflowMonth`/`UpcomingAlert`/`useAccounts`/`useCategories`/`selectedMemberName`

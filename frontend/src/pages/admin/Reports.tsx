@@ -122,7 +122,14 @@ export default function ReportsPage() {
   // Shared queryFn with Dashboard.tsx's spend-by-category widget, under the
   // SAME key — both must fetch byte-identically, since neither reshapes inside
   // queryFn (reshaping happens in each page's own component body, after).
-  const { data: spendingByCat = [] } = useQuery({
+  // Deliberately EAGER (no `enabled` gate, unlike Trial Balance): this warms the
+  // shared `['report-spending', ...]` cache entry that Dashboard.tsx's widget also reads.
+  const {
+    data: spendingByCat = [],
+    isLoading: isSpendingLoading,
+    isError: isSpendingError,
+    refetch: refetchSpending,
+  } = useQuery({
     queryKey: ['report-spending', selectedFY, viewUserId],
     queryFn: () => fetchSpendingByCategory(selectedFY, isAdmin ? viewUserId : undefined),
   });
@@ -427,7 +434,22 @@ export default function ReportsPage() {
       {activeTab === 'spending' && (
         <section className="space-y-4">
           <h2 className="text-lg font-semibold">Spending by Category — FY {selectedFY}</h2>
-          {spendingByCat.length === 0 ? (
+          {isSpendingError ? (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-8 text-center space-y-3">
+              <p className="text-sm font-medium text-destructive">Failed to load spending data</p>
+              <p className="text-xs text-muted-foreground">Check that the backend is running and try again.</p>
+              <button
+                onClick={() => refetchSpending()}
+                className="mt-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                Retry
+              </button>
+            </div>
+          ) : isSpendingLoading ? (
+            <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
+              Loading spending data…
+            </div>
+          ) : spendingByCat.length === 0 ? (
             <div className="text-center py-8 border rounded-lg text-muted-foreground">No spending data for this FY</div>
           ) : (
             <div className="grid lg:grid-cols-2 gap-6 [&>*]:min-w-0">
