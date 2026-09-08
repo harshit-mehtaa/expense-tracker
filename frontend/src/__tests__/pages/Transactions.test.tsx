@@ -49,17 +49,41 @@ const TX = {
 
 const PAGINATION = { total: 1, hasMore: false, nextCursor: null };
 
-const txHandlers = (transactions: unknown[] = [TX]) => [
-  http.get(url('/transactions'), () =>
-    HttpResponse.json({ data: transactions, pagination: PAGINATION })),
-  http.get(url('/budgets/vs-actuals'), () => HttpResponse.json({ data: [] })),
-  http.get(url('/category-rules'), () => HttpResponse.json({ data: [] })),
-  http.get(url('/recurring'), () => HttpResponse.json({ data: [] })),
-  // The Add modal fetches these for its link pickers.
-  http.get(url('/loans'), () => HttpResponse.json({ data: [] })),
-  http.get(url('/investments/sip'), () => HttpResponse.json({ data: [] })),
-  http.get(url('/insurance'), () => HttpResponse.json({ data: [] })),
-];
+const RULE = {
+  id: 'rule-1', userId: 'u-member',
+  frequency: 'MONTHLY', nextRunDate: '2026-09-01T00:00:00.000Z', isActive: true,
+  subscriptionId: null,
+  createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z',
+  amount: 500, type: 'EXPENSE', description: 'Gym membership',
+  categoryId: null, category: null, bankAccountId: null, bankAccount: null,
+  paymentMode: null, tags: [], gstAmount: null,
+};
+
+// `recurringRequests`, when given, records each /recurring GET's `targetUserId` param
+// (present or absent, as MSW sees it — fetchRecurringRules string-concats it onto the
+// path rather than using axios `params`, so it must be read via
+// `new URL(...).searchParams`, not a `params`-object match, to catch that call shape too).
+const txHandlers = (opts: {
+  transactions?: unknown[];
+  recurringRequests?: (string | null)[];
+  rules?: unknown[];
+} = {}) => {
+  const { transactions = [TX], recurringRequests, rules = [] } = opts;
+  return [
+    http.get(url('/transactions'), () =>
+      HttpResponse.json({ data: transactions, pagination: PAGINATION })),
+    http.get(url('/budgets/vs-actuals'), () => HttpResponse.json({ data: [] })),
+    http.get(url('/category-rules'), () => HttpResponse.json({ data: [] })),
+    http.get(url('/recurring'), ({ request }) => {
+      recurringRequests?.push(new URL(request.url).searchParams.get('targetUserId'));
+      return HttpResponse.json({ data: rules });
+    }),
+    // The Add modal fetches these for its link pickers.
+    http.get(url('/loans'), () => HttpResponse.json({ data: [] })),
+    http.get(url('/investments/sip'), () => HttpResponse.json({ data: [] })),
+    http.get(url('/insurance'), () => HttpResponse.json({ data: [] })),
+  ];
+};
 
 describe('Transactions page — smoke', () => {
   it('goes loading -> loaded (the transition that would catch a conditional hook)', async () => {
@@ -83,7 +107,7 @@ describe('Transactions page — smoke', () => {
   });
 
   it('renders an empty state when there are no transactions', async () => {
-    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers([]) });
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers({ transactions: [] }) });
     await screen.findByRole('heading', { level: 1, name: 'Transactions' });
     expect(screen.queryByText('Grocery run')).toBeNull();
   });
@@ -165,7 +189,7 @@ const ORDINARY_TRANSFER_TX = {
 
 describe('Transactions page — cash withdrawal labeling', () => {
   it('labels the debit leg (bank account) of a withdrawal as "Cash Withdrawal"', async () => {
-    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers([WITHDRAWAL_TX]) });
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers({ transactions: [WITHDRAWAL_TX] }) });
     await screen.findByRole('heading', { level: 1, name: 'Transactions' });
 
     expect((await screen.findAllByText(/Cash Withdrawal/)).length).toBeGreaterThan(0);
@@ -174,7 +198,7 @@ describe('Transactions page — cash withdrawal labeling', () => {
   });
 
   it('labels the credit leg (cash account itself) of the SAME withdrawal as "Cash Withdrawal" too, not "Cash Deposit"', async () => {
-    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers([WITHDRAWAL_CREDIT_LEG_TX]) });
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers({ transactions: [WITHDRAWAL_CREDIT_LEG_TX] }) });
     await screen.findByRole('heading', { level: 1, name: 'Transactions' });
 
     expect((await screen.findAllByText(/Cash Withdrawal/)).length).toBeGreaterThan(0);
@@ -182,7 +206,7 @@ describe('Transactions page — cash withdrawal labeling', () => {
   });
 
   it('labels the debit leg (cash account itself) of a deposit as "Cash Deposit", not "Cash Withdrawal"', async () => {
-    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers([DEPOSIT_DEBIT_LEG_TX]) });
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers({ transactions: [DEPOSIT_DEBIT_LEG_TX] }) });
     await screen.findByRole('heading', { level: 1, name: 'Transactions' });
 
     expect((await screen.findAllByText(/Cash Deposit/)).length).toBeGreaterThan(0);
@@ -190,7 +214,7 @@ describe('Transactions page — cash withdrawal labeling', () => {
   });
 
   it('labels the credit leg (bank account) of the SAME deposit as "Cash Deposit" too', async () => {
-    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers([DEPOSIT_CREDIT_LEG_TX]) });
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers({ transactions: [DEPOSIT_CREDIT_LEG_TX] }) });
     await screen.findByRole('heading', { level: 1, name: 'Transactions' });
 
     expect((await screen.findAllByText(/Cash Deposit/)).length).toBeGreaterThan(0);
@@ -198,7 +222,7 @@ describe('Transactions page — cash withdrawal labeling', () => {
   });
 
   it('keeps the generic "Transfer Debit" label for an ordinary account-to-account transfer', async () => {
-    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers([ORDINARY_TRANSFER_TX]) });
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers({ transactions: [ORDINARY_TRANSFER_TX] }) });
     await screen.findByRole('heading', { level: 1, name: 'Transactions' });
 
     expect((await screen.findAllByText(/Transfer Debit/)).length).toBeGreaterThan(0);
@@ -207,7 +231,7 @@ describe('Transactions page — cash withdrawal labeling', () => {
 
   it('offers "Delete transaction" for a transfer-pair row (e.g. an import-created cash withdrawal) — softDeleteTransaction cascades to the paired leg correctly, so this must not be permanently locked', async () => {
     const user = userEvent.setup();
-    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers([WITHDRAWAL_TX]) });
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers({ transactions: [WITHDRAWAL_TX] }) });
     await screen.findByRole('heading', { level: 1, name: 'Transactions' });
     await screen.findAllByText(/Cash Withdrawal/);
 
@@ -326,6 +350,196 @@ describe('Transactions page — URL-driven tabs', () => {
     expect(
       await screen.findByRole('heading', { level: 2, name: 'Add Transaction' }),
     ).toBeInTheDocument();
+  });
+});
+
+describe('Transactions page — member filter persists across tabs', () => {
+  it('a selection made on Transactions survives Recurring -> back to Transactions, sent as the real outgoing param on each', async () => {
+    const user = userEvent.setup();
+    const txRequests: (string | null)[] = [];
+    const recurringRequests: (string | null)[] = [];
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [
+        http.get(url('/transactions'), ({ request }) => {
+          txRequests.push(new URL(request.url).searchParams.get('targetUserId'));
+          return HttpResponse.json({ data: [TX], pagination: PAGINATION });
+        }),
+        http.get(url('/budgets/vs-actuals'), () => HttpResponse.json({ data: [] })),
+        http.get(url('/category-rules'), () => HttpResponse.json({ data: [] })),
+        http.get(url('/recurring'), ({ request }) => {
+          recurringRequests.push(new URL(request.url).searchParams.get('targetUserId'));
+          return HttpResponse.json({ data: [] });
+        }),
+        http.get(url('/loans'), () => HttpResponse.json({ data: [] })),
+        http.get(url('/investments/sip'), () => HttpResponse.json({ data: [] })),
+        http.get(url('/insurance'), () => HttpResponse.json({ data: [] })),
+      ],
+    });
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+    await waitFor(() => expect(txRequests).toEqual([null]));
+
+    await user.selectOptions(screen.getByLabelText(/view:/i), 'u-member');
+    await waitFor(() => expect(txRequests).toEqual([null, 'u-member']));
+
+    await user.click(screen.getByRole('button', { name: /^recurring$/i }));
+    await screen.findByRole('heading', { level: 1, name: 'Recurring Transactions' });
+    // The regression this guards: before the fix, RecurringRulesPage held its own
+    // independent viewUserId state and this request would carry no targetUserId param
+    // at all (null). Asserting the full array, not just the last entry.
+    await waitFor(() => expect(recurringRequests).toEqual(['u-member']));
+    expect((screen.getByLabelText(/view:/i) as HTMLSelectElement).value).toBe('u-member');
+
+    await user.click(screen.getByRole('button', { name: /^transactions$/i }));
+    expect((await screen.findAllByText('Grocery run')).length).toBeGreaterThan(0);
+    // Unlike Assets.tsx's `assets` query, the transactions query has no `enabled` gate
+    // on activeTab — it's always mounted with the always-visible parent, so it was
+    // already re-fetched at the point of selection above and switching tabs triggers no
+    // further request. Asserted once, after the DOM has settled on the returned tab
+    // (a waitFor here would only prove the array reaches this shape, not that it stays
+    // there — it resolves on the first passing check).
+    expect(txRequests).toEqual([null, 'u-member']);
+    expect((screen.getByLabelText(/view:/i) as HTMLSelectElement).value).toBe('u-member');
+  });
+
+  it('changing the member while on the Recurring tab immediately re-scopes it', async () => {
+    const user = userEvent.setup();
+    const recurringRequests: (string | null)[] = [];
+    renderPage(<TransactionsPage />, {
+      route: '/transactions?tab=recurring',
+      handlers: txHandlers({ recurringRequests }),
+    });
+    await screen.findByRole('heading', { level: 1, name: 'Recurring Transactions' });
+    await waitFor(() => expect(recurringRequests).toEqual([null]));
+
+    await user.selectOptions(screen.getByLabelText(/view:/i), 'u-member');
+
+    await waitFor(() => expect(recurringRequests).toEqual([null, 'u-member']));
+  });
+
+  it('the selector is absent for a MEMBER role on both tabs', async () => {
+    renderPage(<TransactionsPage />, {
+      route: '/transactions', user: MEMBER_USER, handlers: txHandlers(),
+    });
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+    expect(screen.queryByLabelText(/view:/i)).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /^recurring$/i }));
+    await screen.findByRole('heading', { level: 1, name: 'Recurring Transactions' });
+    expect(screen.queryByLabelText(/view:/i)).not.toBeInTheDocument();
+  });
+
+  it('the empty option reads "My Data" on Recurring but "All Family" on Transactions', async () => {
+    const user = userEvent.setup();
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers() });
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+    expect(screen.getByLabelText(/view:/i)).toHaveTextContent('All Family');
+
+    await user.click(screen.getByRole('button', { name: /^recurring$/i }));
+    await screen.findByRole('heading', { level: 1, name: 'Recurring Transactions' });
+    // Recurring can't express true family-wide scope (backend falls back to the
+    // admin's own data when unselected) — the label must say so, not lie.
+    expect(screen.getByLabelText(/view:/i)).toHaveTextContent('My Data');
+    expect(screen.getByLabelText(/view:/i)).not.toHaveTextContent('All Family');
+  });
+});
+
+describe('Transactions page — Recurring tab mutations carry the selected member', () => {
+  it('Generate Now carries the selected member as targetUserId', async () => {
+    const user = userEvent.setup();
+    let capturedParam: string | null = null;
+    renderPage(<TransactionsPage />, {
+      route: '/transactions?tab=recurring',
+      handlers: [
+        ...txHandlers({ rules: [RULE] }),
+        http.post(url('/recurring/generate'), ({ request }) => {
+          capturedParam = new URL(request.url).searchParams.get('targetUserId');
+          return HttpResponse.json({ data: { generated: 1 } });
+        }),
+      ],
+    });
+    await screen.findByText('Gym membership');
+    await user.selectOptions(screen.getByLabelText(/view:/i), 'u-member');
+
+    await user.click(screen.getByRole('button', { name: /generate now/i }));
+
+    await waitFor(() => expect(capturedParam).toBe('u-member'));
+  });
+
+  it('creating a rule carries the selected member as targetUserId', async () => {
+    const user = userEvent.setup();
+    let capturedParam: string | null = null;
+    renderPage(<TransactionsPage />, {
+      route: '/transactions?tab=recurring',
+      handlers: [
+        ...txHandlers({ transactions: [] }),
+        http.post(url('/recurring'), ({ request }) => {
+          capturedParam = new URL(request.url).searchParams.get('targetUserId');
+          return HttpResponse.json({ data: { ...RULE, id: 'rule-new' } }, { status: 201 });
+        }),
+      ],
+    });
+    await screen.findByRole('heading', { level: 1, name: 'Recurring Transactions' });
+    await user.selectOptions(screen.getByLabelText(/view:/i), 'u-member');
+
+    await user.click(screen.getByRole('button', { name: /add rule/i }));
+    await user.type(screen.getByLabelText(/description/i), 'Netflix');
+    await user.type(screen.getByLabelText(/amount/i), '499');
+    // nextRunDate already has a valid default (toDateInputValue(new Date())) — typing
+    // into it would append onto the prefilled value instead of replacing it.
+    await user.click(screen.getByRole('button', { name: /create rule/i }));
+
+    await waitFor(() => expect(capturedParam).toBe('u-member'));
+  });
+
+  it('applying (Zap) a rule targets the rule owner, not the current viewUserId selection', async () => {
+    const user = userEvent.setup();
+    let capturedParam: string | null = null;
+    renderPage(<TransactionsPage />, {
+      route: '/transactions?tab=recurring',
+      handlers: [
+        ...txHandlers({ rules: [RULE] }),
+        http.post(url('/transactions'), ({ request }) => {
+          capturedParam = new URL(request.url).searchParams.get('targetUserId');
+          return HttpResponse.json({ data: { ...TX, id: 'tx-applied' } }, { status: 201 });
+        }),
+      ],
+    });
+    await screen.findByText('Gym membership');
+    // Deliberately select a DIFFERENT member than the rule's own owner (u-member) to
+    // prove apply targets rule.userId, not the shared selector's current value.
+    await user.selectOptions(screen.getByLabelText(/view:/i), 'u-admin');
+
+    await user.click(screen.getByTitle(/apply now/i));
+
+    await waitFor(() => expect(capturedParam).toBe('u-member'));
+  });
+
+  it('a selection made on Transactions is inherited by Recurring — Generate Now and Create Rule both carry it', async () => {
+    const user = userEvent.setup();
+    let generateParam: string | null = null;
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [
+        ...txHandlers({ rules: [RULE] }),
+        http.post(url('/recurring/generate'), ({ request }) => {
+          generateParam = new URL(request.url).searchParams.get('targetUserId');
+          return HttpResponse.json({ data: { generated: 1 } });
+        }),
+      ],
+    });
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+    // Selection made on the TRANSACTIONS tab — never touching the Recurring tab's own
+    // selector at all, since it's the same shared control now.
+    await user.selectOptions(screen.getByLabelText(/view:/i), 'u-member');
+
+    await user.click(screen.getByRole('button', { name: /^recurring$/i }));
+    await screen.findByText('Gym membership');
+    expect((screen.getByLabelText(/view:/i) as HTMLSelectElement).value).toBe('u-member');
+
+    await user.click(screen.getByRole('button', { name: /generate now/i }));
+    await waitFor(() => expect(generateParam).toBe('u-member'));
   });
 });
 

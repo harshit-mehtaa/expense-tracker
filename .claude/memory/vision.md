@@ -61,22 +61,22 @@
 - [low] `PageHeader.tsx` is dead (zero importers). `axios.create()` (`api.ts:32`) sets no
   `timeout` (bug-pattern P2). No backend lint at all — tsc/tests are the only gates.
   Dashboard snapshot month key uses UTC not IST; `netWorth` ignores `selectedFY`.
-  Transactions `?add=1` deep link broken for ADMIN only. `accountFormat.ts:46` owner-name
-  branch untested; `spendingByCat` (Reports.tsx) has no isError handling, unlike siblings.
-  `Transactions.tsx:2138`'s `?tab=bogus` renders neither tab — `?? 'transactions'`
-  fallback, unlike `Assets.tsx`'s explicit membership guard for the same pattern.
+  `accountFormat.ts:46` owner-name branch untested; `spendingByCat` (Reports.tsx) has no
+  isError handling, unlike siblings. `Transactions.tsx:2138`'s `?tab=bogus` renders
+  neither tab (`?? 'transactions'`, unlike `Assets.tsx`'s explicit membership guard).
 - [medium] Primary transaction CRUD mutations (edit/delete/import/bulk/recurring-apply)
   don't invalidate dashboard/profit-and-loss/report-spending/accounts query caches.
 - [low] `CashflowMonth`/`UpcomingAlert`/`useAccounts`/`useCategories`/`selectedMemberName`
   each duplicated instead of shared; `computeTotalLiabilities` has an undocumented endDate
-  filter excluding overdue loans; `!isViewingFamilyWide` gates create buttons across 10 pages.
-  No modal has role="dialog"/focus-trap/Escape; neither `Sidebar.tsx` `<nav>` has
-  `aria-label`; BUDGET_ALERT shows the LIMIT as "amount due".
-- [low] Gold/Real Estate moved under `/assets` as tabs (2026-09-06); an unlinked
-  `assetType:'GOLD'` Asset (Loans' collateral creator) can still render on Vehicles &
-  Other. Its three-tab `viewUserId` desync was fixed 2026-09-08 (owned by `AssetsPage`,
-  passed as a prop) — IDENTICAL defect still lives on Transactions/RecurringRules
-  (`?tab=recurring`, own `useMemberSelector()` each); same fix, not yet applied.
+  filter excluding overdue loans; `!isViewingFamilyWide` gates create buttons across 10
+  pages. No modal has role="dialog"/focus-trap/Escape; `Sidebar.tsx` `<nav>` lacks
+  aria-label; BUDGET_ALERT shows LIMIT as "due".
+- [low] Gold/RealEstate (`/assets`) and Transactions/RecurringRules both had a per-tab
+  `viewUserId` desync; both fixed 2026-09-08 (shared owner in the tab-bar parent, as a
+  prop; RecurringRulesPage's is REQUIRED — no standalone route/test unlike Gold/RE).
+  Unlinked `assetType:'GOLD'` Assets still render on Vehicles & Other. `recurring.ts`'s
+  `targetUserId ?? userId` fallback makes an admin's "no selection" own-data-only there
+  (unlike Transactions' family-wide) — masked by a tab-aware label, not backend-fixed.
 - [low] `''`-coerces-to-0 Zod bug in RealEstate.tsx, Accounts.tsx, TaxCentre.tsx — only
   the user-CLEARS-a-field half remains (2026-09-06 fixed the server-null half in
   TaxCentre via a hydration mapper). Needs backend `.nullable()` + tests in all 3 files;

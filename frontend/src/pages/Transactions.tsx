@@ -2366,34 +2366,41 @@ export default function TransactionsPage() {
         <div className="min-w-0">
           <h1 className="text-2xl font-bold">Transactions</h1>
           {activeTab === 'transactions' && (
-            <>
-              <p className="text-muted-foreground">
-                FY {selectedFY} · {total} transactions
-                {isAdmin && viewUserId
-                  ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
-                  : isAdmin ? ' · All Family' : ''}
-              </p>
-              {isAdmin && !isMembersLoading && (
-                <div className="flex items-center gap-2 mt-2">
-                  <label htmlFor="tx-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
-                  {isMembersError ? (
-                    <span className="text-xs text-destructive">Could not load members</span>
-                  ) : (
-                    <select
-                      id="tx-member-select"
-                      value={viewUserId ?? ''}
-                      onChange={(e) => setViewUserId(e.target.value || undefined)}
-                      className="rounded-md border bg-background px-3 py-1.5 text-sm"
-                    >
-                      <option value="">All Family</option>
-                      {members.map((m) => (
-                        <option key={m.id} value={m.id}>{m.name}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
+            <p className="text-muted-foreground">
+              FY {selectedFY} · {total} transactions
+              {isAdmin && viewUserId
+                ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
+                : isAdmin ? ' · All Family' : ''}
+            </p>
+          )}
+          {isAdmin && !isMembersLoading && (
+            <div className="flex items-center gap-2 mt-2">
+              <label htmlFor="tx-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+              {isMembersError ? (
+                // A stale non-null viewUserId survives this branch with no on-screen
+                // scope indicator — currently unreachable, since ['family-members'] is
+                // never invalidated anywhere in the app, so a failure only ever happens
+                // on first load (before any selection exists). Re-check this the day
+                // that query key IS invalidated somewhere.
+                <span className="text-xs text-destructive">Could not load members</span>
+              ) : (
+                <select
+                  id="tx-member-select"
+                  value={viewUserId ?? ''}
+                  onChange={(e) => setViewUserId(e.target.value || undefined)}
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
+                >
+                  {/* Recurring can't express true family-wide scope (recurring.ts's
+                      `targetUserId ?? userId` fallback means "no selection" = the
+                      admin's own rules only), so the empty option's label must be
+                      tab-aware — "All Family" would misrepresent what that tab shows. */}
+                  <option value="">{activeTab === 'recurring' ? 'My Data' : 'All Family'}</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
               )}
-            </>
+            </div>
           )}
         </div>
         {activeTab === 'transactions' && <div className="flex flex-wrap justify-end gap-2">
@@ -2436,7 +2443,7 @@ export default function TransactionsPage() {
         ))}
       </div>
 
-      {activeTab === 'recurring' && <RecurringRulesPage />}
+      {activeTab === 'recurring' && <RecurringRulesPage viewUserId={viewUserId} />}
 
       {/* Filter bar */}
       {activeTab === 'transactions' && showFilters && (

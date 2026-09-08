@@ -24,7 +24,7 @@ import api from '@/lib/api';
 import { formatDate, toDateInputValue } from '@/lib/dateFormat';
 import { cn } from '@/lib/utils';
 import { getCategoryPath, toCategoryTreeOptions, getCategoryTreeOptionLabel } from '@/lib/categoryUtils';
-import { useMemberSelector } from '@/hooks/useMemberSelector';
+import { useAuth } from '@/contexts/AuthContext';
 
 const FREQUENCY_LABELS: Record<RecurringFrequency, string> = {
   DAILY: 'Daily',
@@ -65,10 +65,19 @@ function useBankAccounts(targetUserId?: string) {
   });
 }
 
-export default function RecurringRulesPage() {
+// Unlike Gold.tsx/RealEstate.tsx, this prop is REQUIRED, not optional: there is no
+// standalone route (App.tsx redirects /recurring -> /transactions?tab=recurring) and no
+// standalone test file, so nothing needs `<RecurringRulesPage />` to compile with zero
+// props — and letting it compile that way would silently produce a page an admin could
+// never re-scope. No isViewingFamilyWide-style create-gate either: unlike Gold/RealEstate,
+// this page's "no selection" state always resolves to a well-defined owner (the admin's
+// own data, per recurring.ts's `targetUserId ?? userId` fallback) rather than an ambiguous
+// family-wide case with no natural owner to attribute a new rule to.
+export default function RecurringRulesPage({ viewUserId }: { viewUserId: string | undefined }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading } = useMemberSelector();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'ADMIN';
   const [showForm, setShowForm] = useState(false);
   const [editingRule, setEditingRule] = useState<RecurringRule | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -210,21 +219,6 @@ export default function RecurringRulesPage() {
           <p className="text-muted-foreground text-sm">Transactions generated automatically on schedule</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          {isAdmin && !isMembersLoading && members.length > 0 && (
-            <div className="flex items-center gap-2">
-              <Label className="text-sm text-muted-foreground whitespace-nowrap">Viewing:</Label>
-              <select
-                value={viewUserId ?? ''}
-                onChange={(e) => setViewUserId(e.target.value || undefined)}
-                className="rounded-md border bg-background px-3 py-1.5 text-sm min-w-[140px]"
-              >
-                <option value="">My Data</option>
-                {members.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
           <Button
             variant="outline"
             size="sm"
