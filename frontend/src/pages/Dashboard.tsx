@@ -115,7 +115,11 @@ export default function DashboardPage() {
   // fetch the identical unfiltered payload; each page's own top-N/sort/slice
   // happens locally, never inside queryFn (a documented, previously-shipped
   // cache-poisoning bug class in this codebase).
-  const { data: spendingByCat = [] } = useQuery({
+  const {
+    data: spendingByCat = [],
+    isLoading: spendingLoading,
+    isError: spendingError,
+  } = useQuery({
     queryKey: ['report-spending', selectedFY, viewUserId],
     queryFn: () => fetchSpendingByCategory(selectedFY, isAdmin ? viewUserId : undefined),
   });
@@ -492,6 +496,24 @@ export default function DashboardPage() {
         </div>
 
         {(() => {
+          if (spendingLoading) {
+            return (
+              <div className="h-44 flex items-center justify-center" data-testid="spend-category-loading">
+                <div className="animate-pulse text-muted-foreground text-sm">Loading spending...</div>
+              </div>
+            );
+          }
+          if (spendingError) {
+            // A failed BACKGROUND refetch (e.g. after a quick-add's invalidation)
+            // replaces previously-valid rows with this message rather than keeping
+            // them on screen — deliberate, matching Reports.tsx's simpler behavior
+            // rather than adding a stale-data-preserving special case here too.
+            return (
+              <p className="text-sm text-muted-foreground" data-testid="spend-category-error">
+                Unable to load spending data.
+              </p>
+            );
+          }
           const top5 = [...spendingByCat].sort((a, b) => b.total - a.total).slice(0, 5);
           if (top5.length === 0) {
             return (

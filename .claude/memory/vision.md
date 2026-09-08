@@ -59,18 +59,17 @@
   `$transaction` — large statement can throw P2028.
 - [low] No backend lint AND no `typecheck:tests` (unlike frontend). Dashboard snapshot
   month key uses UTC not IST; `netWorth` (Reports.tsx) ignores `selectedFY` AND
-  conflates loading/error into a permanent "Loading net worth data..." — no banner,
-  unlike siblings. `Dashboard.tsx:118,495` has the IDENTICAL `spendingByCat` no-isError
-  bug just fixed in Reports.tsx (same `['report-spending',...]` key) — now WORSE:
-  Reports shows a correct banner, Dashboard still silently "No spending recorded" for
-  the same cached error. Same fix shape.
+  conflates loading/error into a permanent "Loading net worth data..." — no banner.
+  Dashboard's `cashflow`/`alerts`/`budgetActuals`/`netWorthHistory` are eager+ungated
+  with no `isError` (same defect class as the just-fixed `spendingByCat`); `summary`
+  is the largest instance — a failed fetch paints ₹0 across every StatCard.
 - [medium] Primary transaction CRUD mutations (edit/delete/import/bulk/recurring-apply)
   don't invalidate dashboard/profit-and-loss/report-spending/accounts query caches.
 - [low] `CashflowMonth`/`UpcomingAlert`/`useAccounts`/`useCategories`/`selectedMemberName`
   each duplicated instead of shared; `computeTotalLiabilities` has an undocumented endDate
   filter excluding overdue loans; `!isViewingFamilyWide` gates create buttons across 10
-  pages. No modal has role="dialog"/focus-trap/Escape; `Sidebar.tsx` `<nav>` lacks
-  aria-label; BUDGET_ALERT shows LIMIT as "due".
+  pages. No modal has role="dialog"/focus-trap/Escape/aria-live on error text anywhere;
+  `Sidebar.tsx` `<nav>` lacks aria-label; BUDGET_ALERT shows LIMIT as "due".
 - [low] Gold/RealEstate (`/assets`) and Transactions/RecurringRules both had a per-tab
   `viewUserId` desync; both fixed 2026-09-08 (shared owner in the tab-bar parent, as a
   prop; RecurringRulesPage's is REQUIRED — no standalone route/test unlike Gold/RE).

@@ -19,7 +19,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { http, HttpResponse } from 'msw';
+import { http, HttpResponse, delay } from 'msw';
 import DashboardPage, { handleCashflowClick, handleFamilyMemberClick } from '@/pages/Dashboard';
 import { renderPage, failOnConsoleError } from '../support/renderPage';
 import { url } from '../support/handlers';
@@ -342,6 +342,100 @@ describe('Dashboard page — smoke', () => {
     await screen.findByText('55.5%');
 
     expect(await screen.findByText(/No spending recorded for FY/i)).toBeInTheDocument();
+  });
+
+  it('shows a persistent error message on failure — not the misleading empty state', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        // Deliberately a DIFFERENT message than the widget's own fixed copy — a
+        // toast DOES appear in this harness for a 500 (via the axios response
+        // interceptor in lib/api.ts, not the queryCache-level handler, which only
+        // fires for response-less errors and is dormant in tests anyway). Asserting
+        // on a matching string could be satisfied by the toast instead of the
+        // actual widget state.
+        http.get(url('/reports/spending-by-category'), () =>
+          HttpResponse.json({ message: 'Spending blew up' }, { status: 500 })),
+        ...dashboardHandlers(),
+      ],
+    });
+    await screen.findByText('55.5%');
+
+    expect(await screen.findByTestId('spend-category-error')).toHaveTextContent('Unable to load spending data.');
+    expect(screen.queryByText(/No spending recorded for FY/i)).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId('spend-category-row')).toHaveLength(0);
+  });
+
+  it('shows a loading skeleton while in flight — not the misleading empty state', async () => {
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.get(url('/reports/spending-by-category'), async () => {
+          await delay(300);
+          return HttpResponse.json({ data: SPENDING_BY_CATEGORY });
+        }),
+        ...dashboardHandlers(),
+      ],
+    });
+    await settled();
+
+    // Positive assertion, not just absences — a regression that rendered nothing at
+    // all while pending would otherwise still pass. Scoped to the widget's own card:
+    // an unscoped /Loading/ match would also hit the cashflow chart's own skeleton.
+    const card = (await screen.findByText(/Spend by Category/i)).closest('div.rounded-xl') as HTMLElement;
+    expect(within(card).getByTestId('spend-category-loading')).toBeInTheDocument();
+    expect(screen.queryByText(/No spending recorded for FY/i)).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId('spend-category-row')).toHaveLength(0);
+
+    expect(await screen.findAllByTestId('spend-category-row', {}, { timeout: 3000 })).toHaveLength(3);
+  });
+
+  it('a failed background refetch (e.g. after a quick-add) replaces the rows with the error message', async () => {
+    const user = userEvent.setup();
+    // Toggled by the create mutation, not by call count — selecting a member below
+    // ALSO changes the query key (viewUserId) and triggers its own refetch, which
+    // must still succeed; only the refetch caused by the create's invalidation
+    // (i.e. after the toggle flips) should fail.
+    let shouldFail = false;
+    renderPage(<DashboardPage />, {
+      route: '/',
+      handlers: [
+        http.get(url('/categories'), () => HttpResponse.json({ data: [] })),
+        http.get(url('/accounts'), () => HttpResponse.json({ data: [] })),
+        http.post(url('/transactions'), () => {
+          shouldFail = true;
+          return HttpResponse.json({ data: {} });
+        }),
+        http.get(url('/reports/spending-by-category'), () => {
+          if (shouldFail) return HttpResponse.json({ message: 'Spending blew up' }, { status: 500 });
+          return HttpResponse.json({ data: SPENDING_BY_CATEGORY });
+        }),
+        ...dashboardHandlers(),
+      ],
+    });
+    await settled();
+    expect(await screen.findAllByTestId('spend-category-row')).toHaveLength(3);
+
+    // Add Expense/Income is hidden while `isViewingFamilyWide` (ADMIN, no selection).
+    const select = await screen.findByLabelText(/View:/i) as HTMLSelectElement;
+    await user.selectOptions(select, 'u-member');
+    await waitFor(() => expect(select.value).toBe('u-member'));
+    expect(await screen.findAllByTestId('spend-category-row')).toHaveLength(3);
+
+    await user.click(await screen.findByRole('button', { name: /Add Expense/i }));
+    const heading = await screen.findByRole('heading', { level: 2, name: 'Add Transaction' });
+    const modal = heading.closest('div.bg-background') as HTMLElement;
+    await user.type(within(modal).getByPlaceholderText(/swiggy order/i), 'Groceries');
+    const amountInput = modal.querySelector('input[name="amount"]') as HTMLInputElement;
+    await user.type(amountInput, '250');
+    await user.click(within(modal).getByRole('button', { name: 'Add Transaction' }));
+
+    // The create mutation invalidates ['report-spending'], and this deliberate choice
+    // (matching Reports.tsx's simpler behavior, not a stale-data-preserving one) means
+    // a FAILED refetch replaces the previously-correct rows with the error message,
+    // rather than leaving them on screen.
+    expect(await screen.findByTestId('spend-category-error')).toBeInTheDocument();
+    expect(screen.queryAllByTestId('spend-category-row')).toHaveLength(0);
   });
 
   it('a MEMBER (not just ADMIN) sees the Spend by Category widget', async () => {
