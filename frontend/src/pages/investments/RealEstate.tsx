@@ -55,7 +55,10 @@ const ownersEditorSchema = z.object({ owners: ownersSchema });
 type PropertyForm = z.infer<typeof propertySchema>;
 type OwnersForm = z.infer<typeof ownersEditorSchema>;
 
-export default function RealEstatePage() {
+// No standalone route renders this without a parent any more (App.tsx redirects
+// /real-estate -> /assets?tab=real-estate) — an ADMIN mounting this directly would have
+// no way to pick a member, since the "View:" selector now lives solely in AssetsPage.
+export default function RealEstatePage({ viewUserId }: { viewUserId?: string }) {
   const qc = useQueryClient();
   const { user } = useAuth();
   const [showPropertyForm, setShowPropertyForm] = useState(false);
@@ -68,7 +71,8 @@ export default function RealEstatePage() {
   const [sellDate, setSellDate] = useState(toDateInputValue(new Date()));
   const { toast } = useToast();
 
-  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
+  const { members } = useMemberSelector();
+  const isAdmin = user?.role === 'ADMIN';
   const isViewingFamilyWide = isAdmin && !viewUserId;
   const ownerOptions = useMemo(() => {
     const byId = new Map<string, { id: string; name: string }>();
@@ -209,27 +213,7 @@ export default function RealEstatePage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Real Estate</h1>
-          {isAdmin && !isMembersLoading && (
-            <div className="flex items-center gap-2 mt-2">
-              <label htmlFor="re-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
-              {isMembersError ? (
-                <span className="text-xs text-destructive">Could not load members</span>
-              ) : (
-                <select
-                  id="re-member-select"
-                  value={viewUserId ?? ''}
-                  onChange={(e) => setViewUserId(e.target.value || undefined)}
-                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
-                >
-                  <option value="">All Family</option>
-                  {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
-              )}
-            </div>
-          )}
-        </div>
+        <h1 className="text-2xl font-bold">Real Estate</h1>
         {!isViewingFamilyWide && (
           <Button size="sm" onClick={openAddPropertyForm}><Plus className="h-4 w-4 mr-1" /> Add Property</Button>
         )}

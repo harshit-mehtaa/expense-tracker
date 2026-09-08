@@ -72,11 +72,11 @@
   filter excluding overdue loans; `!isViewingFamilyWide` gates create buttons across 10 pages.
   No modal has role="dialog"/focus-trap/Escape; neither `Sidebar.tsx` `<nav>` has
   `aria-label`; BUDGET_ALERT shows the LIMIT as "amount due".
-- [low] Gold and Real Estate both moved under `/assets` as tabs (2026-09-06, resolving
-  the IA asymmetry previously tracked here). An unlinked `assetType:'GOLD'` Asset (from
-  Loans' collateral creator) can still render on the Vehicles & Other grid. `/assets`
-  now has THREE independent per-tab `viewUserId` scopes (local useState, amplified 2->3
-  by this move) — an admin's selection on one tab doesn't carry to another.
+- [low] Gold/Real Estate moved under `/assets` as tabs (2026-09-06); an unlinked
+  `assetType:'GOLD'` Asset (Loans' collateral creator) can still render on Vehicles &
+  Other. Its three-tab `viewUserId` desync was fixed 2026-09-08 (owned by `AssetsPage`,
+  passed as a prop) — IDENTICAL defect still lives on Transactions/RecurringRules
+  (`?tab=recurring`, own `useMemberSelector()` each); same fix, not yet applied.
 - [low] `''`-coerces-to-0 Zod bug in RealEstate.tsx, Accounts.tsx, TaxCentre.tsx — only
   the user-CLEARS-a-field half remains (2026-09-06 fixed the server-null half in
   TaxCentre via a hydration mapper). Needs backend `.nullable()` + tests in all 3 files;

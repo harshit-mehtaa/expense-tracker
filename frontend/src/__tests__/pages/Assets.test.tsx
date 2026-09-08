@@ -50,8 +50,11 @@ const LINKED_PROPERTY_ASSET = {
   loans: [],
 };
 
-const assetHandlers = (assets: unknown[] = [VEHICLE, LINKED_PROPERTY_ASSET]) => [
-  http.get(url('/assets'), () => HttpResponse.json({ data: assets })),
+const assetHandlers = (assets: unknown[] = [VEHICLE, LINKED_PROPERTY_ASSET], captured?: (string | null)[]) => [
+  http.get(url('/assets'), ({ request }) => {
+    captured?.push(new URL(request.url).searchParams.get('targetUserId'));
+    return HttpResponse.json({ data: assets });
+  }),
 ];
 
 const VEHICLE_POLICY = {
@@ -89,10 +92,15 @@ const HOLDING = {
   notes: 'Locker A',
 };
 
-const goldHandlers = (holdings: unknown[] = [HOLDING]) => [
-  http.get(url('/investments/gold'), () => HttpResponse.json({
-    data: { holdings, summary: { totalGrams: 20, totalCurrentValue: 125000, totalPurchaseValue: 100000, gain: 25000, gainPct: 25 } },
-  })),
+// `userId`, not `targetUserId` — investmentsApi.getGold sends a differently-named param
+// than assetsApi.getAll/create; the persistence tests below rely on this being right.
+const goldHandlers = (holdings: unknown[] = [HOLDING], captured?: (string | null)[]) => [
+  http.get(url('/investments/gold'), ({ request }) => {
+    captured?.push(new URL(request.url).searchParams.get('userId'));
+    return HttpResponse.json({
+      data: { holdings, summary: { totalGrams: 20, totalCurrentValue: 125000, totalPurchaseValue: 100000, gain: 25000, gainPct: 25 } },
+    });
+  }),
 ];
 
 const PROPERTY = {
@@ -107,10 +115,13 @@ const PROPERTY = {
   owners: [{ userId: 'u-member', userName: 'Member', sharePercent: 100 }],
 };
 
-const reHandlers = (properties: unknown[] = [PROPERTY]) => [
-  http.get(url('/investments/real-estate'), () => HttpResponse.json({
-    data: { properties, summary: { totalCurrent: 8000000, totalPurchase: 5000000, unrealisedGain: 3000000, totalMonthlyRental: 0 } },
-  })),
+const reHandlers = (properties: unknown[] = [PROPERTY], captured?: (string | null)[]) => [
+  http.get(url('/investments/real-estate'), ({ request }) => {
+    captured?.push(new URL(request.url).searchParams.get('userId'));
+    return HttpResponse.json({
+      data: { properties, summary: { totalCurrent: 8000000, totalPurchase: 5000000, unrealisedGain: 3000000, totalMonthlyRental: 0 } },
+    });
+  }),
 ];
 
 describe('Assets page — Gold tab', () => {
@@ -269,6 +280,84 @@ describe('Assets page — Real Estate tab', () => {
     await user.click(screen.getByRole('button', { name: /real estate/i }));
     await screen.findByText('Koramangala Flat');
     expect(screen.queryByRole('heading', { name: /add property/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('Assets page — member filter persists across tabs', () => {
+  it('a selection made on Vehicles survives Gold -> Real Estate -> back to Vehicles, sent as the real outgoing param on each', async () => {
+    const user = userEvent.setup();
+    const assetRequests: (string | null)[] = [];
+    const goldRequests: (string | null)[] = [];
+    const reRequests: (string | null)[] = [];
+    renderPage(<AssetsPage />, {
+      route: '/assets',
+      handlers: [
+        ...assetHandlers(undefined, assetRequests),
+        ...goldHandlers(undefined, goldRequests),
+        ...reHandlers(undefined, reRequests),
+      ],
+    });
+    await screen.findByText('Honda City');
+
+    // Initial mount fetches family-wide (targetUserId absent, captured as null) before
+    // any selection is made.
+    await waitFor(() => expect(assetRequests).toEqual([null]));
+    await user.selectOptions(screen.getByLabelText(/view:/i), 'u-member');
+    await waitFor(() => expect(assetRequests).toEqual([null, 'u-member']));
+
+    await user.click(screen.getByRole('button', { name: /^gold$/i }));
+    await screen.findByText('Wedding bangles');
+    // The regression this guards: before the fix, GoldPage held its own independent
+    // viewUserId state and this request would carry no userId param at all (null).
+    // Asserting the full array, not just the last entry, so a spurious unscoped fetch
+    // sneaking in ahead of the scoped one can't hide behind an `.at(-1)` check.
+    expect(goldRequests).toEqual(['u-member']);
+    expect((screen.getByLabelText(/view:/i) as HTMLSelectElement).value).toBe('u-member');
+
+    await user.click(screen.getByRole('button', { name: /real estate/i }));
+    await screen.findByText('Koramangala Flat');
+    expect(reRequests).toEqual(['u-member']);
+    expect((screen.getByLabelText(/view:/i) as HTMLSelectElement).value).toBe('u-member');
+
+    await user.click(screen.getByRole('button', { name: /vehicles & other/i }));
+    await screen.findByText('Honda City');
+    // Returning to Vehicles re-triggers the (now re-enabled) assets query — assert the
+    // actual refetch carried the selection, not just that the parent-owned <select>
+    // DOM value (which cannot change across a tab switch) still reads correctly.
+    await waitFor(() => expect(assetRequests).toEqual([null, 'u-member', 'u-member']));
+    expect((screen.getByLabelText(/view:/i) as HTMLSelectElement).value).toBe('u-member');
+  });
+
+  it('changing the member while on the Gold tab immediately re-scopes it, not just the tab switched from', async () => {
+    const user = userEvent.setup();
+    const goldRequests: (string | null)[] = [];
+    renderPage(<AssetsPage />, {
+      route: '/assets?tab=gold',
+      handlers: [...assetHandlers(), ...goldHandlers(undefined, goldRequests)],
+    });
+    await screen.findByText('Wedding bangles');
+    await waitFor(() => expect(goldRequests).toEqual([null]));
+
+    await user.selectOptions(screen.getByLabelText(/view:/i), 'u-member');
+
+    await waitFor(() => expect(goldRequests).toEqual([null, 'u-member']));
+  });
+
+  it('the selector is absent for a MEMBER role on all three tabs', async () => {
+    renderPage(<AssetsPage />, {
+      route: '/assets', user: MEMBER_USER, handlers: [...assetHandlers(), ...goldHandlers(), ...reHandlers()],
+    });
+    await screen.findByText('Honda City');
+    expect(screen.queryByLabelText(/view:/i)).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /^gold$/i }));
+    await screen.findByText('Wedding bangles');
+    expect(screen.queryByLabelText(/view:/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /real estate/i }));
+    await screen.findByText('Koramangala Flat');
+    expect(screen.queryByLabelText(/view:/i)).not.toBeInTheDocument();
   });
 });
 

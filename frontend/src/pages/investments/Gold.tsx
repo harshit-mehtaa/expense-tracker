@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
-import { useMemberSelector } from '@/hooks/useMemberSelector';
+import { useAuth } from '@/contexts/AuthContext';
 import { investmentsApi, GoldHolding } from '@/api/investments';
 import { formatINR } from '@/lib/indianFormat';
 import { formatDate, toDateInputValue } from '@/lib/dateFormat';
@@ -30,7 +30,10 @@ const goldSchema = z.object({
 
 type GoldForm = z.infer<typeof goldSchema>;
 
-export default function GoldPage() {
+// No standalone route renders this without a parent any more (App.tsx redirects
+// /gold -> /assets?tab=gold) — an ADMIN mounting this directly would have no way to
+// pick a member, since the "View:" selector now lives solely in AssetsPage.
+export default function GoldPage({ viewUserId }: { viewUserId?: string }) {
   const qc = useQueryClient();
   const [showGoldForm, setShowGoldForm] = useState(false);
   const [editingGoldId, setEditingGoldId] = useState<string | null>(null);
@@ -41,7 +44,8 @@ export default function GoldPage() {
   const [sellDate, setSellDate] = useState(toDateInputValue(new Date()));
   const { toast } = useToast();
 
-  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'ADMIN';
   const isViewingFamilyWide = isAdmin && !viewUserId;
 
   const { data: goldData } = useQuery({
@@ -128,27 +132,7 @@ export default function GoldPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Gold Holdings</h1>
-          {isAdmin && !isMembersLoading && (
-            <div className="flex items-center gap-2 mt-2">
-              <label htmlFor="gold-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
-              {isMembersError ? (
-                <span className="text-xs text-destructive">Could not load members</span>
-              ) : (
-                <select
-                  id="gold-member-select"
-                  value={viewUserId ?? ''}
-                  onChange={(e) => setViewUserId(e.target.value || undefined)}
-                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
-                >
-                  <option value="">All Family</option>
-                  {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
-              )}
-            </div>
-          )}
-        </div>
+        <h1 className="text-2xl font-bold">Gold Holdings</h1>
         {!isViewingFamilyWide && (
           <Button size="sm" onClick={() => setShowGoldForm(true)}><Plus className="h-4 w-4 mr-1" /> Add Gold</Button>
         )}

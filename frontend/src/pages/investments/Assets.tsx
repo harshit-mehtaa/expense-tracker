@@ -6,6 +6,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Plus, Pencil, Trash2, Car, Gem, Home } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import type { ComponentType } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -34,18 +35,22 @@ import RealEstatePage from '@/pages/investments/RealEstate';
  * reason.
  *
  * Gold and Real Estate live here as URL-backed tabs (`?tab=gold` / `?tab=real-estate`)
- * rendering the untouched `GoldPage`/`RealEstatePage` components — same pattern as
- * Transactions.tsx's `?tab=recurring`. Neither is merged into this file: both keep
- * their own coverage measurement and their own member-selector/heading, matching the
- * Transactions/RecurringRules precedent, which accepts multiple independent member
- * selectors and multiple <h1>s across a page's tabs (see Transactions.test.tsx) rather
- * than forcing one tab's identity onto another. Neither child needs an `enabled` gate
- * on its own queries (unlike this page's own `assets` query below, which lives in the
- * always-mounted parent) — a conditionally-rendered child's hooks simply don't exist
- * while unmounted. Neither needs a state-reset effect either: unmounting on tab switch
- * discards their internal state for free — which is why this page's OWN modal state
- * (living in the parent, so it survives a tab switch) carries the defensive reset
- * effect below instead.
+ * rendering `GoldPage`/`RealEstatePage` — same pattern as Transactions.tsx's
+ * `?tab=recurring`. Neither is merged into this file: both keep their own coverage
+ * measurement, but the "View:" member selector is NOT duplicated per tab (it was,
+ * originally — each tab held its own `useMemberSelector()` call with independent local
+ * state, so a selection made on one tab silently reset when switching to another; see
+ * vision.md history). `viewUserId` is now owned by this page alone and passed down as
+ * an optional prop, so the selection persists across every tab. Both children still
+ * fall back to their own `useMemberSelector()`/`useAuth()` call for `isAdmin` (and, for
+ * RealEstatePage, `members` for its co-owner picker) so they keep working standalone in
+ * their own test files, which render them with no parent and no prop. Neither child
+ * needs an `enabled` gate on its own queries (unlike this page's own `assets` query
+ * below, which lives in the always-mounted parent) — a conditionally-rendered child's
+ * hooks simply don't exist while unmounted. Neither needs a state-reset effect either:
+ * unmounting on tab switch discards their internal state for free — which is why this
+ * page's OWN modal state (living in the parent, so it survives a tab switch) carries
+ * the defensive reset effect below instead.
  *
  * The set of tabs is closed: `realEstateId`/`goldHoldingId` on `Asset` are the only
  * `@unique` "identity" FKs to a detail tracker (schema.prisma's comment on `Asset`
@@ -87,7 +92,7 @@ const DEFAULT_TAB: AssetsTab = 'assets';
 // an empty body, the same silent-gap class `isTab` exists to prevent for bad input.
 // `null` means "rendered inline below" (only true for the complex default tab); every
 // other tab's body is exactly `<Child />`, with no separate render guard needed.
-const TAB_META: Record<AssetsTab, { label: string; icon: LucideIcon; Child: (() => JSX.Element) | null }> = {
+const TAB_META: Record<AssetsTab, { label: string; icon: LucideIcon; Child: ComponentType<{ viewUserId?: string }> | null }> = {
   assets: { label: 'Vehicles & Other', icon: Car, Child: null },
   gold: { label: 'Gold', icon: Gem, Child: GoldPage },
   'real-estate': { label: 'Real Estate', icon: Home, Child: RealEstatePage },
@@ -246,27 +251,25 @@ export default function AssetsPage() {
         <div>
           <h1 className="text-2xl font-bold">Assets</h1>
           {activeTab === 'assets' && (
-            <>
-              <p className="text-muted-foreground text-sm mt-1">Vehicles and other items you own outright.</p>
-              {isAdmin && !isMembersLoading && (
-                <div className="flex items-center gap-2 mt-2">
-                  <label htmlFor="assets-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
-                  {isMembersError ? (
-                    <span className="text-xs text-destructive">Could not load members</span>
-                  ) : (
-                    <select
-                      id="assets-member-select"
-                      value={viewUserId ?? ''}
-                      onChange={(e) => setViewUserId(e.target.value || undefined)}
-                      className="rounded-md border bg-background px-3 py-1.5 text-sm"
-                    >
-                      <option value="">All Family</option>
-                      {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                    </select>
-                  )}
-                </div>
+            <p className="text-muted-foreground text-sm mt-1">Vehicles and other items you own outright.</p>
+          )}
+          {isAdmin && !isMembersLoading && (
+            <div className="flex items-center gap-2 mt-2">
+              <label htmlFor="assets-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
+              {isMembersError ? (
+                <span className="text-xs text-destructive">Could not load members</span>
+              ) : (
+                <select
+                  id="assets-member-select"
+                  value={viewUserId ?? ''}
+                  onChange={(e) => setViewUserId(e.target.value || undefined)}
+                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
+                >
+                  <option value="">All Family</option>
+                  {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
               )}
-            </>
+            </div>
           )}
         </div>
         {activeTab === 'assets' && !isViewingFamilyWide && (
@@ -276,8 +279,7 @@ export default function AssetsPage() {
         )}
       </div>
 
-      {/* Tab switcher — Gold and Real Estate live here instead of their own nav items;
-          GoldPage/RealEstatePage are untouched, rendered as-is below. */}
+      {/* Tab switcher — Gold and Real Estate live here instead of their own nav items. */}
       <div className="flex border-b border-border">
         {TABS.map((tab) => {
           const Icon = TAB_META[tab].icon;
@@ -299,7 +301,7 @@ export default function AssetsPage() {
         })}
       </div>
 
-      {ActiveChild && <ActiveChild />}
+      {ActiveChild && <ActiveChild viewUserId={viewUserId} />}
 
       {activeTab === 'assets' && (
       <>
