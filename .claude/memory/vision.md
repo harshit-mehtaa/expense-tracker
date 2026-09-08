@@ -57,10 +57,9 @@
   `deletedAt`, not `isActive`, everywhere it's used.
 - [medium] Import insert loop (`statementImportService.ts`) serial/unbounded in one open
   `$transaction` — large statement can throw P2028.
-- [low] `axios.create()` (`api.ts:32`) sets no `timeout` (bug-pattern P2). No backend
-  lint AND no `typecheck:tests` (unlike frontend) — a type-only stale import in a
-  backend test file is invisible to every gate. Dashboard snapshot month key uses UTC
-  not IST; `netWorth` ignores `selectedFY`.
+- [low] No backend lint AND no `typecheck:tests` (unlike frontend) — a type-only stale
+  import in a backend test file is invisible to every gate. Dashboard snapshot month
+  key uses UTC not IST; `netWorth` ignores `selectedFY`.
   `accountFormat.ts:46` owner-name branch untested; `spendingByCat` (Reports.tsx) has no
   isError handling, unlike siblings. `Transactions.tsx:2138`'s `?tab=bogus` renders
   neither tab (`?? 'transactions'`, unlike `Assets.tsx`'s explicit membership guard).
