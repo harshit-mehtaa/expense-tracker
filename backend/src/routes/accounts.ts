@@ -10,14 +10,19 @@ import { recordAuditLog } from '../services/auditService';
 const router = Router();
 router.use(requireAuth);
 
+// `null` deliberately passes through both preprocessors untouched below (only `''` is
+// normalized) — every field on this form is always sent on every save (no partial
+// diffing), so an explicit `null` is the ONLY wire signal for "the user cleared this",
+// distinct from `''`/omitted meaning "not provided". See insurance.ts's identical
+// `.nullable()` precedent for why "omitted key = no change" can't be relied on here.
 const emptyStringToUndefined = (value: unknown) =>
   typeof value === 'string' && value.trim() === '' ? undefined : value;
 
-const optionalTrimmedString = z.preprocess(emptyStringToUndefined, z.string().trim().optional());
+const optionalTrimmedString = z.preprocess(emptyStringToUndefined, z.string().trim().nullable().optional());
 
 const optionalIfscPrefix = z.preprocess(
   (value) => (typeof value === 'string' ? value.trim().toUpperCase() || undefined : value),
-  z.string().length(4).regex(/^[A-Z]{4}$/).optional(),
+  z.string().length(4).regex(/^[A-Z]{4}$/).nullable().optional(),
 );
 
 const optionalIfscCode = z.preprocess(
@@ -25,13 +30,17 @@ const optionalIfscCode = z.preprocess(
   z.string()
     .length(11, 'IFSC code must be 11 characters')
     .regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Enter a valid IFSC code')
+    .nullable()
     .optional(),
 );
 
+// Unlike the string preprocessors above, this ONE used to also swallow an incoming
+// `null` back to `undefined` before validation — silently making `.nullable()` on the
+// inner schema a no-op for every numeric field it backs. Narrowed to `''` only.
 const optionalNumber = (schema: z.ZodNumber) =>
   z.preprocess(
-    (value) => (value === '' || value === null || value === undefined ? undefined : value),
-    schema.optional(),
+    (value) => (value === '' ? undefined : value),
+    schema.nullable().optional(),
   );
 
 const optionalBillingDay = optionalNumber(z.coerce.number().int().min(1).max(31));
@@ -43,6 +52,7 @@ const optionalAccountNumber = z.preprocess(
     .min(4, 'Account number must be at least 4 characters')
     .max(34, 'Account number is too long')
     .regex(/^[A-Za-z0-9 -]+$/, 'Account number can contain only letters, numbers, spaces, and hyphens')
+    .nullable()
     .optional(),
 );
 
@@ -56,7 +66,7 @@ const createAccountSchema = z.object({
   ifscPrefix: optionalIfscPrefix,
   ifscCode: optionalIfscCode,
   accountNumber: optionalAccountNumber,
-  accountNumberLast4: z.preprocess(emptyStringToUndefined, z.string().length(4).regex(/^\d{4}$/).optional()),
+  accountNumberLast4: z.preprocess(emptyStringToUndefined, z.string().length(4).regex(/^\d{4}$/).nullable().optional()),
   accountType: z.enum(['SAVINGS', 'CURRENT', 'SALARY', 'CREDIT_CARD', 'DEBIT_CARD', 'PREPAID_CARD', 'NRE', 'NRO', 'PPF', 'EPF', 'DEMAT']),
   currentBalance: z.coerce.number().default(0),
   currency: z.string().trim().default('INR'),

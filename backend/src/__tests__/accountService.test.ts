@@ -261,6 +261,53 @@ describe('createAccount', () => {
       }),
     );
   });
+
+  it('sends ifscPrefix:null to Prisma when both ifscCode and ifscPrefix are explicitly null', async () => {
+    acctMock.create.mockResolvedValue(MOCK_ACCOUNT);
+    await createAccount('u1', {
+      bankName: 'HDFC',
+      accountType: 'SAVINGS',
+      ifscCode: null,
+      ifscPrefix: null,
+    } as any);
+    expect(acctMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ ifscCode: null, ifscPrefix: null }),
+      }),
+    );
+  });
+
+  // The `??` fallback (getIfscPrefix(ifscCode) ?? normalizeIfscPrefix(data.ifscPrefix)) must
+  // still prefer a real derived prefix over an explicitly-nulled legacy ifscPrefix — proves
+  // the null-awareness added to these helpers didn't change this precedence.
+  // normalizeIfscPrefix's own null branch is only reachable when ifscCode is absent/null —
+  // getIfscPrefix(ifscCode) short-circuits it otherwise via the `??`.
+  it('nulls ifscPrefix via normalizeIfscPrefix directly when ifscCode is absent', async () => {
+    acctMock.create.mockResolvedValue(MOCK_ACCOUNT);
+    await createAccount('u1', {
+      bankName: 'HDFC',
+      accountType: 'SAVINGS',
+      ifscPrefix: null,
+    } as any);
+    expect(acctMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ ifscPrefix: null }) }),
+    );
+  });
+
+  it('derives ifscPrefix from a real ifscCode even when the legacy ifscPrefix is explicitly null', async () => {
+    acctMock.create.mockResolvedValue(MOCK_ACCOUNT);
+    await createAccount('u1', {
+      bankName: 'HDFC',
+      accountType: 'SAVINGS',
+      ifscCode: 'hdfc0001234',
+      ifscPrefix: null,
+    } as any);
+    expect(acctMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ ifscCode: 'HDFC0001234', ifscPrefix: 'HDFC' }),
+      }),
+    );
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -364,6 +411,50 @@ describe('updateAccount', () => {
     acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, isCashAccount: true });
     await updateAccount('acct-1', 'u1', 'MEMBER', { bankName: 'Cash' });
     expect(acctMock.update).toHaveBeenCalled();
+  });
+
+  // Clearing ifscCode/accountNumber must ALSO clear their derived columns
+  // (ifscPrefix/accountNumberLast4) — otherwise those go stale after the source clears.
+  it('clearing ifscCode to null also nulls the derived ifscPrefix', async () => {
+    await updateAccount('acct-1', 'u1', 'MEMBER', { ifscCode: null } as any);
+    expect(acctMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ ifscCode: null, ifscPrefix: null }),
+      }),
+    );
+  });
+
+  it('clearing accountNumber to null also nulls the derived accountNumberLast4', async () => {
+    await updateAccount('acct-1', 'u1', 'MEMBER', { accountNumber: null } as any);
+    expect(acctMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ accountNumber: null, accountNumberLast4: null }),
+      }),
+    );
+  });
+
+  it.each(['upiId', 'interestRate', 'creditLimit', 'billingCycleStartDay', 'billingCycleEndDay', 'paymentDueDay'])(
+    'passes an explicit null for %s straight through to Prisma (untouched by the spread)',
+    async (field) => {
+      await updateAccount('acct-1', 'u1', 'MEMBER', { [field]: null } as any);
+      expect(acctMock.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ [field]: null }) }),
+      );
+    },
+  );
+
+  it('sets maturityDate to null when explicitly cleared (not swallowed by the post-spread override)', async () => {
+    await updateAccount('acct-1', 'u1', 'MEMBER', { maturityDate: null } as any);
+    expect(acctMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ maturityDate: null }) }),
+    );
+  });
+
+  it('leaves maturityDate untouched (undefined) when not provided at all', async () => {
+    await updateAccount('acct-1', 'u1', 'MEMBER', { bankName: 'ICICI' });
+    expect(acctMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ maturityDate: undefined }) }),
+    );
   });
 });
 

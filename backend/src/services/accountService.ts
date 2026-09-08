@@ -34,26 +34,37 @@ export async function ensureCashAccount(tx: Prisma.TransactionClient, userId: st
   }
 }
 
-function normalizeAccountNumber(value: string | undefined): string | undefined {
+// Each helper below passes an explicit `null` straight through (an intentional clear —
+// see accounts.ts's `.nullable()` comment) rather than collapsing it to `undefined`
+// (which Prisma treats as "field not provided, leave unchanged"). Losing this
+// distinction here would silently no-op a clear even after the route schema accepts it,
+// and — for the two derived-value helpers — leave a stale ifscPrefix/accountNumberLast4
+// behind after its source field was cleared.
+function normalizeAccountNumber(value: string | null | undefined): string | null | undefined {
+  if (value === null) return null;
   const normalized = value?.replace(/[\s-]/g, '').trim();
   return normalized || undefined;
 }
 
-function normalizeIfscCode(value: string | undefined): string | undefined {
+function normalizeIfscCode(value: string | null | undefined): string | null | undefined {
+  if (value === null) return null;
   const normalized = value?.replace(/\s/g, '').trim().toUpperCase();
   return normalized || undefined;
 }
 
-function normalizeIfscPrefix(value: string | undefined): string | undefined {
+function normalizeIfscPrefix(value: string | null | undefined): string | null | undefined {
+  if (value === null) return null;
   const normalized = value?.trim().toUpperCase();
   return normalized || undefined;
 }
 
-function getIfscPrefix(value: string | undefined): string | undefined {
+function getIfscPrefix(value: string | null | undefined): string | null | undefined {
+  if (value === null) return null;
   return value ? value.slice(0, 4) : undefined;
 }
 
-function getLast4(value: string | undefined): string | undefined {
+function getLast4(value: string | null | undefined): string | null | undefined {
+  if (value === null) return null;
   return value ? value.slice(-4) : undefined;
 }
 
@@ -101,20 +112,20 @@ export async function createAccount(
   userId: string,
   data: {
     bankName: string;
-    ifscPrefix?: string;
-    ifscCode?: string;
-    accountNumber?: string;
-    accountNumberLast4?: string;
+    ifscPrefix?: string | null;
+    ifscCode?: string | null;
+    accountNumber?: string | null;
+    accountNumberLast4?: string | null;
     accountType: string;
     currentBalance?: number;
     currency?: string;
-    interestRate?: number;
-    creditLimit?: number;
-    billingCycleStartDay?: number;
-    billingCycleEndDay?: number;
-    paymentDueDay?: number;
-    maturityDate?: string;
-    upiId?: string;
+    interestRate?: number | null;
+    creditLimit?: number | null;
+    billingCycleStartDay?: number | null;
+    billingCycleEndDay?: number | null;
+    paymentDueDay?: number | null;
+    maturityDate?: string | null;
+    upiId?: string | null;
   },
 ) {
   if (data.accountType === 'CASH') {
@@ -150,20 +161,20 @@ export async function updateAccount(
   requesterRole: string,
   data: Partial<{
     bankName: string;
-    ifscPrefix: string;
-    ifscCode: string;
-    accountNumber: string;
-    accountNumberLast4: string;
+    ifscPrefix: string | null;
+    ifscCode: string | null;
+    accountNumber: string | null;
+    accountNumberLast4: string | null;
     accountType: string;
     currentBalance: number;
-    upiId: string;
+    upiId: string | null;
     isActive: boolean;
-    interestRate: number;
-    creditLimit: number;
-    billingCycleStartDay: number;
-    billingCycleEndDay: number;
-    paymentDueDay: number;
-    maturityDate: string;
+    interestRate: number | null;
+    creditLimit: number | null;
+    billingCycleStartDay: number | null;
+    billingCycleEndDay: number | null;
+    paymentDueDay: number | null;
+    maturityDate: string | null;
   }>,
 ) {
   const account = await getAccountById(accountId, requesterId, requesterRole);
@@ -192,7 +203,7 @@ export async function updateAccount(
         accountNumber,
         accountNumberLast4: getLast4(accountNumber),
       }),
-      maturityDate: data.maturityDate ? new Date(data.maturityDate) : undefined,
+      maturityDate: data.maturityDate === null ? null : data.maturityDate ? new Date(data.maturityDate) : undefined,
       updatedAt: new Date(),
     },
   });

@@ -347,8 +347,8 @@ const reSchema = z.object({
   currentValue: z.number().positive(),
   purchaseDate: z.string().transform((s) => new Date(s)),
   loanId: z.string().optional(),
-  rentalIncomeMonthly: z.number().optional(),
-  notes: z.string().optional(),
+  rentalIncomeMonthly: z.number().nullable().optional(),
+  notes: z.string().nullable().optional(),
   owners: z.array(reOwnerSchema).min(1).optional(),
 });
 

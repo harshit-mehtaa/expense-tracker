@@ -856,6 +856,14 @@ describe('PUT /api/investments/real-estate/:id', () => {
       newValue: newProp,
     }));
   });
+
+  // An explicit null is the only wire-representable "user cleared this field" signal —
+  // the form always sends the full object on every save, so omitted/'' can't be relied on.
+  it.each(['rentalIncomeMonthly', 'notes'])('accepts an explicit null for %s, passing it through to the service unchanged', async (field) => {
+    const res = await request(app).put('/api/investments/real-estate/re-1').send({ [field]: null });
+    expect(res.status).toBe(200);
+    expect(m(svc.updateRealEstate)).toHaveBeenCalledWith('u1', 're-1', expect.objectContaining({ [field]: null }), 'ADMIN');
+  });
 });
 
 describe('DELETE /api/investments/real-estate/:id', () => {

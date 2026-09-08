@@ -205,6 +205,40 @@ describe('PUT /api/accounts/:id', () => {
     expect(res.status).toBe(200);
     expect(updateMock).toHaveBeenCalledWith('acc-1', 'u1', 'ADMIN', { bankName: 'ICICI' });
   });
+
+  // An explicit null is the only way a full-object-on-every-save form can signal "the
+  // user cleared this field" — omitting the key (or sending '') is indistinguishable
+  // from "not touched". See insurance.ts's identical premiumDueDate precedent.
+  it.each([
+    'accountNumber',
+    'ifscCode',
+    'ifscPrefix',
+    'accountNumberLast4',
+    'upiId',
+    'maturityDate',
+  ])('accepts an explicit null for string field %s, passing it through to the service unchanged', async (field) => {
+    const res = await request(app).put('/api/accounts/acc-1').send({ [field]: null });
+    expect(res.status).toBe(200);
+    expect(updateMock).toHaveBeenCalledWith('acc-1', 'u1', 'ADMIN', expect.objectContaining({ [field]: null }));
+  });
+
+  it.each([
+    'interestRate',
+    'creditLimit',
+    'billingCycleStartDay',
+    'billingCycleEndDay',
+    'paymentDueDay',
+  ])('accepts an explicit null for numeric field %s, passing it through to the service unchanged', async (field) => {
+    const res = await request(app).put('/api/accounts/acc-1').send({ [field]: null });
+    expect(res.status).toBe(200);
+    expect(updateMock).toHaveBeenCalledWith('acc-1', 'u1', 'ADMIN', expect.objectContaining({ [field]: null }));
+  });
+
+  it('sends ifscPrefix:null to the service when ifscCode is null too (no ?? fallback masking it)', async () => {
+    const res = await request(app).put('/api/accounts/acc-1').send({ ifscCode: null, ifscPrefix: null });
+    expect(res.status).toBe(200);
+    expect(updateMock).toHaveBeenCalledWith('acc-1', 'u1', 'ADMIN', expect.objectContaining({ ifscCode: null, ifscPrefix: null }));
+  });
 });
 
 describe('DELETE /api/accounts/:id', () => {

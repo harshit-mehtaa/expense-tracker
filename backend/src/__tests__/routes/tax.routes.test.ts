@@ -226,6 +226,23 @@ describe('POST /api/tax/profile', () => {
     }));
   });
 
+  // An explicit null is the only wire-representable "user cleared this field" signal —
+  // TaxCentre.tsx always sends the full profile object on every save.
+  it.each([
+    'grossSalary', 'hraReceived', 'rentPaidMonthly', 'cityType',
+    'deduction80C', 'deduction80D', 'deduction80E', 'deduction80G', 'deduction24B',
+    'nps80Ccd1B', 'otherDeductions',
+    'taxPaidAdvance', 'taxPaidTds', 'taxPaidSelfAssessment',
+  ])('accepts an explicit null for %s, passing it through to the service unchanged', async (field) => {
+    const res = await request(makeAdminApp()).post('/api/tax/profile').send({ [field]: null });
+    expect(res.status).toBe(200);
+    expect(m(taxSvc.upsertTaxProfile)).toHaveBeenCalledWith(
+      'admin-id',
+      expect.any(String),
+      expect.objectContaining({ [field]: null }),
+    );
+  });
+
   it('with targetUserId — fetches the pre-mutation snapshot for the TARGET member, not the admin', async () => {
     await request(makeAdminApp())
       .post(`/api/tax/profile?targetUserId=${VALID_TARGET_ID}`)
