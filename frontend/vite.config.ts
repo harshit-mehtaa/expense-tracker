@@ -36,10 +36,6 @@ export default defineConfig({
         'src/types/**',                    // pure type declarations, emit no JS
         'src/main.tsx',                    // createRoot at module scope — unimportable
         'src/vite-env.d.ts',
-        // Dead code: zero importers repo-wide (verified by grep). Excluded rather than
-        // tested, because testing code nothing runs inflates the number dishonestly.
-        // (ErrorBoundary used to be here too — it is now wired into AppShell and tested.)
-        'src/components/shared/PageHeader.tsx',
       ],
       // Per-glob, NOT a single global number. A global figure lets 100% in lib/hooks/api
       // mask near-zero pages — which is exactly what the old 3/50/28/3 floor did: it was

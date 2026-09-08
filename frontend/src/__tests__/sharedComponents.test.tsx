@@ -2,9 +2,8 @@
  * Tests for the presentational components in src/components/shared.
  *
  * INRDisplay is covered separately in INRDisplay.test.tsx.
- * PageHeader and ErrorBoundary are deliberately NOT tested: neither has a single
- * importer anywhere in src/, so testing them would inflate coverage with code that
- * never runs in the application.
+ * ErrorBoundary is covered separately in ErrorBoundary.test.tsx (it is wired into
+ * AppShell via the routed outlet).
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
