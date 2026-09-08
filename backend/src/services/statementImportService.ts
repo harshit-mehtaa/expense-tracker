@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import type { Prisma } from '@prisma/client';
+import { PaymentMode, type Prisma } from '@prisma/client';
 import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import { sanitizeFilename } from '../utils/sanitizeFilename';
@@ -110,14 +110,14 @@ export async function persistParsedStatement(args: PersistArgs) {
     await prisma.$transaction(async (tx) => {
       // Resolved once per import, not per row — same idempotent helper createTransaction
       // and recurringService use. Only looked up when at least one row needs it.
-      const anyCashRows = toCreate.some((t) => t.paymentMode === 'CASH');
+      const anyCashRows = toCreate.some((t) => t.paymentMode === PaymentMode.CASH);
       const cashAccount = anyCashRows ? await ensureCashAccount(tx, ownerUserId) : null;
 
       const normalRows: Prisma.TransactionCreateManyInput[] = [];
       const syntheticRows: Prisma.TransactionCreateManyInput[] = [];
 
       for (const t of toCreate) {
-        const isCashRow = cashAccount !== null && t.paymentMode === 'CASH';
+        const isCashRow = cashAccount !== null && t.paymentMode === PaymentMode.CASH;
 
         // Unlinked import + CASH row: resolves directly to the cash account, single leg
         // — structurally identical to a manual CASH expense with no account.
@@ -182,7 +182,7 @@ export async function persistParsedStatement(args: PersistArgs) {
             date: t.date,
             // Always 'CASH' here (isCashRow's precondition) — written directly rather
             // than `t.paymentMode ?? null`, which would leave an unreachable branch.
-            paymentMode: 'CASH',
+            paymentMode: PaymentMode.CASH,
             balanceImpactApplied: true,
             importHash: syntheticHash,
             transferPairId: pairId,

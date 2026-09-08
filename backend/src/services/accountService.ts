@@ -20,7 +20,7 @@ export async function ensureCashAccount(tx: Prisma.TransactionClient, userId: st
       data: {
         userId,
         bankName: 'Cash',
-        accountType: 'CASH',
+        accountType: AccountType.CASH,
         isCashAccount: true,
         currentBalance: 0,
         currency: 'INR',
@@ -128,7 +128,7 @@ export async function createAccount(
     upiId?: string | null;
   },
 ) {
-  if (data.accountType === 'CASH') {
+  if (data.accountType === AccountType.CASH) {
     throw AppError.badRequest('Cash accounts are system-managed and cannot be created manually');
   }
   const accountNumber = normalizeAccountNumber(data.accountNumber);
@@ -181,10 +181,10 @@ export async function updateAccount(
   if (account.isCashAccount && data.isActive === false) {
     throw AppError.badRequest('The cash account cannot be deactivated');
   }
-  if (account.isCashAccount && data.accountType !== undefined && data.accountType !== 'CASH') {
+  if (account.isCashAccount && data.accountType !== undefined && data.accountType !== AccountType.CASH) {
     throw AppError.badRequest('The cash account\'s type cannot be changed');
   }
-  if (!account.isCashAccount && data.accountType === 'CASH') {
+  if (!account.isCashAccount && data.accountType === AccountType.CASH) {
     throw AppError.badRequest('An existing account cannot be converted to the cash account');
   }
   const accountNumber = data.accountNumber !== undefined ? normalizeAccountNumber(data.accountNumber) : undefined;

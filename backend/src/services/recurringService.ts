@@ -172,7 +172,7 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
     // Log rather than throw, for the same reason as the missing-price case above: throwing
     // would abort the whole run and stop every OTHER rule this user has from generating.
     let resolvedBankAccountId = rule.bankAccountId;
-    if (!resolvedBankAccountId && rule.paymentMode === 'CASH') {
+    if (!resolvedBankAccountId && rule.paymentMode === PaymentMode.CASH) {
       try {
         const cashAccount = await ensureCashAccount(prisma, rule.userId);
         resolvedBankAccountId = cashAccount.id;

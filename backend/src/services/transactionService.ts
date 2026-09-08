@@ -394,7 +394,7 @@ export async function createTransaction(
     // account, but ensureCashAccount is idempotent, so falling back to it here also covers
     // any account created before this feature shipped and never backfilled.
     let cashResolvedBankAccountId = data.bankAccountId;
-    if (!cashResolvedBankAccountId && data.paymentMode === 'CASH' && data.type !== 'TRANSFER') {
+    if (!cashResolvedBankAccountId && data.paymentMode === PaymentMode.CASH && data.type !== 'TRANSFER') {
       const cashAccount = await ensureCashAccount(tx, userId);
       cashResolvedBankAccountId = cashAccount.id;
     }
