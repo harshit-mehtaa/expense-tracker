@@ -23,6 +23,7 @@ vi.mock('../config/prisma', () => {
     },
     bankAccount: {
       findFirst: vi.fn(),
+      findUnique: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
     },
@@ -113,6 +114,9 @@ beforeEach(() => {
   txMock.create.mockResolvedValue(MOCK_TX);
   txMock.update.mockResolvedValue({ ...MOCK_TX, deletedAt: new Date() });
   acctMock.findFirst.mockResolvedValue(MOCK_ACCOUNT);
+  // Default: the linked account is a normal (non-cash) account, so updateTransaction's
+  // paymentMode-away-from-CASH unlink check is a no-op unless a test overrides this.
+  acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, isCashAccount: false });
   acctMock.update.mockResolvedValue(MOCK_ACCOUNT);
   loanMock.findFirst.mockResolvedValue(null);
   loanMock.update.mockResolvedValue({});
@@ -1986,9 +1990,37 @@ describe('updateTransaction', () => {
     await expect(updateTransaction('tx-1', 'u1', 'MEMBER', {})).rejects.toThrow(/not found/i);
   });
 
-  it('throws BadRequest for TRANSFER type transactions', async () => {
-    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'TRANSFER' });
-    await expect(updateTransaction('tx-1', 'u1', 'MEMBER', {})).rejects.toThrow(/cannot be edited/i);
+  // Transfer legs are always persisted as type EXPENSE/INCOME, never 'TRANSFER' — the
+  // real signal that a row is one leg of a double-entry pair is transferPairId, not
+  // type. (The previous guard checked type === 'TRANSFER', which never fired.)
+  it('rejects an amount change on a transfer-paired transaction', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, transferPairId: 'pair-1' });
+    await expect(updateTransaction('tx-1', 'u1', 'MEMBER', { amount: 500 }))
+      .rejects.toThrow(/transfer-paired.*cannot have amount or type changed/i);
+    expect(txMock.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a type change on a transfer-paired transaction', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, transferPairId: 'pair-1' });
+    await expect(updateTransaction('tx-1', 'u1', 'MEMBER', { type: 'INCOME' }))
+      .rejects.toThrow(/transfer-paired.*cannot have amount or type changed/i);
+    expect(txMock.update).not.toHaveBeenCalled();
+  });
+
+  it('allows a non-money field edit (description) on a transfer-paired transaction', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, transferPairId: 'pair-1' });
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { description: 'Relabeled' });
+    expect(txMock.update).toHaveBeenCalled();
+  });
+
+  // A single-leg type:'TRANSFER' row (recurringService.ts can generate one from a rule
+  // with type 'TRANSFER', no transferPairId) is NOT a paired double-entry record, so
+  // it's intentionally not covered by the transferPairId guard above — confirming this
+  // is deliberate, not the same gap the old `type === 'TRANSFER'` guard failed to close.
+  it('allows an amount change on a single-leg type:TRANSFER row (no transferPairId — not a paired record)', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'TRANSFER', transferPairId: null, bankAccountId: null });
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { amount: 500 });
+    expect(txMock.update).toHaveBeenCalled();
   });
 
   it('throws Forbidden when MEMBER tries to edit another user\'s transaction', async () => {
@@ -2045,6 +2077,183 @@ describe('updateTransaction', () => {
     txMock.update.mockResolvedValue({ ...MOCK_TX, description: 'Updated desc' });
     await updateTransaction('tx-1', 'u1', 'MEMBER', { description: 'Updated desc' });
     expect(acctMock.update).not.toHaveBeenCalled();
+  });
+
+  // ─── paymentMode-away-from-CASH unlink (symmetric with the existing auto-link) ────
+
+  it('unlinks bankAccountId and reverses the balance when paymentMode moves away from CASH on a cash-linked row', async () => {
+    txMock.findUnique.mockResolvedValue({
+      ...MOCK_TX, type: 'EXPENSE', amount: 1000, bankAccountId: 'cash-1', paymentMode: 'CASH',
+    });
+    acctMock.findUnique.mockResolvedValue({ id: 'cash-1', isCashAccount: true });
+    txMock.update.mockResolvedValue({ ...MOCK_TX, paymentMode: 'UPI', bankAccountId: null });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { paymentMode: 'UPI' });
+
+    expect(txMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: null }) }),
+    );
+    // EXPENSE 1000 on the cash account had delta -1000; unlinking reverses it: +1000.
+    expect(acctMock.update).toHaveBeenCalledTimes(1);
+    expect(acctMock.update).toHaveBeenCalledWith({
+      where: { id: 'cash-1' },
+      data: { currentBalance: { increment: 1000 } },
+    });
+  });
+
+  it('does not double-apply balance changes when paymentMode-away-from-CASH and amount both change in one request', async () => {
+    // original: EXPENSE 1000 on the cash account. Edit: paymentMode -> UPI AND amount -> 2000.
+    // Correct: reverse the OLD delta only (+1000). The NEW amount (2000) must have zero
+    // balance effect anywhere — nothing is linked to receive it after unlink.
+    txMock.findUnique.mockResolvedValue({
+      ...MOCK_TX, type: 'EXPENSE', amount: 1000, bankAccountId: 'cash-1', paymentMode: 'CASH',
+    });
+    acctMock.findUnique.mockResolvedValue({ id: 'cash-1', isCashAccount: true });
+    txMock.update.mockResolvedValue({ ...MOCK_TX, paymentMode: 'UPI', amount: 2000, bankAccountId: null });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { paymentMode: 'UPI', amount: 2000 });
+
+    // Exactly one bankAccount.update call — proves the unlink branch and the existing
+    // netChange branch are mutually exclusive, not both firing.
+    expect(acctMock.update).toHaveBeenCalledTimes(1);
+    expect(acctMock.update).toHaveBeenCalledWith({
+      where: { id: 'cash-1' },
+      data: { currentBalance: { increment: 1000 } },
+    });
+  });
+
+  it('unlinks a DELIBERATELY cash-linked row too (not just auto-resolved ones) — the account picker allows choosing the cash account regardless of paymentMode', async () => {
+    txMock.findUnique.mockResolvedValue({
+      ...MOCK_TX, type: 'INCOME', amount: 500, bankAccountId: 'cash-1', paymentMode: 'UPI',
+    });
+    acctMock.findUnique.mockResolvedValue({ id: 'cash-1', isCashAccount: true });
+    txMock.update.mockResolvedValue({ ...MOCK_TX, paymentMode: 'NEQR', bankAccountId: null });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { paymentMode: 'NEQR' });
+
+    expect(txMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: null }) }),
+    );
+    expect(acctMock.update).toHaveBeenCalledWith({
+      where: { id: 'cash-1' },
+      data: { currentBalance: { increment: -500 } },
+    });
+  });
+
+  it('does NOT unlink when the linked account is a real (non-cash) account', async () => {
+    txMock.findUnique.mockResolvedValue({
+      ...MOCK_TX, type: 'EXPENSE', amount: 1000, bankAccountId: 'acct-1', paymentMode: 'CASH',
+    });
+    acctMock.findUnique.mockResolvedValue({ id: 'acct-1', isCashAccount: false });
+    txMock.update.mockResolvedValue({ ...MOCK_TX, paymentMode: 'UPI' });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { paymentMode: 'UPI' });
+
+    expect(txMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: undefined }) }),
+    );
+  });
+
+  it('does NOT look up the linked account when paymentMode stays CASH or the row is unlinked', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, bankAccountId: null, paymentMode: 'UPI' });
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { paymentMode: 'CARD' });
+    expect(acctMock.findUnique).not.toHaveBeenCalled();
+  });
+
+  // Review-found regression: the unlink guard must require an ACTUAL paymentMode edit
+  // (`paymentModeChanged`, a value comparison), not just "effectivePaymentMode !== CASH"
+  // — the latter is also true whenever a cash-linked row's stored paymentMode is
+  // already non-CASH/null, which would otherwise unlink+reverse balance on ANY
+  // unrelated field edit (e.g. the frontend's category-only bulk-edit PUT).
+  it('does NOT unlink or touch balance on a category-only edit of a cash-linked row (paymentMode not in the request)', async () => {
+    txMock.findUnique.mockResolvedValue({
+      ...MOCK_TX, type: 'EXPENSE', amount: 1000, bankAccountId: 'cash-1', paymentMode: 'UPI',
+    });
+    acctMock.findUnique.mockResolvedValue({ id: 'cash-1', isCashAccount: true });
+    txMock.update.mockResolvedValue({ ...MOCK_TX, categoryId: 'cat-1' });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { categoryId: 'cat-1' });
+
+    expect(acctMock.findUnique).not.toHaveBeenCalled();
+    expect(acctMock.update).not.toHaveBeenCalled();
+    expect(txMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: undefined }) }),
+    );
+  });
+
+  // The same bug, but via the actual payload shape EditTransactionModal sends: the
+  // frontend form ALWAYS resends paymentMode (prefilled from the row) on every edit, so
+  // a presence check (`data.paymentMode !== undefined`) — not a value-change check —
+  // would have fired on every single edit of a cash-linked row, not just a real change.
+  it('does NOT unlink or touch balance when paymentMode is resent UNCHANGED alongside other edited fields (the real EditTransactionModal payload shape)', async () => {
+    txMock.findUnique.mockResolvedValue({
+      ...MOCK_TX, type: 'EXPENSE', amount: 1000, bankAccountId: 'cash-1', paymentMode: 'UPI',
+    });
+    acctMock.findUnique.mockResolvedValue({ id: 'cash-1', isCashAccount: true });
+    txMock.update.mockResolvedValue({ ...MOCK_TX, description: 'Relabeled' });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', {
+      description: 'Relabeled', amount: 1000, type: 'EXPENSE', paymentMode: 'UPI',
+    });
+
+    expect(acctMock.findUnique).not.toHaveBeenCalled();
+    expect(acctMock.update).not.toHaveBeenCalled();
+    expect(txMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: undefined }) }),
+    );
+  });
+
+  // Review-found regression: a transfer-paired leg's account linkage must never be
+  // mutated by the unlink branch — unlinking one leg (and reversing only its own
+  // balance impact) would silently desync the double-entry pair, exactly what the
+  // sibling item-2 fix exists to prevent for amount/type.
+  it('does NOT unlink a transfer-paired leg even when paymentMode moves away from CASH', async () => {
+    txMock.findUnique.mockResolvedValue({
+      ...MOCK_TX, type: 'INCOME', amount: 500, bankAccountId: 'cash-1', paymentMode: 'CASH', transferPairId: 'pair-1',
+    });
+    txMock.update.mockResolvedValue({ ...MOCK_TX, paymentMode: 'UPI' });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { paymentMode: 'UPI' });
+
+    expect(acctMock.findUnique).not.toHaveBeenCalled();
+    expect(acctMock.update).not.toHaveBeenCalled();
+    expect(txMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: undefined }) }),
+    );
+  });
+
+  // Review-found regression: unlinking a row whose balance impact was never applied
+  // (e.g. an unconfirmed transfer counterpart, balanceImpactApplied: false) must not
+  // reverse a delta that was never applied in the first place — mirrors
+  // softDeleteTransaction's own `balanceImpactApplied !== false` reversal guard.
+  it('does NOT reverse balance when unlinking a row whose balanceImpactApplied is false', async () => {
+    txMock.findUnique.mockResolvedValue({
+      ...MOCK_TX, type: 'EXPENSE', amount: 1000, bankAccountId: 'cash-1', paymentMode: 'CASH', balanceImpactApplied: false,
+    });
+    acctMock.findUnique.mockResolvedValue({ id: 'cash-1', isCashAccount: true });
+    txMock.update.mockResolvedValue({ ...MOCK_TX, paymentMode: 'UPI' });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { paymentMode: 'UPI' });
+
+    expect(txMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ bankAccountId: null }) }),
+    );
+    expect(acctMock.update).not.toHaveBeenCalled();
+  });
+
+  // Review-found regression: the transferPairId guard must compare VALUES, not merely
+  // check field presence — editTxSchema always sends amount+type on every edit (they're
+  // required form fields), so a presence check would 400 every edit of a transfer leg,
+  // including a full-payload resend where amount/type happen to be unchanged.
+  it('allows a full-payload PUT on a transfer-paired leg when amount/type are resent UNCHANGED', async () => {
+    txMock.findUnique.mockResolvedValue({
+      ...MOCK_TX, type: 'EXPENSE', amount: 1000, transferPairId: 'pair-1',
+    });
+    txMock.update.mockResolvedValue({ ...MOCK_TX, description: 'Relabeled' });
+
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { amount: 1000, type: 'EXPENSE', description: 'Relabeled' });
+
+    expect(txMock.update).toHaveBeenCalled();
   });
 
   it('updates loan outstanding balance when loan-linked EXPENSE amount changes', async () => {

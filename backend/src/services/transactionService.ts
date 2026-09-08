@@ -591,25 +591,74 @@ export async function updateTransaction(
     const original = await ptx.transaction.findUnique({ where: { id: transactionId } });
     if (!original || original.deletedAt) throw AppError.notFound('Transaction');
     if (requesterRole !== 'ADMIN' && original.userId !== userId) throw AppError.forbidden();
-    // TRANSFER transactions are paired double-entry records; editing one leg would desync
-    // the paired leg's balance. Delete and re-create transfers instead.
-    if (original.type === 'TRANSFER') throw AppError.badRequest('TRANSFER transactions cannot be edited. Delete and re-create them.');
+    // Whether amount/type are actually CHANGING — not merely present in the request.
+    // editTxSchema (Transactions.tsx) always sends both on every edit (they're required
+    // fields on that form, unchanged or not), so a presence check here would reject
+    // every edit of a transfer leg, including the description-only edits this guard is
+    // explicitly meant to keep allowed.
+    const amountChanged = data.amount !== undefined && data.amount !== Number(original.amount);
+    const typeChanged = data.type !== undefined && data.type !== original.type;
+
+    // TRANSFER transactions are paired double-entry records; editing a paired leg's
+    // amount or type would desync the pair's balance impact. Delete and re-create the
+    // transfer instead. Other fields (description/category/date/tags/etc.) are safe to
+    // edit on a leg and stay allowed — only an actual amount/type CHANGE is blocked.
+    // NOTE: `original.type === 'TRANSFER'` was the previous guard here and never fired
+    // for a PAIRED leg — createTransaction/convertTransactionToTransfer always persist
+    // paired legs as EXPENSE/INCOME, never type:'TRANSFER'; `transferPairId` is the
+    // actual signal. A single-leg type:'TRANSFER' row CAN exist (recurringService.ts,
+    // generated from a rule with type 'TRANSFER', no transferPairId) — that shape is not
+    // a paired double-entry record, so it's intentionally NOT covered by this guard.
+    if (original.transferPairId && (amountChanged || typeChanged)) {
+      throw AppError.badRequest('Transfer-paired transactions cannot have amount or type changed. Delete and re-create the transfer instead.');
+    }
 
     // Auto-resolve to the user's cash account when a paymentMode edit turns an unlinked
     // transaction into a CASH one — mirrors createTransaction's create-time behavior.
-    // bankAccountId otherwise remains fully immutable here: this only ever moves it from
-    // null to the cash account, and never touches an already-linked transaction (real
-    // account or already-cash) — that case stays the existing cosmetic no-op.
+    // Symmetrically, unlink when a paymentMode edit turns an already-cash-linked
+    // transaction into a non-CASH one — otherwise the row is left permanently pointing
+    // at the cash account under a paymentMode that no longer says so. This applies
+    // whether the link was auto-resolved or the user explicitly chose the cash account
+    // at create time (the account picker allows it regardless of paymentMode) — a
+    // deliberate product decision: "linked to cash account" + "paymentMode says
+    // otherwise" is a contradictory state that should self-correct on a paymentMode
+    // edit specifically — not on any edit, and not proactively for a row that already
+    // sits in that state untouched (no PUT-time trigger exists to detect that case).
+    // Gated on paymentModeChanged (a real value change) — this must fire only when
+    // paymentMode is ACTUALLY being edited to something different in this request, not
+    // whenever the request merely happens to carry the row's already-stored paymentMode
+    // (editTxSchema/EditTransactionModal always resend it, so a bare `!== undefined`
+    // presence check — the exact class of bug the item-2 guard above was just fixed for
+    // — would fire on every edit of an already-cash-linked row, not just a real change).
+    // Excludes transfer-paired legs entirely: unlinking one leg of a double-entry pair
+    // (and reversing only its own balance impact) would silently corrupt the pair — a
+    // transfer leg's account linkage is only ever changed by deleting/re-creating the
+    // transfer, same as amount/type above.
+    // Any other already-linked transaction (a real, non-cash account) stays untouched —
+    // that case remains the existing cosmetic no-op.
+    const paymentModeChanged = data.paymentMode !== undefined && data.paymentMode !== original.paymentMode;
     const effectivePaymentMode = data.paymentMode ?? original.paymentMode;
     const effectiveType = data.type ?? original.type;
     let cashResolvedBankAccountId: string | null = original.bankAccountId;
     let cashAccountNewlyLinked = false;
-    if (!original.bankAccountId && effectivePaymentMode === 'CASH' && effectiveType !== 'TRANSFER') {
+    let cashAccountUnlinking = false;
+    if (!original.bankAccountId && effectivePaymentMode === PaymentMode.CASH && effectiveType !== 'TRANSFER') {
       // original.userId, not the requester's userId — an ADMIN editing a member's
       // transaction must resolve to the MEMBER's cash account, not their own.
       const cashAccount = await ensureCashAccount(ptx, original.userId);
       cashResolvedBankAccountId = cashAccount.id;
       cashAccountNewlyLinked = true;
+    } else if (
+      original.bankAccountId
+      && !original.transferPairId
+      && paymentModeChanged
+      && effectivePaymentMode !== PaymentMode.CASH
+    ) {
+      const linkedAccount = await ptx.bankAccount.findUnique({ where: { id: original.bankAccountId } });
+      if (linkedAccount?.isCashAccount) {
+        cashResolvedBankAccountId = null;
+        cashAccountUnlinking = true;
+      }
     }
 
     const updated = await ptx.transaction.update({
@@ -620,14 +669,13 @@ export async function updateTransaction(
         date: data.date ? new Date(data.date) : undefined,
         insurancePolicyId: data.type && data.type !== 'EXPENSE' ? null : undefined,
         refundForTransactionId: data.type && data.type !== 'INCOME' ? null : undefined,
-        bankAccountId: cashAccountNewlyLinked ? cashResolvedBankAccountId : undefined,
+        bankAccountId: cashAccountNewlyLinked ? cashResolvedBankAccountId : (cashAccountUnlinking ? null : undefined),
         updatedAt: new Date(),
       } as Prisma.TransactionUncheckedUpdateInput,
     });
 
     // Recalculate balance impact if account or financial fields changed
-    const amountChanged = data.amount !== undefined && data.amount !== Number(original.amount);
-    const typeChanged = data.type !== undefined && data.type !== original.type;
+    // (amountChanged/typeChanged already computed above, ahead of the transferPairId guard)
 
     if (typeChanged) {
       const activeRefundCount = await ptx.transaction.count({
@@ -638,7 +686,23 @@ export async function updateTransaction(
       }
     }
 
-    if ((amountChanged || typeChanged || cashAccountNewlyLinked) && (original.bankAccountId || cashAccountNewlyLinked)) {
+    if (cashAccountUnlinking && original.balanceImpactApplied !== false) {
+      // Mutually exclusive with the block below: unlinking always fully reverses the
+      // transaction's prior impact against the OLD (cash) account, regardless of
+      // whether amount/type ALSO changed in this same request — after unlink, nothing
+      // is linked to receive a "new" delta, so a simultaneous amount/type change has
+      // zero balance effect anywhere (same as any other unlinked, non-CASH transaction).
+      // Guarded on balanceImpactApplied !== false (mirrors softDeleteTransaction's own
+      // reversal guard) — an unapplied-impact leg (e.g. an unconfirmed transfer
+      // counterpart) never affected the account balance, so there's nothing to reverse.
+      const reversal = -balanceDelta(original.type, Number(original.amount));
+      if (reversal !== 0) {
+        await ptx.bankAccount.update({
+          where: { id: original.bankAccountId! },
+          data: { currentBalance: { increment: reversal } },
+        });
+      }
+    } else if (!cashAccountUnlinking && (amountChanged || typeChanged || cashAccountNewlyLinked) && (original.bankAccountId || cashAccountNewlyLinked)) {
       // Reverse the original delta, apply the new delta. A newly-linked cash account had
       // zero prior balance impact (it was unlinked), regardless of whether amount/type
       // also changed in the same edit — so the "old" delta is 0, not a real reversal.
