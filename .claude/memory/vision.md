@@ -32,16 +32,16 @@
   Recovery from P3009 is documented and tested in DEPLOY.md.
 
 ## Tech Debt Inventory
-- [medium] Both remaining cash-account gaps (import CASH routing, `updateTransaction`
-  CASH auto-resolve) were closed 2026-09-06. Residual: (1) auto-resolve is one-way — no
-  unlink on paymentMode CASH→other. (2) A non-null `transferPairId` row can still have
-  amount/type changed via `PATCH /transactions/:id` (only `type==='TRANSFER'` is
-  rejected), silently desyncing the pair — API doesn't enforce what the UI hides. (3)
-  `'CASH'` is a bare string literal in ~5 places instead of the enum — P1 risk. (4) A
-  linked-import CASH row is excluded from ALL expense reporting for as long as it exists
-  (correct for a real withdrawal, silent loss for a false-positive match); deletable now
-  but re-import won't recreate it (dedup ignores `deletedAt`). (5) Two identical CASH
-  rows in one statement hash the same and hard-fail the whole import via P2002.
+- [low] The 5 residual cash-account gaps closed 2026-09-08: symmetric unlink+balance-
+  reversal on paymentMode-away-from-CASH (gated on an actual value CHANGE, not field
+  presence — caught twice by review, same bug class both times); `transferPairId` (not
+  the dead `type==='TRANSFER'` check) now blocks amount/type edits on paired legs;
+  10 `'CASH'` literals → `PaymentMode`/`AccountType` enums; import dedup respects
+  `deletedAt` + a backfill migration for rows soft-deleted before the fix; intra-batch
+  duplicate rows counted instead of P2002-hard-failing the batch. Residual, NOT fixed
+  here: `createTransaction` still accepts the cash account as `bankAccountId` under any
+  paymentMode (the contradictory state item 1 self-corrects on edit, not blocked at
+  creation); no optimistic concurrency on balance mutations (pre-existing, whole file).
 - [medium] 43 raw `prisma.` calls remain in route handlers (`documents.ts` 19,
   `categories.ts` 11, `budgets.ts` 8, one each in `auth.ts`/`reports.ts`/
   `transactions.ts`/`loans.ts`/`health.ts`) — push into services when touched.
