@@ -1,14 +1,13 @@
 /**
  * Tests for transactionService.
  *
- * Covers: filter/WHERE construction, buildImportHash (pure), getTransactionById,
+ * Covers: filter/WHERE construction, getTransactionById,
  * createTransaction (INCOME/EXPENSE + TRANSFER double-entry), updateTransaction
  * (balance recalc, loan recalc, TRANSFER rejection), softDeleteTransaction (paired
- * cascade), bulkImportTransactions, getAllTransactionsForExport, buildCsv.
+ * cascade), getAllTransactionsForExport, buildCsv.
  *
  * transactionService uses default import prisma.
  * $transaction passthrough: fn receives same mock object as ptx/tx.
- * bulkImportTransactions uses DIRECT prisma calls (not $transaction).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -20,7 +19,6 @@ vi.mock('../config/prisma', () => {
       findUnique: vi.fn(),
       findFirst: vi.fn(),
       create: vi.fn(),
-      createMany: vi.fn(),
       update: vi.fn(),
     },
     bankAccount: {
@@ -49,9 +47,6 @@ vi.mock('../config/prisma', () => {
       create: vi.fn(),
       delete: vi.fn(),
     },
-    bankStatementImport: {
-      create: vi.fn(),
-    },
     $transaction: vi.fn(),
   };
   return { default: prisma, prisma };
@@ -59,7 +54,6 @@ vi.mock('../config/prisma', () => {
 
 import prisma from '../config/prisma';
 import {
-  buildImportHash,
   getTransactions,
   getTransactionById,
   getTransferCounterpartCandidates,
@@ -74,7 +68,6 @@ import {
   removeTransactionRefundLink,
   updateTransaction,
   softDeleteTransaction,
-  bulkImportTransactions,
   getAllTransactionsForExport,
   buildCsv,
 } from '../services/transactionService';
@@ -85,7 +78,6 @@ const loanMock = (prisma as any).loan;
 const policyMock = (prisma as any).insurancePolicy;
 const sipMock = (prisma as any).sIP;
 const sipTxMock = (prisma as any).sIPTransaction;
-const importMock = (prisma as any).bankStatementImport;
 
 const MOCK_TX = {
   id: 'tx-1',
@@ -119,7 +111,6 @@ beforeEach(() => {
   // override this.
   (prisma as any).recurringRule.findFirst.mockResolvedValue(null);
   txMock.create.mockResolvedValue(MOCK_TX);
-  txMock.createMany.mockResolvedValue({ count: 1 });
   txMock.update.mockResolvedValue({ ...MOCK_TX, deletedAt: new Date() });
   acctMock.findFirst.mockResolvedValue(MOCK_ACCOUNT);
   acctMock.update.mockResolvedValue(MOCK_ACCOUNT);
@@ -129,7 +120,6 @@ beforeEach(() => {
   sipMock.findFirst.mockResolvedValue(MOCK_SIP);
   sipTxMock.create.mockResolvedValue({ id: 'sip-tx-1', investmentId: 'inv-1' });
   sipTxMock.delete.mockResolvedValue({ id: 'sip-tx-1' });
-  importMock.create.mockResolvedValue({});
   (prisma as any).$transaction.mockImplementation(async (fn: any) => fn(prisma));
 });
 
@@ -449,64 +439,6 @@ describe('getTransactions — transfer metadata', () => {
       creditCardAccount: null,
       transferCounterpartyAccount: null,
     });
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// buildImportHash
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('buildImportHash', () => {
-  const DATE = '2025-04-01';
-  const AMOUNT = 1500.00;
-  const DESC = 'Salary';
-  const ACCOUNT_ID = 'acct-abc123';
-
-  it('is deterministic — same inputs produce same hash', () => {
-    const h1 = buildImportHash(DATE, AMOUNT, DESC, ACCOUNT_ID);
-    const h2 = buildImportHash(DATE, AMOUNT, DESC, ACCOUNT_ID);
-    expect(h1).toBe(h2);
-  });
-
-  it('produces a 64-character hex string (SHA-256)', () => {
-    const hash = buildImportHash(DATE, AMOUNT, DESC, ACCOUNT_ID);
-    expect(hash).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  it('normalizes description case — "Coffee" and "coffee" produce same hash', () => {
-    const h1 = buildImportHash(DATE, AMOUNT, 'Coffee', ACCOUNT_ID);
-    const h2 = buildImportHash(DATE, AMOUNT, 'COFFEE', ACCOUNT_ID);
-    expect(h1).toBe(h2);
-  });
-
-  it('normalizes description whitespace — leading/trailing spaces ignored', () => {
-    const h1 = buildImportHash(DATE, AMOUNT, '  Salary  ', ACCOUNT_ID);
-    const h2 = buildImportHash(DATE, AMOUNT, 'Salary', ACCOUNT_ID);
-    expect(h1).toBe(h2);
-  });
-
-  it('treats positive and negative amounts as equal (Math.abs)', () => {
-    const h1 = buildImportHash(DATE, -1500, DESC, ACCOUNT_ID);
-    const h2 = buildImportHash(DATE, 1500, DESC, ACCOUNT_ID);
-    expect(h1).toBe(h2);
-  });
-
-  it('produces different hashes for different dates', () => {
-    const h1 = buildImportHash('2025-04-01', AMOUNT, DESC, ACCOUNT_ID);
-    const h2 = buildImportHash('2025-04-02', AMOUNT, DESC, ACCOUNT_ID);
-    expect(h1).not.toBe(h2);
-  });
-
-  it('produces different hashes for different accounts', () => {
-    const h1 = buildImportHash(DATE, AMOUNT, DESC, 'account-A');
-    const h2 = buildImportHash(DATE, AMOUNT, DESC, 'account-B');
-    expect(h1).not.toBe(h2);
-  });
-
-  it('produces different hashes for different amounts', () => {
-    const h1 = buildImportHash(DATE, 1000, DESC, ACCOUNT_ID);
-    const h2 = buildImportHash(DATE, 2000, DESC, ACCOUNT_ID);
-    expect(h1).not.toBe(h2);
   });
 });
 
@@ -2435,56 +2367,6 @@ describe('softDeleteTransaction', () => {
     await softDeleteTransaction('tx-1', 'u1', 'MEMBER');
 
     expect(sipTxMock.delete).toHaveBeenCalledWith({ where: { id: 'sip-tx-1' } });
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// bulkImportTransactions
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('bulkImportTransactions', () => {
-  const ROWS = [
-    { date: '2025-04-01', amount: 1000, type: 'EXPENSE' as const, description: 'A' },
-    { date: '2025-04-02', amount: 2000, type: 'INCOME' as const, description: 'B' },
-  ];
-
-  it('calls createMany with dedup and creates import record', async () => {
-    txMock.createMany.mockResolvedValue({ count: 2 });
-
-    const result = await bulkImportTransactions('u1', 'acct-1', ROWS, 'HDFC', 'stmt.csv');
-
-    expect(txMock.createMany).toHaveBeenCalledWith(
-      expect.objectContaining({ skipDuplicates: true }),
-    );
-    expect(importMock.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          userId: 'u1',
-          bankName: 'HDFC',
-          filename: 'stmt.csv',
-          rowCount: 2,
-          importedCount: 2,
-        }),
-      }),
-    );
-    expect(result.importedCount).toBe(2);
-    expect(result.duplicatesSkipped).toBe(0);
-  });
-
-  it('counts duplicates correctly when createMany skips some rows', async () => {
-    txMock.createMany.mockResolvedValue({ count: 1 }); // 1 of 2 inserted, 1 was duplicate
-
-    const result = await bulkImportTransactions('u1', 'acct-1', ROWS, 'SBI', 'bank.csv');
-
-    expect(result.importedCount).toBe(1);
-    expect(result.duplicatesSkipped).toBe(1);
-    expect(result.errorsCount).toBe(0);
-  });
-
-  it('does NOT use $transaction (direct prisma calls)', async () => {
-    txMock.createMany.mockResolvedValue({ count: 1 });
-    await bulkImportTransactions('u1', 'acct-1', ROWS, 'ICICI', 'x.csv');
-    expect((prisma as any).$transaction).not.toHaveBeenCalled();
   });
 });
 

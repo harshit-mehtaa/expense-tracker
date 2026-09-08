@@ -32,16 +32,6 @@ type TransferAccountSummary = {
   accountType: string;
 };
 
-export function buildImportHash(
-  date: string,
-  amount: number,
-  description: string,
-  accountId: string,
-): string {
-  const normalized = `${date}|${Math.abs(amount).toFixed(2)}|${description.trim().toLowerCase()}|${accountId}`;
-  return crypto.createHash('sha256').update(normalized).digest('hex');
-}
-
 function buildDateFilter(filters: { fy?: string; startDate?: string; endDate?: string }): Prisma.DateTimeFilter | undefined {
   const date: Prisma.DateTimeFilter = {};
 
@@ -1178,64 +1168,6 @@ export async function softDeleteTransaction(
 
     return deleted;
   });
-}
-
-export interface BulkImportRow {
-  date: string;
-  amount: number;
-  type: 'INCOME' | 'EXPENSE';
-  description: string;
-  remark?: string;
-  categoryId?: string;
-  paymentMode?: string;
-}
-
-export async function bulkImportTransactions(
-  userId: string,
-  accountId: string,
-  rows: BulkImportRow[],
-  bankName: string,
-  filename: string,
-) {
-  const hashed = rows.map((row) => ({
-    userId,
-    bankAccountId: accountId,
-    amount: row.amount,
-    type: row.type,
-    description: row.description,
-    remark: row.remark,
-    date: new Date(row.date),
-    categoryId: row.categoryId,
-    paymentMode: row.paymentMode as PaymentMode | undefined,
-    tags: [] as string[],
-    importHash: buildImportHash(row.date, row.amount, row.description, accountId),
-  }));
-
-  const result = await prisma.transaction.createMany({
-    data: hashed,
-    skipDuplicates: true, // DB-level dedup on importHash unique constraint
-  });
-
-  const skipped = rows.length - result.count;
-
-  await prisma.bankStatementImport.create({
-    data: {
-      userId,
-      bankAccountId: accountId,
-      bankName,
-      rowCount: rows.length,
-      importedCount: result.count,
-      duplicatesSkipped: skipped,
-      errorsCount: 0,
-      filename,
-    },
-  });
-
-  return {
-    importedCount: result.count,
-    duplicatesSkipped: skipped,
-    errorsCount: 0,
-  };
 }
 
 export interface ExportFilters {
