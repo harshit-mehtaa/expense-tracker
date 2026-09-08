@@ -340,6 +340,47 @@ describe('TaxCentre — profile editing', () => {
     await waitFor(() => expect(calls2).toHaveLength(1));
   });
 
+  // Every numeric field sends the full profile on every save, so an explicit null is
+  // the only way to signal "the user cleared this" — distinct from 'blank because the
+  // server never had a value', which sends undefined (untouched — see above).
+  it('blanking a previously-set gross salary sends explicit null, not 0', async () => {
+    const user = userEvent.setup();
+    const calls: any[] = [];
+    mount([
+      http.post(url('/tax/profile'), async ({ request }) => {
+        calls.push(await request.json());
+        return HttpResponse.json({ data: TAX_PROFILE });
+      }),
+    ]);
+    await screen.findByText('Gross Income Components');
+
+    await user.clear(screen.getByLabelText(/gross salary/i));
+    await user.click(screen.getByRole('button', { name: /calculate & save/i }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0].grossSalary).toBeNull();
+  });
+
+  it('re-blanking a previously-set city type (no HRA claimed) sends explicit null', async () => {
+    const user = userEvent.setup();
+    const calls: any[] = [];
+    mount([
+      http.post(url('/tax/profile'), async ({ request }) => {
+        calls.push(await request.json());
+        return HttpResponse.json({ data: TAX_PROFILE });
+      }),
+    ]);
+    await screen.findByText('Gross Income Components');
+
+    // TAX_PROFILE has hraReceived=0/rentPaidMonthly=0, so clearing cityType here does
+    // not trip the HRA-required superRefine guard.
+    await user.selectOptions(screen.getByLabelText(/city type/i), '');
+    await user.click(screen.getByRole('button', { name: /calculate & save/i }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0].cityType).toBeNull();
+  });
+
   it('does not leak an unsaved edit onto a different member after switching the selector', async () => {
     // Regression for a real bug found in review: `resetOptions:{keepDirtyValues:true}`
     // (tried as a fix for a different, narrower problem) preserves dirty state by FIELD

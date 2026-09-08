@@ -96,14 +96,17 @@ const FALLBACK_CARD_SURFACES = [
   'linear-gradient(135deg, #164e63 0%, #365314 100%)',
 ];
 
+// `''` (a blank number input) means "clear this field" — preprocessed to `null` so
+// cleanAccountPayload can tell it apart from `undefined` ("not touched"/not rendered
+// in the current mode). See accounts.ts's backend `.nullable()` precedent.
 const optionalDaySchema = z.preprocess(
-  (value) => (value === '' || value === null || value === undefined ? undefined : value),
-  z.coerce.number().int().min(1, 'Use day 1-31').max(31, 'Use day 1-31').optional(),
+  (value) => (value === '' ? null : value),
+  z.coerce.number().int().min(1, 'Use day 1-31').max(31, 'Use day 1-31').nullable().optional(),
 );
 
 const optionalPositiveAmountSchema = z.preprocess(
-  (value) => (value === '' || value === null || value === undefined ? undefined : value),
-  z.coerce.number().min(0, 'Must be 0 or more').optional(),
+  (value) => (value === '' ? null : value),
+  z.coerce.number().min(0, 'Must be 0 or more').nullable().optional(),
 );
 
 const accountSchema = z.object({
@@ -140,7 +143,13 @@ const accountSchema = z.object({
 });
 
 type AccountForm = z.infer<typeof accountSchema>;
-type AccountPayload = Omit<AccountForm, 'customBankName' | 'isCreditBalance'>;
+// The wire payload allows explicit `null` on every clearable field — distinct from the
+// RHF form-value type above, whose inputs always read back a plain string/number.
+type AccountPayload = Omit<AccountForm, 'customBankName' | 'isCreditBalance' | 'accountNumber' | 'ifscCode' | 'upiId'> & {
+  accountNumber?: string | null;
+  ifscCode?: string | null;
+  upiId?: string | null;
+};
 type AccountFormMode = 'BANK' | 'CREDIT_CARD';
 
 function cleanAccountPayload(
@@ -161,18 +170,21 @@ function cleanAccountPayload(
     ? (data.isCreditBalance ? 1 : -1) * Math.abs(Number(data.currentBalance) || 0)
     : data.currentBalance;
 
+  // Null clears a field the user actually sees and can edit; undefined leaves untouched
+  // whatever the current mode/type doesn't render — mixing the two up either fails to
+  // clear a field the user just blanked out, or silently wipes one they never saw.
   return {
     bankName: bankName ?? '',
     accountType,
-    accountNumber: data.accountNumber?.trim() || undefined,
-    ifscCode: isCard ? undefined : data.ifscCode?.trim().toUpperCase() || undefined,
+    accountNumber: data.accountNumber?.trim() || null,
+    ifscCode: isCard ? undefined : data.ifscCode?.trim().toUpperCase() || null,
     currentBalance,
-    upiId: isCard ? undefined : data.upiId?.trim() || undefined,
+    upiId: isCard ? undefined : data.upiId?.trim() || null,
     interestRate: Number.isFinite(data.interestRate) ? data.interestRate : undefined,
-    creditLimit: isCard && Number.isFinite(data.creditLimit) ? data.creditLimit : undefined,
-    billingCycleStartDay: isCard ? data.billingCycleStartDay : undefined,
-    billingCycleEndDay: isCard ? data.billingCycleEndDay : undefined,
-    paymentDueDay: isCard ? data.paymentDueDay : undefined,
+    creditLimit: accountType === 'CREDIT_CARD' ? (Number.isFinite(data.creditLimit) ? data.creditLimit : null) : undefined,
+    billingCycleStartDay: isCard ? (data.billingCycleStartDay ?? null) : undefined,
+    billingCycleEndDay: isCard ? (data.billingCycleEndDay ?? null) : undefined,
+    paymentDueDay: isCard ? (data.paymentDueDay ?? null) : undefined,
   };
 }
 

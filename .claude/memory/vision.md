@@ -1,7 +1,7 @@
 # Project Vision
 
 <!-- Cap: 100 lines. Updated by /initialize, /update-system, or manually. -->
-<!-- Last updated: 2026-09-06 -->
+<!-- Last updated: 2026-09-08 -->
 
 ## Design Principles
 - Money handling is correctness-first: `Decimal` everywhere, never a float, because a
@@ -35,20 +35,18 @@
 - [medium] Both remaining cash-account gaps (import CASH routing, `updateTransaction`
   CASH auto-resolve) were closed 2026-09-06. Residual: (1) the auto-resolve is one-way —
   editing paymentMode CASH→other on an already-cash-linked transaction doesn't unlink it.
-  (2) Any row with a non-null `transferPairId` (import pairs, `convertTransactionToTransfer`
-  legs) can still have amount/type changed via `PATCH /transactions/:id` — only
+  (2) A non-null `transferPairId` row (import pairs, `convertTransactionToTransfer` legs)
+  can still have amount/type changed via `PATCH /transactions/:id` — only
   `type==='TRANSFER'` is rejected, not "has a transferPairId" — silently desyncing the
-  pair. Frontend hides Edit for these but the API doesn't enforce it. (3) `'CASH'` is a
-  bare string literal in ~5 places instead of `PaymentMode.CASH`/`AccountType.CASH` — P1 risk.
-  (4) A linked-import CASH row (correctly or wrongly classified by `importService.ts`'s
-  `/\bcash\b/i` rule, which matches before the CARD rule) is excluded from ALL expense
-  reporting (`dashboardService.ts`, `utils/refundReporting.ts` filter `transferPairId IS
-  NULL`) for as long as it exists — correct for a real withdrawal, silent data loss for a
-  false positive (e.g. "POS PURCHASE CASH N CARRY"). Deleting it is now possible (see
-  above) but re-importing the same statement won't recreate it — dedup ignores
-  `deletedAt`. (5) Two identical CASH rows in ONE statement (same date/amount/desc) hash
-  the same and hard-fail the whole import via P2002 — pre-existing, same "please try
-  again → can never succeed" class as the once-broken synthetic-leg hash.
+  pair; frontend hides Edit for these but the API doesn't enforce it. (3) `'CASH'` is a
+  bare string literal in ~5 places instead of `PaymentMode.CASH`/`AccountType.CASH` — P1
+  risk. (4) A linked-import CASH row (classified by `importService.ts`'s `/\bcash\b/i`
+  rule, matching before the CARD rule) is excluded from ALL expense reporting
+  (`dashboardService.ts`, `refundReporting.ts` filter `transferPairId IS NULL`) for as
+  long as it exists — correct for a real withdrawal, silent data loss for a false
+  positive; deletable now but re-import won't recreate it (dedup ignores `deletedAt`).
+  (5) Two identical CASH rows in ONE statement hash the same and hard-fail the whole
+  import via P2002 — pre-existing, "please try again → can never succeed" class.
 - [medium] 43 raw `prisma.` calls remain in route handlers (`documents.ts` 19,
   `categories.ts` 11, `budgets.ts` 8, one each in `auth.ts`/`reports.ts`/
   `transactions.ts`/`loans.ts`/`health.ts`) — push into owning services when touched.
@@ -76,10 +74,13 @@
   Unlinked `assetType:'GOLD'` Assets still render on Vehicles & Other. `recurring.ts`'s
   `targetUserId ?? userId` fallback makes an admin's "no selection" own-data-only there
   (unlike Transactions' family-wide) — masked by a tab-aware label, not backend-fixed.
-- [low] `''`-coerces-to-0 Zod bug in RealEstate.tsx, Accounts.tsx, TaxCentre.tsx — only
-  the user-CLEARS-a-field half remains (2026-09-06 fixed the server-null half in
-  TaxCentre via a hydration mapper). Needs backend `.nullable()` + tests in all 3 files;
-  a frontend-only `''->undefined` fix would silently revert an intentional clear.
+- [low] `''`-coerces-to-0 / can't-clear-a-set-field Zod+Prisma bug fixed 2026-09-08
+  across RealEstate.tsx, Accounts.tsx, TaxCentre.tsx + backend routes/accountService.ts's
+  null-swallowing normalize helpers. Residual: Accounts.tsx's `interestRate` has zero
+  rendered `<input>` — write-path unreachable, display-only — needs a UI input added,
+  deliberately left out here. Investments.tsx's `optionalString`/`optionalPositiveNumber`/
+  `optionalExchange`/`optionalDate` still swallow `''`→`undefined` (same bug class,
+  unaudited whether any maps to a nullable column) — out of this task's stated scope.
 
 ## What We Will NOT Do
 - No controllers layer — routes call services directly; an unrequested abstraction.

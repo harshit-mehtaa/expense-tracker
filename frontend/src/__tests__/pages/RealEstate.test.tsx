@@ -140,6 +140,40 @@ describe('Real Estate page — smoke', () => {
     });
   });
 
+  // The form sends the full property object on every save, so `null` is the only way to
+  // signal "the user cleared this" — omitting the key (or sending '') is indistinguishable
+  // from "not touched", and would silently revert an intentional clear.
+  it('blanking rental income and notes on an existing property sends explicit null for both', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    renderPage(<RealEstatePage />, {
+      route: '/real-estate',
+      user: MEMBER_USER,
+      handlers: [
+        ...reHandlers([{ ...PROPERTY, notes: 'Rented to tenant' }]),
+        http.put(url('/investments/real-estate/re-1'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: PROPERTY });
+        }),
+      ],
+    });
+    await screen.findByText('Koramangala Flat');
+
+    await user.click(screen.getByRole('button', { name: /^edit$/i }));
+    await screen.findByRole('heading', { name: /edit property/i });
+
+    const rentalInput = screen.getByPlaceholderText(/0 if not rented/i);
+    await user.clear(rentalInput);
+    const notesInput = screen.getByPlaceholderText(/^Optional$/i);
+    await user.clear(notesInput);
+
+    await user.click(screen.getByRole('button', { name: /save property/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body.rentalIncomeMonthly).toBeNull();
+    expect(body.notes).toBeNull();
+  });
+
   it('surfaces an error toast when the real-estate request fails', async () => {
     renderPage(<RealEstatePage />, {
       route: '/real-estate',

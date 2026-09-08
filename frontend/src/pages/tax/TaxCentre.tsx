@@ -39,37 +39,47 @@ function ProgressBar({ value, max, color = 'bg-green-500', label }: { value: num
   );
 }
 
+// `''` (a blank number input) means "clear this field" — preprocessed to `null` so the
+// wire payload can tell it apart from `undefined` ("not touched"). This form sends the
+// full profile object on every save, so `null` is the only representable clear signal
+// (see accounts.ts's backend `.nullable()` precedent). Applied uniformly to every
+// numeric field in one pass, rather than field-by-field, since a field-by-field pass is
+// exactly how interestRate (Accounts.tsx) was previously missed.
+const optionalAmount = z.preprocess(
+  (v) => (v === '' ? null : v),
+  z.coerce.number().min(0).nullable().optional(),
+);
+
 const profileSchema = z.object({
   regime: z.enum(['OLD', 'NEW']).optional(),
-  grossSalary: z.coerce.number().min(0).optional(),
-  hraReceived: z.coerce.number().min(0).optional(),
-  rentPaidMonthly: z.coerce.number().min(0).optional(),
+  grossSalary: optionalAmount,
+  hraReceived: optionalAmount,
+  rentPaidMonthly: optionalAmount,
   // TaxProfile.cityType is a nullable DB column with no default (schema.prisma), and
-  // its <select> only renders under the OLD regime — a profile first saved under NEW
-  // never registers it, so the server can hand back `null` for a real, valid profile.
-  // A bare `.optional()` rejects null (only undefined), and because zod object parsing
-  // is all-or-nothing that failure blocks the ENTIRE form from saving. Preprocessing
-  // null/'' to undefined (matching the precedent at Investments.tsx's optionalExchange)
-  // fixes that without weakening what the enum itself accepts.
+  // its <select> has a blank `<option value="">Select…</option>` — reachable both by an
+  // untouched field (server sent null, toProfileFormValues below maps it to undefined
+  // for display) and by the user explicitly re-blanking a previously-set value. Only the
+  // latter is a "clear": preprocessing `''` to `null` sends that as an explicit SET NULL,
+  // paired with tax.ts's backend `.nullable()` on this column.
   cityType: z.preprocess(
-    (v) => (v == null || v === '' ? undefined : v),
-    z.enum(['METRO', 'NON_METRO']).optional(),
+    (v) => (v === '' ? null : v),
+    z.enum(['METRO', 'NON_METRO']).nullable().optional(),
   ),
-  deduction80C: z.coerce.number().min(0).optional(),
-  deduction80D: z.coerce.number().min(0).optional(),
-  deduction80E: z.coerce.number().min(0).optional(),
-  deduction80G: z.coerce.number().min(0).optional(),
-  deduction24B: z.coerce.number().min(0).optional(),
-  nps80Ccd1B: z.coerce.number().min(0).optional(),
-  otherDeductions: z.coerce.number().min(0).optional(),
-  taxPaidAdvance: z.coerce.number().min(0).optional(),
-  taxPaidTds: z.coerce.number().min(0).optional(),
-  taxPaidSelfAssessment: z.coerce.number().min(0).optional(),
+  deduction80C: optionalAmount,
+  deduction80D: optionalAmount,
+  deduction80E: optionalAmount,
+  deduction80G: optionalAmount,
+  deduction24B: optionalAmount,
+  nps80Ccd1B: optionalAmount,
+  otherDeductions: optionalAmount,
+  taxPaidAdvance: optionalAmount,
+  taxPaidTds: optionalAmount,
+  taxPaidSelfAssessment: optionalAmount,
 }).superRefine((val, ctx) => {
   // Letting cityType stay unset once HRA is being claimed under the OLD regime is
-  // exactly how the silent-null-forever state got created in the first place — the
-  // <select> above has no blank option, so an unset value here now means the user
-  // saw a genuinely blank/unselected control and pressed save without choosing one.
+  // exactly how the silent-null-forever state got created in the first place — an
+  // unset/null value here now means the user saw the blank option and pressed save
+  // without choosing one (or explicitly cleared a previous choice).
   const isOldRegime = val.regime !== 'NEW';
   const claimsHRA = (val.hraReceived ?? 0) > 0 || (val.rentPaidMonthly ?? 0) > 0;
   if (isOldRegime && claimsHRA && !val.cityType) {

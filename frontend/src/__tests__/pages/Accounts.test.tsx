@@ -226,3 +226,178 @@ describe('Accounts page — cash account', () => {
     expect(await screen.findByRole('button', { name: /edit account/i })).toBeInTheDocument();
   });
 });
+
+// ─── Clearing a field sends explicit null, gated by what the form actually renders ──
+
+/**
+ * Every field on this form is sent on every save (no partial diffing), so `null` is the
+ * only way to signal "the user cleared this" — `undefined`/omitted means "not provided".
+ * A field the current mode doesn't render must stay `undefined` (untouched), never `null`
+ * (which would destructively clear a column the user never saw). See cleanAccountPayload.
+ */
+describe('Accounts page — clearing a field sends null, not omission', () => {
+  const BANK_ACCOUNT = {
+    id: 'acc-bank-1',
+    bankName: 'HDFC Bank',
+    accountType: 'SAVINGS',
+    accountNumber: '123456789012',
+    ifscCode: 'HDFC0001234',
+    upiId: 'name@upi',
+    currentBalance: 50000,
+    isActive: true,
+  };
+
+  const CREDIT_CARD = {
+    id: 'acc-card-1',
+    bankName: 'ICICI Bank',
+    accountType: 'CREDIT_CARD',
+    accountNumberLast4: '4444',
+    currentBalance: -5000,
+    creditLimit: 300000,
+    billingCycleStartDay: 2,
+    billingCycleEndDay: 1,
+    paymentDueDay: 18,
+    isActive: true,
+  };
+
+  const DEBIT_CARD = {
+    id: 'acc-debit-1',
+    bankName: 'SBI',
+    accountType: 'DEBIT_CARD',
+    accountNumberLast4: '9999',
+    currentBalance: 0,
+    isActive: true,
+  };
+
+  const openEditor = async (user: ReturnType<typeof userEvent.setup>, name: RegExp) => {
+    await screen.findAllByText(name);
+    const editButtons = await screen.findAllByRole('button', { name: /edit/i });
+    await user.click(editButtons[0]);
+  };
+
+  it('BANK mode: blanking IFSC/UPI sends null; card-only fields stay absent', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    renderPage(<AccountsPage />, {
+      route: '/accounts',
+      user: MEMBER_USER,
+      handlers: [
+        http.get(url('/accounts'), () => HttpResponse.json({ data: [BANK_ACCOUNT] })),
+        http.put(url('/accounts/acc-bank-1'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: BANK_ACCOUNT });
+        }),
+      ],
+    });
+
+    await openEditor(user, /HDFC Bank/);
+    await user.clear(await screen.findByLabelText(/^IFSC Code/i));
+    await user.clear(screen.getByLabelText(/^UPI ID/i));
+    await user.click(screen.getByRole('button', { name: /save|update/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body.ifscCode).toBeNull();
+    expect(body.upiId).toBeNull();
+    expect(body).not.toHaveProperty('creditLimit');
+    expect(body).not.toHaveProperty('billingCycleStartDay');
+    expect(body).not.toHaveProperty('billingCycleEndDay');
+    expect(body).not.toHaveProperty('paymentDueDay');
+  });
+
+  it('BANK mode: blanking the account number (rendered in both modes) sends null', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    renderPage(<AccountsPage />, {
+      route: '/accounts',
+      user: MEMBER_USER,
+      handlers: [
+        http.get(url('/accounts'), () => HttpResponse.json({ data: [BANK_ACCOUNT] })),
+        http.put(url('/accounts/acc-bank-1'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: BANK_ACCOUNT });
+        }),
+      ],
+    });
+
+    await openEditor(user, /HDFC Bank/);
+    await user.clear(await screen.findByLabelText(/^Account Number/i));
+    await user.click(screen.getByRole('button', { name: /save|update/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body.accountNumber).toBeNull();
+  });
+
+  it('CREDIT_CARD mode: blanking previously-set billing cycle days sends null for each', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    renderPage(<AccountsPage />, {
+      route: '/accounts',
+      user: MEMBER_USER,
+      handlers: [
+        http.get(url('/accounts'), () => HttpResponse.json({ data: [CREDIT_CARD] })),
+        http.put(url('/accounts/acc-card-1'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: CREDIT_CARD });
+        }),
+      ],
+    });
+
+    await openEditor(user, /ICICI Bank/);
+    await user.clear(await screen.findByLabelText(/start day/i));
+    await user.clear(screen.getByLabelText(/statement day/i));
+    await user.clear(screen.getByLabelText(/due day/i));
+    await user.click(screen.getByRole('button', { name: /save|update/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body.billingCycleStartDay).toBeNull();
+    expect(body.billingCycleEndDay).toBeNull();
+    expect(body.paymentDueDay).toBeNull();
+  });
+
+  it('CREDIT_CARD mode: blanking credit limit sends null; bank-only fields stay absent', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    renderPage(<AccountsPage />, {
+      route: '/accounts',
+      user: MEMBER_USER,
+      handlers: [
+        http.get(url('/accounts'), () => HttpResponse.json({ data: [CREDIT_CARD] })),
+        http.put(url('/accounts/acc-card-1'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: CREDIT_CARD });
+        }),
+      ],
+    });
+
+    await openEditor(user, /ICICI Bank/);
+    await user.clear(await screen.findByLabelText(/credit limit/i));
+    await user.click(screen.getByRole('button', { name: /save|update/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body.creditLimit).toBeNull();
+    expect(body).not.toHaveProperty('ifscCode');
+    expect(body).not.toHaveProperty('upiId');
+  });
+
+  it('DEBIT_CARD mode: creditLimit is never rendered, so it stays absent (not nulled) on save', async () => {
+    const user = userEvent.setup();
+    let body: any;
+    renderPage(<AccountsPage />, {
+      route: '/accounts',
+      user: MEMBER_USER,
+      handlers: [
+        http.get(url('/accounts'), () => HttpResponse.json({ data: [DEBIT_CARD] })),
+        http.put(url('/accounts/acc-debit-1'), async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ data: DEBIT_CARD });
+        }),
+      ],
+    });
+
+    await openEditor(user, /SBI/);
+    await user.click(screen.getByRole('button', { name: /save|update/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body).not.toHaveProperty('creditLimit');
+  });
+});

@@ -38,6 +38,11 @@ const ownersSchema = z.array(ownerSchema).min(1, 'Add at least one owner').super
   }
 });
 
+// `''` (a blank input) means "clear this field" — preprocessed to `null` so the wire
+// payload can tell it apart from `undefined`. The form sends the full object on every
+// save, so `null` is the only way to signal an intentional clear (see accounts.ts's
+// backend `.nullable()` precedent). Without this, `''` coerced straight to `0` for
+// rentalIncomeMonthly and persisted `''` instead of clearing notes.
 const propertySchema = z.object({
   propertyType: z.string(),
   propertyName: z.string().min(1, 'Required'),
@@ -45,8 +50,11 @@ const propertySchema = z.object({
   purchasePrice: z.coerce.number().positive(),
   currentValue: z.coerce.number().positive(),
   purchaseDate: z.string(),
-  rentalIncomeMonthly: z.coerce.number().optional(),
-  notes: z.string().optional(),
+  rentalIncomeMonthly: z.preprocess(
+    (value) => (value === '' ? null : value),
+    z.coerce.number().nullable().optional(),
+  ),
+  notes: z.preprocess((value) => (value === '' ? null : value), z.string().nullable().optional()),
   owners: ownersSchema,
 });
 
