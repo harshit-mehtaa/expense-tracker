@@ -9,20 +9,24 @@
  * would have missed it entirely — the failure lives strictly on the transition.
  * The first test below traverses that transition deliberately.
  *
- * Scope note: ~2,000 of this file's 3,058 statements sit inside modals that only open
- * on click (Edit, Import, Delete, ConvertToTransfer, ConvertToSIP, LinkPolicy,
- * LinkRefund, Documents). Chasing those was explicitly out of scope — they are the
- * brittle, cosmetic-change-breaking tests that were rejected. This file mounts the
- * page three ways and stops there.
+ * Scope note: most of this file's statements sit inside modals that only open on click
+ * (Edit, Import, Delete, ConvertToTransfer, ConvertToSIP, LinkPolicy, LinkRefund,
+ * Documents). Deep UI-detail tests for those (field layouts, exact copy, validation
+ * messages) are still out of scope — brittle, cosmetic-change-breaking, and rejected.
+ * The "Cache invalidation" describe block below is a deliberate, narrow exception: it
+ * opens Edit/Delete/Import/Convert-to-Transfer specifically to assert on
+ * `invalidateQueries` calls, not on DOM structure or copy — click an already-reachable
+ * button, assert a spy was called with certain query keys. Judged low-brittleness
+ * (2026-09-08) because it doesn't touch the assertions the original rejection was about.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import TransactionsPage from '@/pages/Transactions';
 import { renderPage, failOnConsoleError, SearchParamsProbe } from '../support/renderPage';
 import { url } from '../support/handlers';
-import { MONEY, MEMBER_USER } from '../support/fixtures';
+import { MONEY, MEMBER_USER, ACCOUNTS, CATEGORIES } from '../support/fixtures';
 
 failOnConsoleError();
 
@@ -553,6 +557,47 @@ describe('Transactions page — Recurring tab mutations carry the selected membe
     await waitFor(() => expect(capturedParam).toBe('u-member'));
   });
 
+  // Both mutations create transactions server-side (generate bulk-creates, apply POSTs
+  // /transactions directly — the same endpoint AddTransactionModal's create mutation
+  // uses) so both need the same invalidation contract, not just ['transactions'].
+  it('Generate Now invalidates the full key set on success', async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderPage(<TransactionsPage />, {
+      route: '/transactions?tab=recurring',
+      handlers: [
+        ...txHandlers({ rules: [RULE] }),
+        http.post(url('/recurring/generate'), () => HttpResponse.json({ data: { generated: 1 } })),
+      ],
+    });
+    await screen.findByText('Gym membership');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(screen.getByRole('button', { name: /generate now/i }));
+
+    await waitFor(() => {
+      for (const key of FULL_INVALIDATION_KEYS) expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [key] });
+    });
+  });
+
+  it('Apply Now invalidates the full key set on success', async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderPage(<TransactionsPage />, {
+      route: '/transactions?tab=recurring',
+      handlers: [
+        ...txHandlers({ rules: [RULE] }),
+        http.post(url('/transactions'), () => HttpResponse.json({ data: { ...TX, id: 'tx-applied' } }, { status: 201 })),
+      ],
+    });
+    await screen.findByText('Gym membership');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(screen.getByTitle(/apply now/i));
+
+    await waitFor(() => {
+      for (const key of FULL_INVALIDATION_KEYS) expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [key] });
+    });
+  });
+
   it('a selection made on Transactions is inherited by Recurring — Generate Now and Create Rule both carry it', async () => {
     const user = userEvent.setup();
     let generateParam: string | null = null;
@@ -748,6 +793,166 @@ describe('Transactions page — search', () => {
     await user.click(screen.getByRole('button', { name: /load more/i }));
     await waitFor(() => {
       expect(screen.getAllByText('Grocery run 2').length).toBeGreaterThan(0);
+    });
+  });
+});
+
+// ─── Cache invalidation: edit/delete/import/bulk/convert must keep Dashboard, Reports,
+// and Accounts in sync, not just the transactions list itself ───────────────────────
+//
+// staleTime is 5 minutes and refetchOnWindowFocus is off (lib/queryClient.ts), so
+// without invalidation these views would silently show stale data for up to 5 minutes
+// after any of these mutations. Desktop table + mobile card both render every
+// transaction row (Tailwind's responsive classes don't hide either in jsdom), so every
+// query below reaches for the FIRST match via getAllBy*.
+const FULL_INVALIDATION_KEYS = ['transactions', 'loans', 'budgets', 'budgets-actuals', 'accounts', 'dashboard', 'profit-and-loss', 'report-spending'];
+
+describe('Transactions page — edit/delete/import/bulk/convert cache invalidation', () => {
+  it('editMutation invalidates the full key set on success', async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [...txHandlers(), http.put(url('/transactions/tx-1'), () => HttpResponse.json({ data: TX }))],
+    });
+    await screen.findAllByText('Grocery run');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(screen.getAllByTitle('Transaction actions')[0]);
+    await user.click(await screen.findByText('Edit transaction'));
+    await screen.findByRole('heading', { name: 'Edit Transaction' });
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => {
+      for (const key of FULL_INVALIDATION_KEYS) expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [key] });
+    });
+  });
+
+  it('deleteMutation invalidates the full key set on success', async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [...txHandlers(), http.delete(url('/transactions/tx-1'), () => HttpResponse.json({ success: true }))],
+    });
+    await screen.findAllByText('Grocery run');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(screen.getAllByTitle('Transaction actions')[0]);
+    await user.click(await screen.findByText('Delete transaction'));
+    await screen.findByRole('heading', { name: 'Delete Transaction' });
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    await waitFor(() => {
+      for (const key of FULL_INVALIDATION_KEYS) expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [key] });
+    });
+  });
+
+  it('importMutation invalidates the full key set on success', async () => {
+    const user = userEvent.setup();
+    const { container, queryClient } = renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [
+        ...txHandlers(),
+        http.get(url('/accounts'), () => HttpResponse.json({ data: ACCOUNTS })),
+        http.get(url('/categories'), () => HttpResponse.json({ data: CATEGORIES })),
+        http.get(url('/category-rules'), () => HttpResponse.json({ data: [] })),
+        http.post(url('/transactions/import'), () => HttpResponse.json({ data: { imported: 1, skipped: 0, errors: [] } })),
+      ],
+    });
+    await screen.findAllByText('Grocery run');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(screen.getByRole('button', { name: /import csv/i }));
+    await screen.findByRole('heading', { name: 'Import Bank Statement' });
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['date,amount\n2025-06-01,100'], 'statement.csv', { type: 'text/csv' });
+    await user.upload(fileInput, file);
+    await user.click(screen.getByRole('button', { name: /^import$/i }));
+
+    await waitFor(() => {
+      for (const key of FULL_INVALIDATION_KEYS) expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [key] });
+    });
+  });
+
+  it('handleBulkDelete invalidates the full key set on success', async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [...txHandlers(), http.delete(url('/transactions/tx-1'), () => HttpResponse.json({ success: true }))],
+    });
+    await screen.findAllByText('Grocery run');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    // Row 0 is the desktop table's header ('Select all'); row 1 is the first (only)
+    // data row in this fixture — scoping avoids accidentally clicking select-all.
+    await user.click(within(screen.getAllByRole('row')[1]).getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+    await user.click(screen.getByRole('button', { name: /^confirm$/i }));
+
+    await waitFor(() => {
+      for (const key of FULL_INVALIDATION_KEYS) expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [key] });
+    });
+  });
+
+  it('handleBulkCategorize invalidates transactions/budgets/dashboard/financial-reports but NOT accounts/loans (categoryId-only PUT cannot touch balances)', async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [
+        ...txHandlers(),
+        http.get(url('/categories'), () => HttpResponse.json({ data: CATEGORIES })),
+        http.put(url('/transactions/tx-1'), () => HttpResponse.json({ data: TX })),
+      ],
+    });
+    await screen.findAllByText('Grocery run');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    // Row 0 is the desktop table's header ('Select all'); row 1 is the first (only)
+    // data row in this fixture — scoping avoids accidentally clicking select-all.
+    await user.click(within(screen.getAllByRole('row')[1]).getByRole('checkbox'));
+    await user.selectOptions(screen.getByDisplayValue(/assign category/i), 'cat-rent');
+    await user.click(screen.getByRole('button', { name: /^apply$/i }));
+
+    await waitFor(() => {
+      for (const key of ['transactions', 'budgets', 'budgets-actuals', 'dashboard', 'profit-and-loss', 'report-spending']) {
+        expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [key] });
+      }
+    });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['accounts'] });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['loans'] });
+  });
+
+  it('convertMutation (Mark as Transfer) invalidates dashboard/financial-reports in addition to its existing transactions/accounts/budgets', async () => {
+    const user = userEvent.setup();
+    // canConvertToTransfer requires a truthy bankAccountId (the txn's OWN source
+    // account); set it to an id NOT in ACCOUNTS so 'acc-1' remains a valid, distinct
+    // destination option in the modal's "To Account" select.
+    const TRANSFERABLE_TX = { ...TX, bankAccountId: 'acc-source' };
+    const { queryClient } = renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [
+        ...txHandlers({ transactions: [TRANSFERABLE_TX] }),
+        http.get(url('/accounts'), () => HttpResponse.json({ data: ACCOUNTS })),
+        http.get(url('/transactions/tx-1/transfer-counterpart-candidates'), () => HttpResponse.json({ data: [] })),
+        http.post(url('/transactions/tx-1/convert-to-transfer'), () => HttpResponse.json({ data: TX })),
+      ],
+    });
+    await screen.findAllByText('Grocery run');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(screen.getAllByTitle('Transaction actions')[0]);
+    await user.click(await screen.findByText('Mark as transfer'));
+    const heading = await screen.findByRole('heading', { name: 'Mark as Transfer' });
+    const modal = heading.closest('div.space-y-4') as HTMLElement;
+    // The destination-account <select> has no htmlFor/id pairing with its <Label> —
+    // scope to the modal since the background page still has its own "View:" combobox.
+    await user.selectOptions(within(modal).getByRole('combobox'), 'acc-1');
+    await waitFor(() => expect(within(modal).getByRole('button', { name: /mark as transfer/i })).toBeEnabled());
+    await user.click(within(modal).getByRole('button', { name: /^mark as transfer$/i }));
+
+    await waitFor(() => {
+      for (const key of FULL_INVALIDATION_KEYS.filter((k) => k !== 'loans')) {
+        expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [key] });
+      }
     });
   });
 });

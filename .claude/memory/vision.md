@@ -33,26 +33,20 @@
 
 ## Tech Debt Inventory
 - [medium] Both remaining cash-account gaps (import CASH routing, `updateTransaction`
-  CASH auto-resolve) were closed 2026-09-06. Residual: (1) the auto-resolve is one-way —
-  editing paymentMode CASH→other on an already-cash-linked transaction doesn't unlink it.
-  (2) A non-null `transferPairId` row (import pairs, `convertTransactionToTransfer` legs)
-  can still have amount/type changed via `PATCH /transactions/:id` — only
-  `type==='TRANSFER'` is rejected, not "has a transferPairId" — silently desyncing the
-  pair; frontend hides Edit for these but the API doesn't enforce it. (3) `'CASH'` is a
-  bare string literal in ~5 places instead of `PaymentMode.CASH`/`AccountType.CASH` — P1
-  risk. (4) A linked-import CASH row (classified by `importService.ts`'s `/\bcash\b/i`
-  rule, matching before the CARD rule) is excluded from ALL expense reporting
-  (`dashboardService.ts`, `refundReporting.ts` filter `transferPairId IS NULL`) for as
-  long as it exists — correct for a real withdrawal, silent data loss for a false
-  positive; deletable now but re-import won't recreate it (dedup ignores `deletedAt`).
-  (5) Two identical CASH rows in ONE statement hash the same and hard-fail the whole
-  import via P2002 — pre-existing, "please try again → can never succeed" class.
+  CASH auto-resolve) were closed 2026-09-06. Residual: (1) auto-resolve is one-way — no
+  unlink on paymentMode CASH→other. (2) A non-null `transferPairId` row can still have
+  amount/type changed via `PATCH /transactions/:id` (only `type==='TRANSFER'` is
+  rejected), silently desyncing the pair — API doesn't enforce what the UI hides. (3)
+  `'CASH'` is a bare string literal in ~5 places instead of the enum — P1 risk. (4) A
+  linked-import CASH row is excluded from ALL expense reporting for as long as it exists
+  (correct for a real withdrawal, silent loss for a false-positive match); deletable now
+  but re-import won't recreate it (dedup ignores `deletedAt`). (5) Two identical CASH
+  rows in one statement hash the same and hard-fail the whole import via P2002.
 - [medium] 43 raw `prisma.` calls remain in route handlers (`documents.ts` 19,
   `categories.ts` 11, `budgets.ts` 8, one each in `auth.ts`/`reports.ts`/
-  `transactions.ts`/`loans.ts`/`health.ts`) — push into owning services when touched.
-  `resolveTargetUserId` logic is similarly hand-duplicated in `transactions.ts:56`,
-  `loans.ts:40`, `budgets.ts:63` instead of calling the shared util; only checks
-  `deletedAt`, not `isActive`, everywhere it's used.
+  `transactions.ts`/`loans.ts`/`health.ts`) — push into services when touched.
+  `resolveTargetUserId` is hand-duplicated in `transactions.ts:56`/`loans.ts:40`/
+  `budgets.ts:63` instead of using the shared util; only checks `deletedAt`.
 - [medium] Import insert loop (`statementImportService.ts`) serial/unbounded in one open
   `$transaction` — large statement can throw P2028.
 - [low] No backend lint AND no `typecheck:tests` (unlike frontend). Dashboard snapshot
@@ -61,13 +55,17 @@
   Dashboard's `cashflow`/`alerts`/`budgetActuals`/`netWorthHistory` are eager+ungated
   with no `isError` (same defect class as the just-fixed `spendingByCat`); `summary`
   is the largest instance — a failed fetch paints ₹0 across every StatCard.
-- [medium] Primary transaction CRUD mutations (edit/delete/import/bulk/recurring-apply)
-  don't invalidate dashboard/profit-and-loss/report-spending/accounts query caches.
+- [low] Transaction CRUD cache invalidation gaps fixed 2026-09-08 via a shared
+  `invalidateTransactionMutationCaches` helper (`queryInvalidation.ts`) covering all 8
+  mutation sites + `['budgets-actuals']` (a key distinct from `['budgets','vs-actuals']`,
+  missed on first pass, caught by review). Residual, same bug class: `trial-balance`
+  (Reports.tsx) is invalidated by nothing; Loans/Categories/Accounts reconciliation
+  mutations don't invalidate dashboard/reports either — neither fixed here.
 - [low] `CashflowMonth`/`UpcomingAlert`/`useAccounts`/`useCategories`/`selectedMemberName`
   each duplicated instead of shared; `computeTotalLiabilities` has an undocumented endDate
   filter excluding overdue loans; `!isViewingFamilyWide` gates create buttons across 10
-  pages. No modal has role="dialog"/focus-trap/Escape/aria-live on error text anywhere;
-  `Sidebar.tsx` `<nav>` lacks aria-label; BUDGET_ALERT shows LIMIT as "due".
+  pages. No modal has role="dialog"/focus-trap/Escape/aria-live on errors; `Sidebar.tsx`
+  `<nav>` lacks aria-label; BUDGET_ALERT shows LIMIT as "due".
 - [low] Gold/RealEstate (`/assets`) and Transactions/RecurringRules both had a per-tab
   `viewUserId` desync; both fixed 2026-09-08 (shared owner in the tab-bar parent, as a
   prop; RecurringRulesPage's is REQUIRED — no standalone route/test unlike Gold/RE).

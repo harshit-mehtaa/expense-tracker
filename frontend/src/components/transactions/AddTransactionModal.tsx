@@ -16,7 +16,7 @@ import { useCategories, useAccounts, useLoans } from '@/hooks/useTransactionForm
 import { formatINR } from '@/lib/indianFormat';
 import { PAYMENT_MODES } from '@/lib/paymentModes';
 import { formatAccountOption } from '@/lib/accountFormat';
-import { invalidateFinancialReports } from '@/lib/queryInvalidation';
+import { invalidateTransactionMutationCaches } from '@/lib/queryInvalidation';
 
 const txSchema = z.object({
   description: z.string().min(1, 'Required'),
@@ -98,21 +98,11 @@ export function AddTransactionModal({
       params: targetUserId ? { targetUserId } : {},
     }),
     onSuccess: (_, submittedData) => {
-      qc.invalidateQueries({ queryKey: ['transactions'] });
-      qc.invalidateQueries({ queryKey: ['loans'] });
-      qc.invalidateQueries({ queryKey: ['budgets'] });
-      // A transaction with a bankAccountId moves that account's balance server-side
-      // (transactionService.ts) — ConvertToTransferModal already invalidates this,
-      // this mutation didn't.
-      qc.invalidateQueries({ queryKey: ['accounts'] });
-      // Dashboard's summary/cashflow/spend-by-category widgets otherwise stay stale after
-      // a quick-add — this CREATE mutation previously only invalidated
-      // transactions/loans/budgets (a known gap, see progress.md tech debt), fixed once
-      // here for both callers of it (Transactions.tsx's own Add flow and Dashboard's
-      // shortcuts). Sibling edit/delete/bulk mutations in Transactions.tsx still have
-      // the same gap — this fix does NOT close it everywhere, only for adding.
-      qc.invalidateQueries({ queryKey: ['dashboard'] });
-      invalidateFinancialReports(qc);
+      // Shared with every other transaction-mutating call site (Transactions.tsx,
+      // RecurringRules.tsx) — see queryInvalidation.ts for why this can't be a
+      // ['budgets']-only invalidation (Budgets.tsx's own page reads ['budgets-actuals'],
+      // a disjoint key from useBudgetsVsActuals.ts's Dashboard-widget key).
+      invalidateTransactionMutationCaches(qc);
       toast({ title: 'Transaction added', variant: 'success' });
       // Check if this EXPENSE pushes a budget over 80% or 100%
       if (submittedData.type === 'EXPENSE' && submittedData.categoryId) {

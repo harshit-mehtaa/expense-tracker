@@ -32,7 +32,7 @@ import { formatINR } from '@/lib/indianFormat';
 import { avatarInitial, buildMemberColorMap, resolveAvatarColor } from '@/lib/memberAvatar';
 import { PAYMENT_MODES, PAYMENT_MODE_LABELS } from '@/lib/paymentModes';
 import { formatAccountOption } from '@/lib/accountFormat';
-import { invalidateFinancialReports } from '@/lib/queryInvalidation';
+import { invalidateFinancialReports, invalidateTransactionMutationCaches } from '@/lib/queryInvalidation';
 import { useCategories, useAccounts } from '@/hooks/useTransactionFormOptions';
 import { AddTransactionModal } from '@/components/transactions/AddTransactionModal';
 
@@ -727,8 +727,7 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
         categoryId: data.categoryId || undefined,
       }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['transactions'] });
-      qc.invalidateQueries({ queryKey: ['loans'] });
+      invalidateTransactionMutationCaches(qc);
       toast({ title: 'Transaction updated', variant: 'success' });
       onClose();
     },
@@ -965,7 +964,7 @@ function ImportModal({ onClose, targetUserId }: { onClose: () => void; targetUse
     },
     onSuccess: (res) => {
       setResult(res.data.data);
-      qc.invalidateQueries({ queryKey: ['transactions'] });
+      invalidateTransactionMutationCaches(qc);
     },
   });
 
@@ -1254,8 +1253,7 @@ function DeleteConfirmModal({ tx, onClose }: { tx: Transaction; onClose: () => v
   const deleteMutation = useMutation({
     mutationFn: () => api.delete(`/transactions/${tx.id}`),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['transactions'] });
-      qc.invalidateQueries({ queryKey: ['loans'] });
+      invalidateTransactionMutationCaches(qc);
       toast({ title: 'Transaction deleted', variant: 'success' });
       onClose();
     },
@@ -1340,9 +1338,7 @@ function ConvertToTransferModal({ tx, onClose }: { tx: Transaction; onClose: () 
       return api.post(`/transactions/${tx.id}/convert-to-transfer`, payload);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['transactions'] });
-      qc.invalidateQueries({ queryKey: ['accounts'] });
-      qc.invalidateQueries({ queryKey: ['budgets'] });
+      invalidateTransactionMutationCaches(qc);
       toast({ title: 'Transaction marked as transfer', variant: 'success' });
       onClose();
     },
@@ -2283,7 +2279,7 @@ export default function TransactionsPage() {
       const results = await Promise.allSettled(ids.map((id) => api.delete(`/transactions/${id}`)));
       const failed = results.filter((r) => r.status === 'rejected').length;
       const succeeded = ids.length - failed;
-      qc.invalidateQueries({ queryKey: ['transactions'] });
+      invalidateTransactionMutationCaches(qc);
       if (failed === 0) {
         toast({ title: `Deleted ${succeeded} transaction${succeeded !== 1 ? 's' : ''}`, variant: 'success' });
       } else {
@@ -2304,7 +2300,11 @@ export default function TransactionsPage() {
       const results = await Promise.allSettled(ids.map((id) => api.put(`/transactions/${id}`, { categoryId: bulkCategoryId })));
       const failed = results.filter((r) => r.status === 'rejected').length;
       const succeeded = ids.length - failed;
-      qc.invalidateQueries({ queryKey: ['transactions'] });
+      // Category-only change: transactionService.ts's updateTransaction gates all
+      // balance/loan recalculation on amountChanged/typeChanged/cashAccountNewlyLinked,
+      // none of which a categoryId-only PUT can set — accounts/loans deliberately NOT
+      // invalidated here (see the sibling bulk-delete, which does need them).
+      invalidateTransactionMutationCaches(qc, { includeAccountsAndLoans: false });
       if (failed === 0) {
         toast({ title: `Categorized ${succeeded} transaction${succeeded !== 1 ? 's' : ''}`, variant: 'success' });
       } else {

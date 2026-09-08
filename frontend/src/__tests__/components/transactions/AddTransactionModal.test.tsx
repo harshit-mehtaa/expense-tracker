@@ -91,7 +91,7 @@ describe('AddTransactionModal', () => {
     await user.click(screen.getByRole('button', { name: 'Add Transaction' }));
 
     await waitFor(() => {
-      for (const key of ['transactions', 'loans', 'budgets', 'dashboard', 'profit-and-loss', 'report-spending', 'accounts']) {
+      for (const key of ['transactions', 'loans', 'budgets', 'budgets-actuals', 'dashboard', 'profit-and-loss', 'report-spending', 'accounts']) {
         expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [key] });
       }
     });

@@ -23,6 +23,7 @@ import {
 import api from '@/lib/api';
 import { formatDate, toDateInputValue } from '@/lib/dateFormat';
 import { cn } from '@/lib/utils';
+import { invalidateTransactionMutationCaches } from '@/lib/queryInvalidation';
 import { getCategoryPath, toCategoryTreeOptions, getCategoryTreeOptionLabel } from '@/lib/categoryUtils';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -147,7 +148,7 @@ export default function RecurringRulesPage({ viewUserId }: { viewUserId: string 
         title: `Generated ${result.generated} transaction${result.generated !== 1 ? 's' : ''}`,
         variant: result.generated > 0 ? 'success' : 'default',
       });
-      qc.invalidateQueries({ queryKey: ['transactions'] });
+      invalidateTransactionMutationCaches(qc);
     },
   });
 
@@ -168,7 +169,7 @@ export default function RecurringRulesPage({ viewUserId }: { viewUserId: string 
     },
     onSuccess: (_, rule) => {
       toast({ title: `Applied: ${rule.description}`, variant: 'success' });
-      qc.invalidateQueries({ queryKey: ['transactions'] });
+      invalidateTransactionMutationCaches(qc);
     },
     onError: (err: any) => {
       toast({ title: err?.response?.data?.message ?? 'Failed to apply rule', variant: 'error' });
