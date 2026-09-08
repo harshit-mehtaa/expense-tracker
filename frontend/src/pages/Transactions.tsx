@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/shared/EmptyState';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
 import { BankLogo } from '@/components/shared/BankLogo';
 import { Receipt, Upload, X, CheckCircle, AlertCircle, Download, Pencil, Trash2, SlidersHorizontal, ChevronDown, Repeat, Paperclip, TrendingUp, Shield, Undo2, CreditCard, MoreHorizontal } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -2111,6 +2112,23 @@ async function downloadTransactionsCsv(fy: string, targetUserId?: string) {
   URL.revokeObjectURL(url);
 }
 
+// Tab ids are the frozen URL contract (`?tab=<id>`) — mirrors the pattern in
+// Assets.tsx. Labels are free to change; ids are not.
+const TABS = ['transactions', 'recurring'] as const;
+type TxTab = (typeof TABS)[number];
+const DEFAULT_TAB: TxTab = 'transactions';
+const TAB_META: Record<TxTab, { label: string; icon: LucideIcon }> = {
+  transactions: { label: 'Transactions', icon: Receipt },
+  recurring: { label: 'Recurring', icon: Repeat },
+};
+// Array membership, NOT an object-key lookup (`TAB_META[raw]`): a plain object's
+// inherited keys ('constructor', 'toString', '__proto__', ...) are truthy lookups too,
+// which would wrongly accept `?tab=constructor` as a valid tab. `TABS.includes` has no
+// prototype chain to fall into.
+function isTab(v: string): v is TxTab {
+  return (TABS as readonly string[]).includes(v);
+}
+
 export default function TransactionsPage() {
   const { selectedFY } = useFY();
   const { user } = useAuth();
@@ -2135,11 +2153,18 @@ export default function TransactionsPage() {
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [isBulkCategorizing, setIsBulkCategorizing] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = searchParams.get('tab') ?? 'transactions';
-  function setActiveTab(tab: 'transactions' | 'recurring') {
+  // Any value not in TABS (missing, bogus, or a stale/hand-typed query param) must
+  // fall back to the default tab, never render neither. Deliberately not normalized
+  // back into the URL — an invalid `?tab=` stays visible in the address bar even
+  // though the UI shows the default tab; normalizing would write searchParams and
+  // re-trigger the "Auto-open add modal or filters from URL params" mount effect
+  // below, which has its own documented history of an ordering bug (see its comment).
+  const rawTab = searchParams.get('tab');
+  const activeTab: TxTab = rawTab && isTab(rawTab) ? rawTab : DEFAULT_TAB;
+  function setActiveTab(tab: TxTab) {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      if (tab === 'transactions') next.delete('tab');
+      if (tab === DEFAULT_TAB) next.delete('tab');
       else next.set('tab', tab);
       return next;
     }, { replace: true });
@@ -2426,21 +2451,24 @@ export default function TransactionsPage() {
 
       {/* Tab switcher */}
       <div className="flex border-b border-border">
-        {(['transactions', 'recurring'] as const).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={cn(
-              'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
-              activeTab === tab
-                ? 'border-primary text-primary'
-                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30',
-            )}
-          >
-            {tab === 'transactions' ? <Receipt className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
-            {tab === 'transactions' ? 'Transactions' : 'Recurring'}
-          </button>
-        ))}
+        {TABS.map((tab) => {
+          const Icon = TAB_META[tab].icon;
+          return (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+                activeTab === tab
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30',
+              )}
+            >
+              <Icon className="h-4 w-4" />
+              {TAB_META[tab].label}
+            </button>
+          );
+        })}
       </div>
 
       {activeTab === 'recurring' && <RecurringRulesPage viewUserId={viewUserId} />}

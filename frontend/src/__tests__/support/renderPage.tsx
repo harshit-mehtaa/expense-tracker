@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, type RenderResult } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useSearchParams } from 'react-router-dom';
 import type { RequestHandler } from 'msw';
 import { server } from '../mswServer';
 import { ToastProvider } from '@/contexts/ToastContext';
@@ -67,6 +67,16 @@ export function renderPage(
   );
 
   return Object.assign(result, { queryClient });
+}
+
+/**
+ * Asserts a URL-backed `?tab=`/`?param=` value actually round-trips through
+ * `useSearchParams`, not just component state — used by any page whose tab/filter
+ * state is URL-driven (Assets.tsx, Transactions.tsx).
+ */
+export function SearchParamsProbe() {
+  const [params] = useSearchParams();
+  return <div data-testid="search-params">{params.toString()}</div>;
 }
 
 /**

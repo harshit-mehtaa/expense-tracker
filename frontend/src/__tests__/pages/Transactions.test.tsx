@@ -20,7 +20,7 @@ import userEvent from '@testing-library/user-event';
 import { screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import TransactionsPage from '@/pages/Transactions';
-import { renderPage, failOnConsoleError } from '../support/renderPage';
+import { renderPage, failOnConsoleError, SearchParamsProbe } from '../support/renderPage';
 import { url } from '../support/handlers';
 import { MONEY, MEMBER_USER } from '../support/fixtures';
 
@@ -311,6 +311,43 @@ describe('Transactions page — URL-driven tabs', () => {
     expect(
       screen.getByRole('heading', { level: 1, name: 'Transactions' }),
     ).toBeInTheDocument();
+  });
+
+  it('an unknown ?tab value falls back to Transactions, never a blank page', async () => {
+    renderPage(<TransactionsPage />, { route: '/transactions?tab=bogus', handlers: txHandlers() });
+    expect((await screen.findAllByText('Grocery run')).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('heading', { level: 1, name: 'Recurring Transactions' })).not.toBeInTheDocument();
+    // "Recurring" also appears as the tab-switcher button's own label, so absence of
+    // that heading (not absence of the text "recurring") is the real signal here.
+    expect(screen.getByRole('button', { name: /^transactions$/i })).toHaveClass('border-primary');
+  });
+
+  it('?tab=constructor also falls back — an object-key lookup would wrongly accept it', async () => {
+    // The reason the tab guard is TABS.includes(v), not TAB_META[v]: a plain object's
+    // inherited keys (constructor, toString, __proto__, ...) are truthy lookups too.
+    renderPage(<TransactionsPage />, { route: '/transactions?tab=constructor', handlers: txHandlers() });
+    expect((await screen.findAllByText('Grocery run')).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('heading', { level: 1, name: 'Recurring Transactions' })).not.toBeInTheDocument();
+  });
+
+  it('?tab=bogus&add=1 still opens the Add modal, over the (fallback) Transactions tab, and the bogus tab survives in the URL', async () => {
+    // The one path where this fix intersects the ?add=1 mount effect's own documented
+    // ordering-bug history: the effect strips `add`/`startDate`/`endDate` from the URL
+    // but deliberately re-writes the RAW (unvalidated) tab value back in.
+    renderPage(<><TransactionsPage /><SearchParamsProbe /></>, {
+      route: '/transactions?tab=bogus&add=1',
+      handlers: txHandlers(),
+    });
+
+    expect((await screen.findAllByText('Grocery run')).length).toBeGreaterThan(0);
+    expect(
+      await screen.findByRole('heading', { level: 2, name: 'Add Transaction' }),
+    ).toBeInTheDocument();
+    // Exact final state, not just "doesn't contain add=1" — pins both that `tab`
+    // survives AND that every other param (add, or some other value like add=0) is gone.
+    await waitFor(() => {
+      expect(screen.getByTestId('search-params')).toHaveTextContent(/^tab=bogus$/);
+    });
   });
 
   it('?add=1 opens the add modal for a MEMBER', async () => {

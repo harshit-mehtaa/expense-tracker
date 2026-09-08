@@ -10,20 +10,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { useSearchParams } from 'react-router-dom';
 import AssetsPage from '@/pages/investments/Assets';
-import { renderPage, failOnConsoleError } from '../support/renderPage';
+import { renderPage, failOnConsoleError, SearchParamsProbe } from '../support/renderPage';
 import { url } from '../support/handlers';
 import { MEMBER_USER } from '../support/fixtures';
 
 failOnConsoleError();
-
-// Asserts the `?tab=` param actually round-trips through the URL, not just component
-// state — the entire reason this uses useSearchParams over useState.
-function SearchParamsProbe() {
-  const [params] = useSearchParams();
-  return <div data-testid="search-params">{params.toString()}</div>;
-}
 
 const VEHICLE = {
   id: 'a-1',
