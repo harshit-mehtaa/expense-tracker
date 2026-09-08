@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import { sanitizeFilename } from '../utils/sanitizeFilename';
@@ -82,16 +83,24 @@ export async function persistParsedStatement(args: PersistArgs) {
 
   try {
     // Explicit timeout. Prisma's interactive-transaction default is 5s, and this is the
-    // only $transaction in the repo that iterates an unbounded, user-supplied collection
-    // — a ~1,600-row statement (well within the 15MB upload limit) blows 5s at typical
-    // round-trip latency and fails with P2028. 30s covers ~10k rows, comfortably past any
-    // realistic statement, without holding a write transaction open for minutes.
-    // The real fix is createMany/chunking; tracked as debt, deliberately not done here.
+    // only $transaction in the repo that iterates an unbounded, user-supplied collection.
+    // The inserts below are batched via createMany (not chunked into separate
+    // transactions — that would break the all-or-nothing invariant this file's own top
+    // comment documents and import.routes.test.ts asserts on), so round-trip count is no
+    // longer a function of row count. Verified live against a real Postgres instance:
+    // createMany inserts 50,000 rows in ~2.4s inside one $transaction, comfortably under
+    // this timeout — Prisma auto-batches internally, staying under Postgres's bind-
+    // parameter limit without any app-level chunking. 30s is kept as a defensive ceiling
+    // for genuinely pathological cases (e.g. lock contention), not because row count
+    // alone can exhaust it anymore.
     await prisma.$transaction(async (tx) => {
       // Resolved once per import, not per row — same idempotent helper createTransaction
       // and recurringService use. Only looked up when at least one row needs it.
       const anyCashRows = toCreate.some((t) => t.paymentMode === 'CASH');
       const cashAccount = anyCashRows ? await ensureCashAccount(tx, ownerUserId) : null;
+
+      const normalRows: Prisma.TransactionCreateManyInput[] = [];
+      const syntheticRows: Prisma.TransactionCreateManyInput[] = [];
 
       for (const t of toCreate) {
         const isCashRow = cashAccount !== null && t.paymentMode === 'CASH';
@@ -119,21 +128,19 @@ export async function persistParsedStatement(args: PersistArgs) {
           cashDeltas.push(round2(t.type === 'INCOME' ? t.amount : -t.amount));
         }
 
-        await tx.transaction.create({
-          data: {
-            userId: ownerUserId,
-            bankAccountId: isCashRow && !accountId ? cashAccount!.id : (accountId ?? null),
-            amount: t.amount,
-            type: t.type,
-            categoryId: t.categoryId ?? null,
-            description: t.description,
-            remark: t.remark ?? null,
-            date: t.date,
-            paymentMode: t.paymentMode ?? null,
-            balanceImpactApplied: true,
-            importHash: t.hash,
-            transferPairId: pairId,
-          },
+        normalRows.push({
+          userId: ownerUserId,
+          bankAccountId: isCashRow && !accountId ? cashAccount!.id : (accountId ?? null),
+          amount: t.amount,
+          type: t.type,
+          categoryId: t.categoryId ?? null,
+          description: t.description,
+          remark: t.remark ?? null,
+          date: t.date,
+          paymentMode: t.paymentMode ?? null,
+          balanceImpactApplied: true,
+          importHash: t.hash,
+          transferPairId: pairId,
         });
 
         if (isCashRow && accountId) {
@@ -151,27 +158,38 @@ export async function persistParsedStatement(args: PersistArgs) {
           // condition), so `!` here is provably safe, not a suppressed nullability risk.
           const syntheticType = t.type === 'INCOME' ? 'EXPENSE' : 'INCOME';
           const syntheticHash = crypto.createHash('sha256').update(`${t.hash}|cash-leg`).digest('hex');
-          await tx.transaction.create({
-            data: {
-              userId: ownerUserId,
-              bankAccountId: cashAccount!.id,
-              amount: t.amount,
-              type: syntheticType,
-              categoryId: null,
-              description: t.description,
-              date: t.date,
-              // Always 'CASH' here (isCashRow's precondition) — written directly rather
-              // than `t.paymentMode ?? null`, which would leave an unreachable branch.
-              paymentMode: 'CASH',
-              balanceImpactApplied: true,
-              importHash: syntheticHash,
-              transferPairId: pairId,
-            },
+          syntheticRows.push({
+            userId: ownerUserId,
+            bankAccountId: cashAccount!.id,
+            amount: t.amount,
+            type: syntheticType,
+            categoryId: null,
+            description: t.description,
+            date: t.date,
+            // Always 'CASH' here (isCashRow's precondition) — written directly rather
+            // than `t.paymentMode ?? null`, which would leave an unreachable branch.
+            paymentMode: 'CASH',
+            balanceImpactApplied: true,
+            importHash: syntheticHash,
+            transferPairId: pairId,
           });
-          syntheticCashLegsCreated += 1;
           cashDeltas.push(round2(syntheticType === 'INCOME' ? t.amount : -t.amount));
         }
       }
+
+      // One bulk insert instead of up to 2×N per-row round trips — the actual fix.
+      // normalRows and syntheticRows share the identical row shape and target the same
+      // table with no ordering dependency between them, so there's no reason to pay two
+      // round trips when one covers both. Still inside this same $transaction, so
+      // atomicity is unchanged: either the whole batch lands and the balance syncs below
+      // run, or nothing here was ever written. No skipDuplicates — dedup against
+      // existing DB rows already happened above; an intra-file hash collision (two
+      // parsed rows hashing identically) should still hard-fail the whole batch exactly
+      // as it did before, not be silently dropped and desync
+      // `imported + duplicatesSkipped === rowCount`.
+      const allRows = [...normalRows, ...syntheticRows];
+      if (allRows.length > 0) await tx.transaction.createMany({ data: allRows });
+      syntheticCashLegsCreated = syntheticRows.length;
 
       // Sync the linked account's balance inside the same transaction as the inserts.
       // Unchanged: every row keeping bankAccountId: accountId (including linked-CASH

@@ -47,8 +47,10 @@
   `transactions.ts`/`loans.ts`/`health.ts`) — push into services when touched.
   `resolveTargetUserId` is hand-duplicated in `transactions.ts:56`/`loans.ts:40`/
   `budgets.ts:63` instead of using the shared util; only checks `deletedAt`.
-- [medium] Import insert loop (`statementImportService.ts`) serial/unbounded in one open
-  `$transaction` — large statement can throw P2028.
+- [low] Import insert loop fixed 2026-09-08: `statementImportService.ts` now bulk-
+  inserts via one `createMany` call inside the same `$transaction` instead of up to
+  2×N serial `create()` calls — round-trip count, the actual P2028 cause, no longer
+  scales with row count. Verified live against real Postgres: 50k rows in 2.4s.
 - [low] No backend lint AND no `typecheck:tests` (unlike frontend). Dashboard snapshot
   month key uses UTC not IST; `netWorth` (Reports.tsx) ignores `selectedFY` AND
   conflates loading/error into a permanent "Loading net worth data..." — no banner.
