@@ -19,7 +19,7 @@ recurring rules) WAS caught and fixed in the same review pass. Tracked correctly
 vision.md now. Flag for /update-system: verify a "dead code" claim behind a scope
 decision by grep for callers BEFORE presenting the decision to the user, not after.
 
-### 2026-09-08 | tooling | Frequency: 1
+### 2026-09-08 | tooling | Frequency: 2
 Stated in a plan (dead-code deletion task) as a safety-net justification: "Vite
 ssrTransform means a stale named import wouldn't even throw." FALSE — verified by
 reading `vite/dist/node/chunks/dep-*.js`: Vite 5.4's SSR module runner explicitly
@@ -33,3 +33,19 @@ elides type-only imports and `backend/tsconfig.json` excludes `src/__tests__` fr
 `tsc` — and backend has no `typecheck:tests` equivalent to the frontend's. Flag for
 /update-system: don't assert a toolchain behavior (throws vs. silently resolves) without
 either reading the tool's source or citing a doc — "sounds plausible" isn't verification.
+RECURRED same day, PDF-import debugging task: orchestrator diagnosed a "missing multipart
+boundary" bug in `Transactions.tsx`'s import POST by reading `axios@1.6.7`'s source (the
+`^1.6.7` range in `frontend/package.json`) and live-testing the *backend* multer behavior
+— but never checked what axios version is actually LOCKED (`package-lock.json`/
+`node_modules` resolve to `1.13.6`, which ships via `npm ci`). 1.13.6's
+`resolveConfig.js:36-38` unconditionally strips any Content-Type the caller sets on a
+FormData body in a browser env (`headers.setContentType(undefined)`), making the
+"buggy" line behaviorally identical to the "fixed" one — a real repro against real multer,
+built on an unverified premise about what the client actually sends, still produced a
+false root cause. Caught by the architect agent during PLAN, which re-verified by
+executing the actually-installed `resolveConfig.js`. Flag for /update-system (now at
+frequency 2 — propose a hard rule): when diagnosing a dependency's behavior, always read
+from `node_modules` (what's installed) never `package.json` (what's requested), and when
+the dependency has multiple internal code paths gated on environment (browser vs Node,
+adapter-specific), verify against the actual runtime target the bug report is about, not
+whichever path is easiest to execute a repro against.

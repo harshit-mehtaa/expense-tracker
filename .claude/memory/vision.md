@@ -1,7 +1,7 @@
 # Project Vision
 
 <!-- Cap: 100 lines. Updated by /initialize, /update-system, or manually. -->
-<!-- Last updated: 2026-09-08 -->
+<!-- Last updated: 2026-09-09 -->
 
 ## Design Principles
 - Money handling is correctness-first: `Decimal` everywhere, never a float, because a
@@ -32,25 +32,26 @@
   Recovery from P3009 is documented and tested in DEPLOY.md.
 
 ## Tech Debt Inventory
-- [low] The 5 residual cash-account gaps closed 2026-09-08: symmetric unlink+balance-
-  reversal on paymentMode-away-from-CASH (gated on an actual value CHANGE, not field
-  presence — caught twice by review, same bug class both times); `transferPairId` (not
-  the dead `type==='TRANSFER'` check) now blocks amount/type edits on paired legs;
-  10 `'CASH'` literals → `PaymentMode`/`AccountType` enums; import dedup respects
-  `deletedAt` + a backfill migration for rows soft-deleted before the fix; intra-batch
-  duplicate rows counted instead of P2002-hard-failing the batch. Residual, NOT fixed
-  here: `createTransaction` still accepts the cash account as `bankAccountId` under any
-  paymentMode (the contradictory state item 1 self-corrects on edit, not blocked at
-  creation); no optimistic concurrency on balance mutations (pre-existing, whole file).
+- [medium] PDF/CSV import gaps found 2026-09-09 fixing ICICI multi-line parsing
+  (`importService.ts`/`routes/import.ts`), none fixed here (real scope beyond a parser
+  bugfix): (1) import persists straight to the DB, mutates `bankAccount.currentBalance`
+  in-request — no dry-run, no bulk undo, only per-row `DELETE /:id`. (2)
+  `detectBankFromText` picks the first keyword hit in FIXED order, not the first
+  occurrence in the text — a real ICICI statement mislabeled "HDFC" via a beneficiary
+  IFSC code in a remark; label + auto-match only, not parsing. (3) The block
+  accumulator can't rejoin a large (7-8 digit) amount pdf.js splits mid-digit across two
+  lines, or a terminator with a minus sign/Cr-Dr suffix — both now surfaced via an
+  aggregate "N dated rows could not be parsed" warning, not recovered. (4) mixing a
+  narrow-fitting decimal with a real ungrouped amount on one line can pick the wrong
+  token — not seen in the two real exports checked.
+- [low] Cash-account residuals (2026-09-08): `createTransaction` accepts the cash
+  account as `bankAccountId` under any paymentMode (self-corrects on edit, not blocked
+  at creation); no optimistic concurrency on balance mutations.
 - [medium] 43 raw `prisma.` calls remain in route handlers (`documents.ts` 19,
   `categories.ts` 11, `budgets.ts` 8, one each in `auth.ts`/`reports.ts`/
   `transactions.ts`/`loans.ts`/`health.ts`) — push into services when touched.
   `resolveTargetUserId` is hand-duplicated in `transactions.ts:56`/`loans.ts:40`/
   `budgets.ts:63` instead of using the shared util; only checks `deletedAt`.
-- [low] Import insert loop fixed 2026-09-08: `statementImportService.ts` now bulk-
-  inserts via one `createMany` call inside the same `$transaction` instead of up to
-  2×N serial `create()` calls — round-trip count, the actual P2028 cause, no longer
-  scales with row count. Verified live against real Postgres: 50k rows in 2.4s.
 - [low] No backend lint AND no `typecheck:tests` (unlike frontend). Dashboard snapshot
   month key uses UTC not IST; `netWorth` (Reports.tsx) ignores `selectedFY` AND
   conflates loading/error into a permanent "Loading net worth data..." — no banner.
@@ -96,5 +97,4 @@
   test:coverage` green — **enforced in CI** at PER-DIRECTORY thresholds (not one global
   number). Threshold globs MUST be `'**/src/x/**'` — Vitest matches absolute paths, so
   `'src/x/**'` silently matches nothing and still exits 0.
-- CI (`quality` job) runs all of the above on every PR/push to `main`; every other CI
-  job depends on it passing.
+- CI (`quality` job) runs all of the above on every PR/push to `main`; every other CI job depends on it passing.

@@ -650,9 +650,9 @@ describe('parsePDF — SBI text layout', () => {
   });
 });
 
-// ─── parsePDF — inferTransactionType and amount-heuristic edge cases ─────────
-// These tests exercise the "both-columns > 0" fall-through (line 378) and the
-// 3-amounts positional heuristic (lines 503-504).
+// ─── parsePDF — resolveTransaction and amount-heuristic edge cases ───────────
+// These tests exercise the "both-columns > 0" fall-through and the 3-amounts
+// positional heuristic in resolveTransaction/selectAmountForType.
 
 describe('parsePDF — amount heuristic edge cases', () => {
   let pdfParseMock: ReturnType<typeof vi.fn>;
@@ -662,10 +662,10 @@ describe('parsePDF — amount heuristic edge cases', () => {
     vi.clearAllMocks();
   });
 
-  it('both-columns-nonzero falls through to default EXPENSE (line 378)', async () => {
+  it('both-columns-nonzero falls through to default EXPENSE', async () => {
     // "MISCELLANEOUS TRANSFER" has no income/expense keywords.
     // 3 amounts where withdrawal=500 AND deposit=300 are BOTH non-zero → neither heuristic fires.
-    // inferTransactionType falls through to return 'EXPENSE' (line 378).
+    // resolveTransaction falls through to its final default EXPENSE branch.
     const text = [
       'Test Bank Statement',
       'Account: 12345678',
@@ -1226,5 +1226,615 @@ describe('parseCSV — ICICI blank date cell', () => {
       '1,SOME PAYMENT,500.00,',
     ].join('\n')), 'ICICI');
     expect(r.errors[0].message).toBe('Invalid date');
+  });
+});
+
+// ─── parsePDF — ICICI multi-line passbook-style layout ───────────────────────
+// Real-world layout confirmed against an actual ICICI "OpTransactionHistory" PDF
+// export: serial-number-prefixed DD.MM.YYYY dates, narration wrapped across several
+// lines with no date/amount, and the amount+running-balance appearing together on a
+// later line with nothing after them. Amounts are NOT comma-grouped (e.g.
+// "1000000.00", not "10,00,000.00").
+
+describe('parsePDF — ICICI multi-line passbook-style layout', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  const ICICI_PDF_TEXT = [
+    'ICICI Bank Statement of Account',
+    'S No. Transaction',
+    'Date Cheque Number Transaction Remarks Withdrawal',
+    'Amount (INR)',
+    'Deposit',
+    'Amount (INR)',
+    'Balance',
+    '(INR)',
+    '1 01.07.2026 MERCHANT ONE',
+    'UPI/MERCHANT ONE/merchantone@ok/parking/BANK',
+    'OF',
+    'BA/654854995465/ICI1234567890',
+    '40.00 683783.52',
+    '2 02.07.2026 SALARY CREDIT',
+    'NEFT/SALARY-CORP/REF001/BANK',
+    'OF',
+    'BA/999999999999/ICI0987654321',
+    '1000000.00 1683783.52',
+    '3 03.07.2026 CC BillPay-9018/Self 664.16 1683119.36',
+    '4 04.07.2026 THREE COLUMN ROW',
+    'UPI/THREECOL/threecol@ok/rent/BANK',
+    '5000.00 0.00 1678119.36',
+    'Legends: 1.00 2.00',
+    'Never share your OTP, CVV or passwords with anyone, even if the person claims to be a Bank employee.',
+    'www.icici.bank.in Dial your Bank 1800-1080',
+    '-- 1 of 1 --',
+  ].join('\n');
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+    pdfParseMock.mockResolvedValue({ text: ICICI_PDF_TEXT, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+  });
+
+  it('parses a date+payee line whose amount+balance are on a later line', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    const row1 = result.transactions.find((t) => t.amount === 40);
+    expect(row1).toBeDefined();
+    expect(row1!.description).toContain('MERCHANT ONE');
+    expect(row1!.description).toContain('parking');
+  });
+
+  it('reconciles a large ungrouped deposit as INCOME via the widened amount regex', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    const salary = result.transactions.find((t) => t.amount === 1000000);
+    expect(salary).toBeDefined();
+    expect(salary!.type).toBe('INCOME');
+  });
+
+  it('parses a same-line terminator (narration + amount + balance together)', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    const row3 = result.transactions.find((t) => t.amount === 664.16);
+    expect(row3).toBeDefined();
+    expect(row3!.description).toContain('CC BillPay-9018/Self');
+  });
+
+  it('drops a zero-valued candidate in a 3-token trailing line, using the nonzero one', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    const row4 = result.transactions.find((t) => t.amount === 5000);
+    expect(row4).toBeDefined();
+    // The "0.00" withdrawal/deposit placeholder must never appear as its own transaction
+    expect(result.transactions.some((t) => t.amount === 0)).toBe(false);
+  });
+
+  it('parses all four real rows and nothing extra from the header/footer/legend text', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions).toHaveLength(4);
+    expect(result.transactions.some((t) => /legend/i.test(t.description))).toBe(false);
+    expect(result.transactions.some((t) => /icici\.bank\.in/i.test(t.description))).toBe(false);
+  });
+
+  it('does not leave a leftover amount-shaped token in any description', async () => {
+    const result = await parsePDF(Buffer.from('fake'));
+    result.transactions.forEach((t) => {
+      expect(t.description).not.toMatch(/\d+\.\d{2}/);
+    });
+  });
+});
+
+// ─── parsePDF — multi-line block fallback: negative/branch coverage ──────────
+
+describe('parsePDF — multi-line block fallback edge cases', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('skips a row when no terminator is found within the lookahead window', async () => {
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026 NO TERMINATOR ROW',
+      'line one of narration with no amounts at all',
+      'line two of narration with no amounts at all',
+      'line three of narration with no amounts at all',
+      'line four of narration with no amounts at all',
+      'line five of narration with no amounts at all',
+      'line six of narration with no amounts at all',
+      'line seven — past the lookahead window, never reached',
+      '2 02.07.2026 NEXT ROW',
+      'UPI/NEXT/next@ok/food/BANK',
+      '250.00 100250.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions.some((t) => t.description.includes('NO TERMINATOR'))).toBe(false);
+    // The following row must still parse correctly — an abandoned row must not corrupt state
+    expect(result.transactions.find((t) => t.amount === 250)).toBeDefined();
+  });
+
+  it('bails out of the lookahead when the next date-prefixed row starts first', async () => {
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026 SHORT NARRATION ROW',
+      'only one line of narration, no amount here',
+      '2 02.07.2026 SECOND ROW',
+      'UPI/SECOND/second@ok/food/BANK',
+      '250.00 100250.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions.some((t) => t.description.includes('SHORT NARRATION'))).toBe(false);
+    expect(result.transactions.find((t) => t.amount === 250)).toBeDefined();
+  });
+
+  it('does not treat a reference-number-shaped decimal inside narration as a terminator', async () => {
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026 REF NUMBER ROW',
+      'NEFT-N123456789-1234.00 continues on this line with more text after it',
+      '40.00 683783.52',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const row = result.transactions.find((t) => t.description.includes('REF NUMBER ROW'));
+    expect(row).toBeDefined();
+    expect(row!.amount).toBe(40);
+  });
+
+  it('does not let a reference-number-shaped decimal masquerade as a terminator even when it is line-terminal', async () => {
+    // Unlike the case above, this reference fragment has NOTHING after it on the line
+    // (tail-empty), so only AMOUNT_RE_WIDE's lookbehind guard — not the tail check —
+    // can stop it from being read as a two-token terminator.
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026 REF NUMBER ROW',
+      'NEFT-N123456789-1234.00',
+      '40.00 683783.52',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const row = result.transactions.find((t) => t.description.includes('REF NUMBER ROW'));
+    expect(row).toBeDefined();
+    // The reference fragment must never be read as a candidate amount
+    expect(row!.amount).toBe(40);
+    expect(result.transactions.some((t) => t.amount === 1234)).toBe(false);
+  });
+
+  it('bails out on a page-footer marker inside the lookahead window without consuming it', async () => {
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026 FOOTER INTERRUPTED ROW',
+      'some narration text before the footer',
+      '-- 1 of 2 --',
+      '40.00 683783.52',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions.some((t) => t.description.includes('FOOTER INTERRUPTED'))).toBe(false);
+  });
+});
+
+// ─── parsePDF — balance-delta direction inference ─────────────────────────────
+
+describe('parsePDF — balance-delta direction inference', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('does not apply delta inference to the first row of a statement (no prior balance)', async () => {
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026 FIRST ROW NO KEYWORD',
+      'UPI/FIRST/first@ok/misc/BANK',
+      '500.00 100000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    // No prevBalance exists yet, so this must fall through to the conservative default
+    expect(result.transactions[0].type).toBe('EXPENSE');
+  });
+
+  it('does not apply delta inference across a descending-date statement', async () => {
+    // Row A (07-05) sets prevBalance=10000; Row B is dated EARLIER (07-04) but its
+    // balance is HIGHER by exactly the trailing amount — if delta engaged despite the
+    // date going backwards, it would wrongly call this INCOME. It must not engage, so
+    // the keyword-free description falls through to the conservative EXPENSE default.
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 05.07.2026 ROW A',
+      'UPI/ROWA/rowa@ok/misc/BANK',
+      '500.00 10000.00',
+      '2 04.07.2026 ROW B NO KEYWORD HERE',
+      'UPI/ROWB/rowb@ok/misc/BANK',
+      '500.00 10500.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const rowB = result.transactions.find((t) => t.description.includes('ROW B'));
+    expect(rowB).toBeDefined();
+    expect(rowB!.type).toBe('EXPENSE');
+  });
+
+  it('falls back to keyword matching when the delta does not uniquely reconcile', async () => {
+    // Row A sets prevBalance=10000. Row B's balance moves by 300, but neither of its
+    // candidate amounts is 300 — delta finds no match, so the "credit" keyword decides.
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026 ROW A',
+      'UPI/ROWA/rowa@ok/misc/BANK',
+      '500.00 10000.00',
+      '2 02.07.2026 ROW B credit adjustment',
+      'UPI/ROWB/rowb@ok/misc/BANK',
+      '999.00 10300.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const rowB = result.transactions.find((t) => t.description.includes('ROW B'));
+    expect(rowB).toBeDefined();
+    expect(rowB!.type).toBe('INCOME');
+  });
+
+  it('prefers a reconciled delta over a disagreeing keyword and emits a warning', async () => {
+    // Row A sets prevBalance=683823.52. Row B's balance DROPS by exactly 40 (an
+    // EXPENSE by arithmetic), but its narration contains "Deposit" (an INCOME
+    // keyword) — mirrors the real Fixed-Deposit-narration false positive found while
+    // validating against a real statement.
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026 ROW A',
+      'UPI/ROWA/rowa@ok/misc/BANK',
+      '500.00 683823.52',
+      '2 02.07.2026 FD Deposit T4 301',
+      'MMT/IMPS/620119078142/Deposit T4 301/BANK',
+      '40.00 683783.52',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const rowB = result.transactions.find((t) => t.description.includes('FD Deposit'));
+    expect(rowB).toBeDefined();
+    expect(rowB!.type).toBe('EXPENSE');
+    expect(result.warnings.some((w) => /balance reconciliation/i.test(w))).toBe(true);
+  });
+});
+
+// ─── parsePDF — DD.MM.YYYY date format (ICICI) ────────────────────────────────
+
+describe('parsePDF — DD.MM.YYYY date format', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('parses a dot-separated date with a leading serial number', async () => {
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '7 15.07.2026 SERIAL PREFIXED ROW',
+      'UPI/SERIAL/serial@ok/misc/BANK',
+      '100.00 5000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const row = result.transactions[0];
+    expect(row.date.getFullYear()).toBe(2026);
+    expect(row.date.getMonth()).toBe(6); // July = month 6 (0-indexed)
+    expect(row.date.getDate()).toBe(15);
+  });
+
+  it('parses a dot-separated date with no serial-number prefix', async () => {
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '15.07.2026 UNPREFIXED ROW',
+      'UPI/UNPREFIXED/unprefixed@ok/misc/BANK',
+      '100.00 5000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const row = result.transactions[0];
+    expect(row.date.getFullYear()).toBe(2026);
+    expect(row.date.getDate()).toBe(15);
+  });
+
+  it('rejects an impossible DD.MM.YYYY date', async () => {
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '99.99.2026 BOGUS DATE ROW',
+      'UPI/BOGUS/bogus@ok/misc/BANK',
+      '100.00 5000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions.some((t) => t.amount === 100)).toBe(false);
+  });
+});
+
+// ─── parsePDF — branch coverage for the new amount/block helpers ─────────────
+
+describe('parsePDF — new-helper branch coverage', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('selectAmountForType takes the EXPENSE branch of the 3-amount positional pick', async () => {
+    // A 3-amount row with an EXPENSE keyword, reached via the keyword branch (not the
+    // no-keyword both-columns-nonzero fallback), to exercise selectAmountForType's
+    // `type === 'EXPENSE'` ternary arm specifically.
+    const text = [
+      'Test Bank Statement with enough padding text to pass the length check',
+      '01/04/25 BILL PAYMENT ELECTRICITY 500.00 300.00 1,49,200.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const tx = result.transactions.find((t) => t.description.includes('BILL PAYMENT'));
+    expect(tx).toBeDefined();
+    expect(tx!.type).toBe('EXPENSE');
+    expect(tx!.amount).toBe(500);
+  });
+
+  it('accumulates an empty first-line remainder when the date line has nothing after the date', async () => {
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026',
+      'narration text on its own line',
+      'more text Self 664.16 683119.36',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const row = result.transactions.find((t) => t.amount === 664.16);
+    expect(row).toBeDefined();
+    expect(row!.description).toContain('narration text on its own line');
+    expect(row!.description).toContain('more text Self');
+  });
+
+  it('skips a row whose only trailing line is an all-zero-candidate render, without corrupting the next row', async () => {
+    // scanAmountTokens already excludes val===0, so "0.00 0.00 5000.00" only ever
+    // yields one token (5000.00) — below the >= 2 needed to count as a terminator at
+    // all, so this line is treated as narration and the row is abandoned for lack of
+    // a terminator within the lookahead window.
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026 ALL ZERO ROW',
+      'narration with nothing useful',
+      '0.00 0.00 5000.00',
+      '2 02.07.2026 NEXT ROW',
+      'UPI/NEXT/next@ok/food/BANK',
+      '250.00 5250.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions.some((t) => t.description.includes('ALL ZERO'))).toBe(false);
+    // The next row must still parse — an abandoned row must not corrupt state
+    expect(result.transactions.find((t) => t.amount === 250)).toBeDefined();
+  });
+});
+
+// ─── parsePDF — review-driven fixes: statement-direction gating, phantom rows, dedup ──
+
+describe('parsePDF — global statement-direction gating (descending statements)', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('disables delta inference entirely on a descending (newest-first) statement, even for same-day rows', async () => {
+    // Overall statement direction is descending (07-05 -> 07-02), so a per-row
+    // "date >= prevDate" check would still wrongly pass on the two same-day rows
+    // below. The global direction gate must disable delta for the whole statement.
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 05.07.2026 ROW A',
+      'UPI/ROWA/rowa@ok/misc/BANK',
+      '500.00 9800.00',
+      '2 05.07.2026 ROW B NO KEYWORD',
+      'UPI/ROWB/rowb@ok/misc/BANK',
+      '100.00 9900.00',
+      '3 02.07.2026 ROW C',
+      'UPI/ROWC/rowc@ok/misc/BANK',
+      '100.00 9700.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const rowB = result.transactions.find((t) => t.description.includes('ROW B'));
+    expect(rowB).toBeDefined();
+    // Without the fix, delta would see balance rising 9800->9900 (+100, matching the
+    // trailing amount) and wrongly call this INCOME. The statement is descending
+    // overall, so delta must be disabled and the keyword-free default (EXPENSE) used.
+    expect(rowB!.type).toBe('EXPENSE');
+  });
+
+  it('still applies delta inference on a genuinely ascending statement with same-day rows', async () => {
+    // Regression check: the global gate must not disable delta for the common,
+    // legitimate case of multiple same-day transactions in an ascending statement.
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026 ROW A',
+      'UPI/ROWA/rowa@ok/misc/BANK',
+      '500.00 9500.00',
+      '2 01.07.2026 ROW B NO KEYWORD',
+      'UPI/ROWB/rowb@ok/misc/BANK',
+      '1000.00 10500.00',
+      '3 02.07.2026 ROW C',
+      'UPI/ROWC/rowc@ok/misc/BANK',
+      '200.00 10700.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const rowB = result.transactions.find((t) => t.description.includes('ROW B'));
+    expect(rowB).toBeDefined();
+    // Balance rose by exactly 1000 → delta correctly identifies INCOME
+    expect(rowB!.type).toBe('INCOME');
+  });
+});
+
+describe('parsePDF — a lone ungrouped amount on a dated line is not accepted as a transaction', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('does not create a phantom transaction from a dated opening-balance line carrying its own amount', async () => {
+    // The line itself HAS a wide-tier amount (this is what the wide-tier "needs >= 2
+    // amounts" heuristic alone is meant to catch) — SUMMARY_LINE_RE's "opening balance"
+    // keyword match is what actually rejects it here, before token-counting even runs.
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026 OPENING BALANCE 125000.00',
+      '2 02.07.2026 REAL ROW',
+      'UPI/REAL/real@ok/misc/BANK',
+      '250.00 125250.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions.some((t) => t.amount === 125000)).toBe(false);
+    expect(result.transactions.some((t) => t.description.includes('OPENING BALANCE'))).toBe(false);
+    expect(result.transactions.find((t) => t.amount === 250)).toBeDefined();
+    // A summary line is not a "dropped" transaction attempt — it was never one
+    expect(result.warnings.some((w) => /could not be parsed/i.test(w))).toBe(false);
+  });
+
+  it('rejects a two-amount statement-total line that the numeric heuristic alone would accept', async () => {
+    // Two amount-shaped tokens on one line ("TOTAL WITHDRAWALS ... TOTAL DEPOSITS
+    // ...") would pass the wide-tier "needs >= 2" numeric heuristic — SUMMARY_LINE_RE's
+    // "total" keyword is the guard that actually rejects it.
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026 TOTAL WITHDRAWALS 100000.00 TOTAL DEPOSITS 200000.00',
+      '2 02.07.2026 REAL ROW',
+      'UPI/REAL/real@ok/misc/BANK',
+      '250.00 125250.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions.some((t) => t.amount === 100000 || t.amount === 200000)).toBe(false);
+    expect(result.transactions.find((t) => t.amount === 250)).toBeDefined();
+  });
+
+  it('still accepts a genuine single narrow-tier amount on a working single-line layout', async () => {
+    // Regression check: this guard is wide-tier-only — a normal HDFC/SBI-style row
+    // with one grouped amount must be completely unaffected.
+    const text = [
+      'Test Bank Statement with enough padding text to pass the length check',
+      '01/04/25 SOME FEE ONLY 500.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions.find((t) => t.amount === 500)).toBeDefined();
+  });
+});
+
+describe('parsePDF — description boundary matches the first amount-shaped token regardless of value', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('cuts the description at a "0.00" placeholder, not after it, to keep makeImportHash stable', async () => {
+    // A blank Withdrawal/Deposit column rendering as "0.00" must still mark the
+    // description boundary — dropping it from the boundary search (using only
+    // nonzero tokens) would shift the description text and silently break
+    // deduplication for statements re-imported after this change.
+    const text = [
+      'Test Bank Statement with enough padding text to pass the length check',
+      '01/04/25 SALARY CREDIT NEFT 0.00 50,000.00 1,50,000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const tx = result.transactions.find((t) => t.amount === 50000 || t.description.includes('SALARY'));
+    expect(tx).toBeDefined();
+    expect(tx!.description).toBe('SALARY CREDIT NEFT');
+    expect(tx!.description).not.toContain('0.00');
+  });
+});
+
+describe('parsePDF — amount selection consistency across resolveTransaction branches', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('applies the same positional pick in the no-keyword default branch as the keyword branch would', async () => {
+    // 4 amounts, no keyword, both "withdrawal" and "deposit" positions nonzero (so the
+    // positional direction heuristic doesn't fire either) — falls through to the final
+    // default. With 4 amounts, amounts[0] and amounts[length-3] differ, so this
+    // discriminates selectAmountForType from a naive amounts[0] fallback.
+    const text = [
+      'Test Bank Statement with enough padding text to pass the length check',
+      '01/04/25 MISC ROW 111.11 500.00 300.00 50000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const tx = result.transactions.find((t) => t.description.includes('MISC ROW'));
+    expect(tx).toBeDefined();
+    expect(tx!.type).toBe('EXPENSE');
+    // amounts = [111.11, 500, 300, 50000]; positional pick for EXPENSE = amounts[length-3] = 500
+    expect(tx!.amount).toBe(500);
+  });
+});
+
+describe('parsePDF — aggregate dropped-row warning pluralization', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('uses plural "rows" when more than one dated row is dropped', async () => {
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026 NO TERMINATOR ONE',
+      'narration with no amounts at all',
+      '2 02.07.2026 NO TERMINATOR TWO',
+      'narration with no amounts at all',
+      '3 03.07.2026 GOOD ROW',
+      'UPI/GOOD/good@ok/food/BANK',
+      '250.00 100250.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions.find((t) => t.amount === 250)).toBeDefined();
+    expect(result.warnings.some((w) => /^2 dated rows could not be parsed/.test(w))).toBe(true);
+  });
+});
+
+describe('parsePDF — summary-line amount stripped from seed narration before block fallback', () => {
+  let pdfParseMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    pdfParseMock = await getPdfParseMock();
+    vi.clearAllMocks();
+  });
+
+  it('does not leak a summary line\'s own amount into a later block-accumulated description', async () => {
+    // The date line itself has a lone wide-tier amount ("125000.00"), routing it
+    // through the block fallback (per the phantom-row guard). If a real terminator
+    // happens to follow within the lookahead window, the summary line's own amount
+    // text must NOT appear in that transaction's description.
+    const text = [
+      'ICICI Bank Statement with enough padding text to pass the length check',
+      '1 01.07.2026 SUMMARY MARKER 125000.00',
+      'UPI/REAL/real@ok/misc/BANK',
+      '250.00 125250.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    const row = result.transactions.find((t) => t.amount === 250);
+    expect(row).toBeDefined();
+    expect(row!.description).toContain('SUMMARY MARKER');
+    expect(row!.description).not.toContain('125000.00');
   });
 });

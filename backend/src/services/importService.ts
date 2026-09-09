@@ -490,6 +490,7 @@ const PDF_DATE_PATTERNS = [
   /^(\d{2}\s[A-Za-z]{3}\s\d{4})\b/, // DD MMM YYYY              (SBI)
   /^(\d{2}-[A-Za-z]{3}-\d{4})\b/,   // DD-MMM-YYYY              (SBI alt)
   /^(\d{4}-\d{2}-\d{2})\b/,         // YYYY-MM-DD               (ISO)
+  /^(?:\d{1,6}\s+)?(\d{2}\.\d{2}\.\d{4})\b/, // [S.No.] DD.MM.YYYY (ICICI passbook export)
 ];
 
 /** Keyword that strongly suggests a credit (INCOME) transaction */
@@ -506,8 +507,8 @@ function parsePDFDate(dateStr: string): Date | null {
     const d = new Date(`${year}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`);
     return isNaN(d.getTime()) ? null : d;
   }
-  // DD-MM-YYYY
-  m = dateStr.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  // DD-MM-YYYY or DD.MM.YYYY
+  m = dateStr.match(/^(\d{2})[-.](\d{2})[-.](\d{4})$/);
   if (m) {
     const d = new Date(`${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`);
     return isNaN(d.getTime()) ? null : d;
@@ -539,26 +540,6 @@ function detectBankFromText(text: string): string {
   return 'GENERIC';
 }
 
-function inferTransactionType(
-  description: string,
-  amounts: number[],
-): 'INCOME' | 'EXPENSE' {
-  if (INCOME_KEYWORD_RE.test(description)) return 'INCOME';
-  if (EXPENSE_KEYWORD_RE.test(description)) return 'EXPENSE';
-  // Heuristic: if 3+ amounts (withdrawal, deposit, balance), use positional inference:
-  // In HDFC/SBI-style: amounts[-3]=withdrawal, amounts[-2]=deposit, amounts[-1]=balance
-  // If withdrawal > 0 and deposit === 0 → EXPENSE; reverse → INCOME
-  if (amounts.length >= 3) {
-    const withdrawal = amounts[amounts.length - 3];
-    const deposit = amounts[amounts.length - 2];
-    /* c8 ignore next 2 -- extractAmounts only pushes val>0, so withdrawal/deposit are always >0 here; these true branches are unreachable */
-    if (deposit > 0 && withdrawal === 0) return 'INCOME';
-    if (withdrawal > 0 && deposit === 0) return 'EXPENSE';
-  }
-  // Default to EXPENSE — conservative, user can correct
-  return 'EXPENSE';
-}
-
 function cleanDescription(raw: string): string {
   return raw
     .replace(/\s{2,}/g, ' ')  // collapse multiple spaces
@@ -566,15 +547,276 @@ function cleanDescription(raw: string): string {
     .trim();
 }
 
-function extractAmounts(text: string): number[] {
-  const amounts: number[] = [];
-  const re = /\b(\d{1,3}(?:,\d{2,3})*\.\d{2})\b/g;
+interface AmountToken { value: number; index: number; length: number; }
+
+/** Narrow amount token — the original, well-tested pattern (comma-grouped, <=3 leading digits). */
+const AMOUNT_RE_NARROW = /\b(\d{1,3}(?:,\d{2,3})*\.\d{2})\b/g;
+/**
+ * Fallback amount token for ungrouped thousands, e.g. ICICI's `683783.52` (no commas).
+ * Only ever consulted when AMOUNT_RE_NARROW finds nothing on a line — see scanAmounts.
+ * The lookbehind/lookahead guard rejects a decimal-shaped fragment immediately adjacent
+ * to a digit/`.`/`,`/`-`/`/`/`:`/`#`/`|`/`(`/`)`/`*` — the delimiter set actually seen
+ * in real UPI/NEFT/RTGS reference strings (e.g. "NEFT-N123456789-1234.00" and
+ * "MMT/IMPS/518012345678/1234.00/ABC" both correctly reject "1234.00" — see
+ * importService.test.ts for the exact rejected/accepted cases).
+ */
+const AMOUNT_RE_WIDE = /(?<![\w.,\-/:#|()*])(\d+(?:,\d{2,3})*\.\d{2})(?![\w.,\-/:#|()*])/g;
+
+/**
+ * Every regex match, INCLUDING a zero-valued "0.00" placeholder — position-accurate.
+ * Callers filter to `value > 0` themselves wherever a value (not just a position)
+ * matters; the description-boundary split in the single-line path deliberately needs
+ * the UNFILTERED first match (see scanAmounts) to keep `makeImportHash` stable for
+ * statements that render an empty Withdrawal/Deposit column as "0.00".
+ */
+function scanAmountTokens(text: string, re: RegExp): AmountToken[] {
+  const tokens: AmountToken[] = [];
+  const r = new RegExp(re.source, re.flags);
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
+  while ((m = r.exec(text)) !== null) {
     const val = parseFloat(m[1].replace(/,/g, ''));
-    if (val > 0) amounts.push(val);
+    tokens.push({ value: val, index: m.index, length: m[0].length });
   }
-  return amounts;
+  return tokens;
+}
+
+interface AmountScan { tokens: AmountToken[]; tier: 'narrow' | 'wide'; }
+
+/**
+ * Single source of truth for "where are the amounts in this text". Always tries the
+ * narrow (comma-grouped) pattern first; only falls back to the ungrouped-thousands
+ * pattern when narrow's nonzero matches don't reach the end of the line cleanly (either
+ * because it found nothing, or because a narration fragment happens to fit narrow's
+ * <=3-digit cap while the real trailing amount doesn't). Any line whose amounts the
+ * narrow pattern already matches cleanly today is completely unaffected by the wide
+ * pattern. Returns the RAW (zero-inclusive) token list for whichever tier was chosen —
+ * see scanAmountTokens for why.
+ */
+function scanAmounts(text: string): AmountScan {
+  const narrow = scanAmountTokens(text, AMOUNT_RE_NARROW);
+  const narrowNonZero = narrow.filter((t) => t.value > 0);
+  if (narrowNonZero.length > 0) {
+    const last = narrowNonZero[narrowNonZero.length - 1];
+    const tail = text.slice(last.index + last.length).trim();
+    if (tail.length === 0) return { tokens: narrow, tier: 'narrow' };
+  }
+  return { tokens: scanAmountTokens(text, AMOUNT_RE_WIDE), tier: 'wide' };
+}
+
+function selectAmountForType(type: 'INCOME' | 'EXPENSE', amounts: number[]): number {
+  // Heuristic: if 3+ amounts (withdrawal, deposit, balance), use positional inference:
+  // In HDFC/SBI-style: amounts[-3]=withdrawal, amounts[-2]=deposit, amounts[-1]=balance
+  if (amounts.length >= 3) {
+    let amount = type === 'EXPENSE' ? amounts[amounts.length - 3] : amounts[amounts.length - 2];
+    /* c8 ignore next -- callers only ever pass amounts filtered to val > 0, so amount is never 0 here */
+    if (amount === 0) amount = amounts[0];
+    return amount;
+  }
+  return amounts[0];
+}
+
+interface RowState { prevBalance: number | null; prevDate: Date | null; ascending: boolean; }
+
+/**
+ * Whether the statement's dated rows run oldest-first overall. A per-row `date >=
+ * prevDate` check alone cannot tell "ascending statement, same-day rows" from
+ * "descending statement, same-day rows" — both look identical locally — so delta
+ * inference is gated on this GLOBAL direction, not just the pairwise comparison. On a
+ * descending (or indeterminate) statement, delta inference is disabled entirely rather
+ * than attempted in reverse: reconciling against the correct neighbor would require
+ * comparing to the NEXT row's balance instead of the previous one, a materially
+ * different (and untested) code path, not worth the risk for what a bounded, disabled
+ * fallback already handles safely via keyword/positional/default inference.
+ *
+ * Uses a majority vote over EVERY consecutive pair of dated lines, not just first-vs-
+ * last — first-vs-last is fooled by a single non-transaction dated line (a "Statement
+ * Period: 01/07/2026 to 31/07/2026" header, or a "Printed on" footer) landing at either
+ * end, and resolves an all-same-day statement to "ascending" by default, silently
+ * re-enabling the exact inversion this gate exists to prevent. A vote across every pair
+ * is robust to a handful of stray header/footer date lines as long as real transaction
+ * rows dominate, and ties (including "no clear direction" and "all one day") default to
+ * FALSE — disabled — because a wrong-signed transaction is worse than a merely
+ * conservative one.
+ */
+function detectStatementDateOrder(lines: string[]): boolean {
+  const dates: Date[] = [];
+  for (const line of lines) {
+    for (const pattern of PDF_DATE_PATTERNS) {
+      const m = line.match(pattern);
+      if (!m) continue;
+      const d = parsePDFDate(m[1]);
+      if (d && d <= new Date()) dates.push(d);
+      break;
+    }
+  }
+  let increasing = 0;
+  let decreasing = 0;
+  for (let i = 1; i < dates.length; i++) {
+    const cmp = dates[i].getTime() - dates[i - 1].getTime();
+    if (cmp > 0) increasing++;
+    else if (cmp < 0) decreasing++;
+  }
+  return increasing > decreasing;
+}
+
+/**
+ * Decide direction (INCOME/EXPENSE) and the transaction amount for one row. This
+ * function is NOT layout-gated — it runs for every bank's rows, not just ICICI's, so a
+ * reconciled delta can now take precedence over a keyword on any layout, not only the
+ * new multi-line one.
+ * Precedence: reconciled balance-delta (only when the statement runs oldest-first
+ * overall AND this row's date is non-decreasing vs. the last row AND exactly one
+ * candidate amount reconciles to the cent — see detectStatementDateOrder) > keyword
+ * match > the existing 3-amount positional heuristic > default EXPENSE.
+ * A reconciled delta wins over a disagreeing keyword — verified against a real
+ * statement, where keyword false-positives (a Fixed Deposit narrated with "Deposit", a
+ * salary NACH batch credit narrated with "nach"/"ach") were the wrong answer both times
+ * delta and keyword actually disagreed. Disagreement is still surfaced via `warnings`
+ * so the user can double-check.
+ */
+function resolveTransaction(
+  description: string,
+  amounts: number[],
+  date: Date,
+  state: RowState,
+  warnings: string[],
+): { type: 'INCOME' | 'EXPENSE'; amount: number } {
+  const keywordType: 'INCOME' | 'EXPENSE' | undefined = INCOME_KEYWORD_RE.test(description)
+    ? 'INCOME'
+    : EXPENSE_KEYWORD_RE.test(description)
+      ? 'EXPENSE'
+      : undefined;
+
+  let deltaResult: { type: 'INCOME' | 'EXPENSE'; amount: number } | null = null;
+  if (
+    amounts.length >= 2
+    && state.prevBalance !== null
+    && state.prevDate !== null
+    && state.ascending
+    && date.getTime() >= state.prevDate.getTime()
+  ) {
+    const balance = amounts[amounts.length - 1];
+    const delta = balance - state.prevBalance;
+    const deltaAbs = Math.abs(delta);
+    const candidates = amounts.slice(0, -1).filter((a) => Math.abs(a - deltaAbs) < 0.005);
+    if (candidates.length === 1) {
+      deltaResult = { type: delta >= 0 ? 'INCOME' : 'EXPENSE', amount: candidates[0] };
+    }
+  }
+
+  // A reconciled delta is arithmetic proof (it only fires when the balance math works
+  // out to the cent), while a keyword match is a heuristic over free-text narration that
+  // demonstrably misfires on real statements — e.g. "...Deposit T4 301..." for a Fixed
+  // Deposit purchase (an EXPENSE from this account, not an INCOME "deposit"), and
+  // "NACH...ACH/SAL-..." for an employer's salary NACH batch credit (INCOME, not the
+  // auto-debit EXPENSE the "nach"/"ach" keywords normally imply). Both were verified
+  // against a real statement during implementation. So when they disagree, prefer the
+  // delta and surface the disagreement as a warning instead of silently trusting the
+  // keyword.
+  if (deltaResult && keywordType && keywordType !== deltaResult.type) {
+    warnings.push(
+      `Transaction direction on ${date.toISOString().slice(0, 10)}: the description `
+      + `matched ${keywordType} keywords, but balance reconciliation determined `
+      + `${deltaResult.type} — used ${deltaResult.type} (balance math is more reliable `
+      + `than keyword matching). Please verify this transaction.`,
+    );
+    return deltaResult;
+  }
+  if (deltaResult) return deltaResult;
+  if (keywordType) return { type: keywordType, amount: selectAmountForType(keywordType, amounts) };
+
+  if (amounts.length >= 3) {
+    const withdrawal = amounts[amounts.length - 3];
+    const deposit = amounts[amounts.length - 2];
+    /* c8 ignore next 2 -- callers only ever pass amounts filtered to val > 0, so withdrawal/deposit are always >0 here; these true branches are unreachable */
+    if (deposit > 0 && withdrawal === 0) return { type: 'INCOME', amount: deposit };
+    if (withdrawal > 0 && deposit === 0) return { type: 'EXPENSE', amount: withdrawal };
+  }
+  // Default to EXPENSE — conservative, user can correct. Route through
+  // selectAmountForType (not amounts[0] directly) so a 4+-amount row picks the same
+  // positional column here as it would via the keyword branch above — consistent with
+  // the original pre-refactor behavior, which always applied positional selection for
+  // 3+ amount rows regardless of how the type was determined.
+  return { type: 'EXPENSE', amount: selectAmountForType('EXPENSE', amounts) };
+}
+
+/**
+ * A dated line describing a statement-level total, not an individual transaction — an
+ * "Opening/Closing Balance", "Total", or "Brought/Carried Forward" row. These can carry
+ * one OR TWO amount-shaped tokens (e.g. "TOTAL WITHDRAWALS 100000.00 TOTAL DEPOSITS
+ * 200000.00"), so the wide-tier "needs >= 2 amounts" heuristic alone doesn't reject
+ * them — this keyword check runs first and is decisive. Matched lines are skipped
+ * outright (like a future-date artifact), not routed through the block accumulator and
+ * not counted toward the dropped-row warning — they were never a transaction attempt.
+ */
+const SUMMARY_LINE_RE = /\b(?:opening|closing)\s+balance\b|\btotal\b|\bbrought\s+forward\b|\bcarried\s+forward\b|\bb\/f\b|\bc\/f\b/i;
+
+const MAX_BLOCK_LOOKAHEAD = 6;
+/** Lines that must never be swallowed into a transaction description, even if they
+ * happen to fall inside a block-accumulator's lookahead window (glossary/legend/footer
+ * text in the real ICICI export, e.g. "SMO - Smart Money Order", "-- 6 of 6 --"), or a
+ * statement-total/opening-closing-balance line — see SUMMARY_LINE_RE. */
+const BLOCK_BAILOUT_RE = new RegExp(
+  `^(legends?\\b|note[:\\s]|disclaimer\\b|page\\s+\\d|--\\s*\\d+\\s+of\\s+\\d+\\s*--|${SUMMARY_LINE_RE.source})`,
+  'i',
+);
+
+function isDateLineStart(line: string): boolean {
+  return PDF_DATE_PATTERNS.some((p) => p.test(line));
+}
+
+interface MultiLineBlock { description: string; amounts: number[]; endIdx: number; }
+
+/**
+ * ICICI-style layout: date+payee is on `lines[startIdx]`, narration wraps across
+ * several following lines with no date/amount, and the transaction amount + running
+ * balance appear together on a later line with nothing after them (a "terminator").
+ * Only ever called when the single-line path already found zero amounts on the date
+ * line, so this can never engage for a layout (HDFC/SBI/etc.) that already works.
+ */
+function tryParseMultiLineBlock(
+  lines: string[],
+  startIdx: number,
+  firstLineRemainder: string,
+): MultiLineBlock | null {
+  const narrationParts: string[] = firstLineRemainder ? [firstLineRemainder] : [];
+  const limit = Math.min(lines.length - 1, startIdx + MAX_BLOCK_LOOKAHEAD);
+
+  for (let j = startIdx + 1; j <= limit; j++) {
+    const candidate = lines[j];
+    if (isDateLineStart(candidate)) return null; // next row started — no terminator found
+    if (BLOCK_BAILOUT_RE.test(candidate)) return null; // footer/legend — bail, don't consume
+
+    // Use the wide (ungrouped-thousands-tolerant) regex directly here, not the
+    // narrow-first scanAmounts(): this function is only ever reached from a line whose
+    // narrow scan already found nothing (see call site), so a terminator candidate can
+    // legitimately mix a narrow-shaped token ("40.00") with a wide-only one
+    // ("683783.52") on the same line — narrow-first would silently keep only the
+    // first and miss the second.
+    const tokens = scanAmountTokens(candidate, AMOUNT_RE_WIDE); // may include "0.00" placeholders
+    if (tokens.length >= 2) {
+      const last = tokens[tokens.length - 1];
+      const tail = candidate.slice(last.index + last.length).trim();
+      if (tail.length === 0) {
+        // Numeric-tail-only line: everything from the first amount token onward is the
+        // amount region. The last RAW token is always the balance (even in the rare
+        // case it's genuinely 0.00 — an emptied account). Earlier zero-valued tokens
+        // are a blank Withdrawal/Deposit column rendering as "0.00" and are dropped; a
+        // real transaction amount is always > 0.
+        const candidateAmounts = tokens.slice(0, -1).filter((t) => t.value > 0).map((t) => t.value);
+        if (candidateAmounts.length === 0) return null;
+        const prefix = candidate.slice(0, tokens[0].index).trim();
+        if (prefix) narrationParts.push(prefix);
+        return {
+          description: cleanDescription(narrationParts.join(' ')),
+          amounts: [...candidateAmounts, last.value],
+          endIdx: j,
+        };
+      }
+    }
+    narrationParts.push(candidate);
+  }
+  return null;
 }
 
 /**
@@ -655,6 +897,13 @@ export async function parsePDF(
   ];
 
   const lines = trimmedText.split('\n').map((l) => l.trim()).filter(Boolean);
+  const rowState: RowState = { prevBalance: null, prevDate: null, ascending: detectStatementDateOrder(lines) };
+  // Count date-matched rows that were subsequently abandoned (no terminator found, no
+  // usable description, etc.) so the user gets one visible signal instead of a
+  // plausible-looking but silently-incomplete import — see vision.md's "no dry-run/
+  // bulk-undo" tech-debt note for why a silent partial import is the expensive failure
+  // mode here.
+  let droppedDatedRows = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -676,40 +925,92 @@ export async function parsePDF(
 
     // Text after the date
     const afterDate = line.slice(dateMatch[0].length).trim();
-    const amounts = extractAmounts(afterDate);
-    if (amounts.length === 0) continue;
 
-    // Description: everything before the first amount in afterDate
-    const firstAmtPos = afterDate.search(/\b\d{1,3}(?:,\d{2,3})*\.\d{2}\b/);
-    const rawDescription = firstAmtPos > 0
-      ? afterDate.slice(0, firstAmtPos)
-      : afterDate;
-    const description = cleanDescription(rawDescription);
+    // A dated statement-total/opening-closing-balance line is not a transaction
+    // attempt — skip it like a future-date artifact (no drop-count increment, no
+    // block-accumulator attempt). Checked before amount scanning because such a line
+    // can carry two amount-shaped tokens ("TOTAL WITHDRAWALS 100000.00 TOTAL DEPOSITS
+    // 200000.00"), which the wide-tier ">= 2 amounts" heuristic alone won't reject.
+    if (SUMMARY_LINE_RE.test(afterDate)) continue;
 
-    // Need at least a non-empty description to form a valid transaction
-    if (!description || description.length < 2) continue;
+    const scan = scanAmounts(afterDate);
+    const sameLineNonZero = scan.tokens.filter((t) => t.value > 0);
 
-    const type = inferTransactionType(description, amounts);
+    let description: string;
+    let amounts: number[];
 
-    // Transaction amount: last amount before balance (second-to-last if >= 2 amounts)
-    // For 3+ amounts: [withdrawal/deposit, deposit/withdrawal, balance] → use second-to-last
-    // For 2 amounts: [amount, balance] → use first
-    // For 1 amount: use it directly
-    let amount: number;
-    if (amounts.length >= 3) {
-      // Use positional heuristic: expense uses amounts[-3], income uses amounts[-2]
-      amount = type === 'EXPENSE' ? amounts[amounts.length - 3] : amounts[amounts.length - 2];
-      // If heuristic gives 0 (empty column), fall back to first amount
-      /* c8 ignore next -- extractAmounts only pushes val > 0, so amount is never 0 here */
-      if (amount === 0) amount = amounts[0];
+    // A lone WIDE-tier amount (no companion balance) is more likely a dated summary
+    // line ("OPENING BALANCE 125000.00") than a real transaction — a genuine row in
+    // every layout this parser targets always shows amount + running balance. Route
+    // it through the block accumulator instead of accepting it outright; narrow-tier
+    // single amounts are unaffected (that's normal, pre-existing behavior for
+    // already-working layouts).
+    const treatAsNoAmount = sameLineNonZero.length === 0
+      || (scan.tier === 'wide' && sameLineNonZero.length < 2);
+
+    if (treatAsNoAmount) {
+      // Multi-line fallback (ICICI-style): date+payee is on this line, the amount and
+      // running balance appear on a LATER line with no date. Only reachable here — a
+      // layout whose amounts are already on the date line never enters this branch.
+      // When a lone wide-tier amount is what routed us here (the summary-line guard
+      // above), strip it out of the seed narration — if a real terminator happens to
+      // be found further down, the summary line's own amount-shaped text must not leak
+      // into an unrelated transaction's description.
+      const firstLineRemainder = scan.tier === 'wide' && scan.tokens.length > 0
+        ? afterDate.slice(0, scan.tokens[0].index).trim()
+        : afterDate;
+      const block = tryParseMultiLineBlock(lines, i, firstLineRemainder);
+      if (!block || !block.description || block.description.length < 2) {
+        droppedDatedRows++;
+        rowState.prevBalance = null;
+        rowState.prevDate = null;
+        continue;
+      }
+      description = block.description;
+      amounts = block.amounts;
+      i = block.endIdx;
     } else {
-      amount = amounts[0];
+      // Description boundary must match the FIRST amount-shaped token regardless of
+      // its value — including a "0.00" placeholder — not just the first nonzero one.
+      // `description` feeds makeImportHash(); splitting at a different point than a
+      // prior import would silently break "safe to re-import the same file" dedup.
+      const firstAmtPos = scan.tokens[0].index;
+      const rawDescription = firstAmtPos > 0
+        ? afterDate.slice(0, firstAmtPos)
+        : afterDate;
+      description = cleanDescription(rawDescription);
+      amounts = sameLineNonZero.map((t) => t.value);
+
+      // Need at least a non-empty description to form a valid transaction
+      if (!description || description.length < 2) {
+        droppedDatedRows++;
+        rowState.prevBalance = null;
+        rowState.prevDate = null;
+        continue;
+      }
     }
 
-    /* c8 ignore next -- extractAmounts only pushes val > 0, so amount <= 0 is structurally unreachable */
-    if (amount <= 0) continue;
+    const { type, amount } = resolveTransaction(description, amounts, date, rowState, warnings);
+
+    /* c8 ignore next 6 -- amounts only ever contains val > 0, so amount <= 0 is structurally unreachable */
+    if (amount <= 0) {
+      droppedDatedRows++;
+      rowState.prevBalance = null;
+      rowState.prevDate = null;
+      continue;
+    }
 
     transactions.push({ date, description, remark: description, amount, type });
+
+    // Track the running balance for the next row's delta reconciliation — only when
+    // this row's last amount IS the balance (i.e. there were >= 2 amounts to begin with).
+    if (amounts.length >= 2) {
+      rowState.prevBalance = amounts[amounts.length - 1];
+      rowState.prevDate = date;
+    } else {
+      rowState.prevBalance = null;
+      rowState.prevDate = null;
+    }
   }
 
   if (transactions.length === 0 && errors.length === 0) {
@@ -718,6 +1019,11 @@ export async function parsePDF(
       message: 'No transactions found in PDF. The format may not be supported. Try exporting as CSV instead.',
       raw: '',
     });
+  } else if (droppedDatedRows > 0) {
+    warnings.push(
+      `${droppedDatedRows} dated row${droppedDatedRows === 1 ? '' : 's'} could not be `
+      + 'parsed and were skipped — check the original statement for anything missing.',
+    );
   }
 
   return withInferredPaymentModes({ transactions, errors, warnings: transactions.length > 0 ? warnings : [], bank });
