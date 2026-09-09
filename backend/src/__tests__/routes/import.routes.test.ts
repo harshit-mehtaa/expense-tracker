@@ -124,6 +124,7 @@ beforeEach(() => {
     imported: 1,
     duplicatesSkipped: 0,
     importRecord: { id: 'imp-1' },
+    warnings: [],
   });
 });
 
@@ -335,6 +336,7 @@ describe('POST /api/transactions/import — persistence and audit', () => {
   it('records an audit entry against the returned import record', async () => {
     m(persistParsedStatement).mockResolvedValue({
       imported: 5, duplicatesSkipped: 2, importRecord: { id: 'imp-42' },
+      warnings: [],
     });
 
     await request(mountImportRouter())
@@ -382,6 +384,7 @@ describe('POST /api/transactions/import — response shape', () => {
     m(applyCategoryRules).mockResolvedValue({ transactions: [PARSED_TX], appliedCount: 3 });
     m(persistParsedStatement).mockResolvedValue({
       imported: 7, duplicatesSkipped: 4, importRecord: { id: 'imp-1' },
+      warnings: [],
     });
 
     const res = await request(mountImportRouter())
@@ -396,6 +399,25 @@ describe('POST /api/transactions/import — response shape', () => {
       categorized: 3,
       errors: [],
     }));
+  });
+
+  it('merges persist-level warnings (e.g. a fuzzy-duplicate notice) into the response, alongside the parser\'s own', async () => {
+    m(persistParsedStatement).mockResolvedValue({
+      imported: 0,
+      duplicatesSkipped: 1,
+      importRecord: { id: 'imp-1' },
+      warnings: ['1 row matched an existing transaction … and was skipped as a likely duplicate.'],
+    });
+
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    // Route must merge persist-level warnings alongside the parser's own (routes/
+    // import.ts previously forwarded only `result.warnings`, the parser's).
+    expect(res.body.data.warnings).toContain(
+      '1 row matched an existing transaction … and was skipped as a likely duplicate.',
+    );
   });
 
   it('always returns an empty errors array (a partial batch failure is impossible)', async () => {

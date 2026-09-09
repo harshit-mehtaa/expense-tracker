@@ -975,6 +975,20 @@ describe('parsePDF — parsePDFDate invalid-date branches (lines 337, 343, 355)'
     expect(result.transactions.filter((t) => t.amount === 50000)).toHaveLength(0);
   });
 
+  it('DD-MMM-YYYY with a valid month name but an impossible day gives null date, row skipped', async () => {
+    // "32-Apr-2025": "Apr" resolves to a real month, but day 32 makes the constructed
+    // ISO string ("2025-04-32") invalid — the isNaN branch inside
+    // parseUTCDateFromDayMonthYear, distinct from the "unknown month abbreviation"
+    // branch the "ZZZ" case above covers.
+    const text = [
+      'Test Bank Statement with enough text padding here to pass length check',
+      '32-Apr-2025 SALARY CREDIT REF001 50,000.00 1,50,000.00',
+    ].join('\n');
+    pdfParseMock.mockResolvedValue({ text, numpages: 1, numrender: 1, info: {}, metadata: {}, version: '1.0' });
+    const result = await parsePDF(Buffer.from('fake'));
+    expect(result.transactions.filter((t) => t.amount === 50000)).toHaveLength(0);
+  });
+
   it('YYYY-MM-DD invalid month/day gives null date, row skipped (line 355 null branch)', async () => {
     // "9999-99-99" matches ISO PDF pattern, parsePDFDate: d=new Date('9999-99-99')=Invalid → null
     const text = [

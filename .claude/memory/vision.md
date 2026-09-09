@@ -23,7 +23,13 @@
   load-bearing for recovery, not just for the trail.
 - Two roles only (`Role.ADMIN` | `Role.MEMBER`) — ADMIN can act family-wide, MEMBER is
   scoped to their own data. No finer-grained permission model exists; don't assume one.
-- Bank statement imports are deduplicated via `importHash` and safe to re-run.
+- Bank statement imports are deduplicated via `importHash` and safe to re-run. Since
+  2026-09-09, `persistParsedStatement` ALSO runs an additive fuzzy check (date/amount/
+  type + normalized-description suffix/equality match, min-length-guarded on both
+  paths, userId- not accountId-scoped) for the same transaction re-imported from a
+  different source/account-link. Excludes synthetic cash-leg rows by cash-account id
+  (NOT `transferPairId` — the real paired row carries that too). Degrades gracefully
+  (silent miss, not a false positive) once a description is manually edited.
 - API responses always use the `{ success, data, message?, pagination? }` envelope from
   `utils/response.ts` — never a hand-built response shape.
 
@@ -43,15 +49,15 @@
   lines, or a terminator with a minus sign/Cr-Dr suffix — both now surfaced via an
   aggregate "N dated rows could not be parsed" warning, not recovered. (4) mixing a
   narrow-fitting decimal with a real ungrouped amount on one line can pick the wrong
-  token — not seen in the two real exports checked.
-- [low] Cash-account residuals (2026-09-08): `createTransaction` accepts the cash
-  account as `bankAccountId` under any paymentMode (self-corrects on edit, not blocked
-  at creation); no optimistic concurrency on balance mutations.
+  token — not seen in the two real exports checked. (5) date-parsing local-vs-UTC
+  inconsistency found AND fixed 2026-09-09: every month-name branch now builds UTC
+  midnight via `parseUTCDateFromDayMonthYear`, verified under `TZ=Asia/Kolkata`. The
+  free-form fallback (`new Date(dateStr)`, a few sites) stays locale-dependent —
+  open-ended format detection, deliberately not fixed here.
 - [medium] 43 raw `prisma.` calls remain in route handlers (`documents.ts` 19,
-  `categories.ts` 11, `budgets.ts` 8, one each in `auth.ts`/`reports.ts`/
-  `transactions.ts`/`loans.ts`/`health.ts`) — push into services when touched.
-  `resolveTargetUserId` is hand-duplicated in `transactions.ts:56`/`loans.ts:40`/
-  `budgets.ts:63` instead of using the shared util; only checks `deletedAt`.
+  `categories.ts` 11, `budgets.ts` 8, one each in 5 others) — push into services when
+  touched. `resolveTargetUserId` is hand-duplicated in 3 route files instead of using
+  the shared util; only checks `deletedAt`.
 - [low] No backend lint AND no `typecheck:tests` (unlike frontend). Dashboard snapshot
   month key uses UTC not IST; `netWorth` (Reports.tsx) ignores `selectedFY` AND
   conflates loading/error into a permanent "Loading net worth data..." — no banner.
@@ -69,12 +75,6 @@
   filter excluding overdue loans; `!isViewingFamilyWide` gates create buttons across 10
   pages. No modal has role="dialog"/focus-trap/Escape/aria-live on errors; `Sidebar.tsx`
   `<nav>` lacks aria-label; BUDGET_ALERT shows LIMIT as "due".
-- [low] Gold/RealEstate (`/assets`) and Transactions/RecurringRules both had a per-tab
-  `viewUserId` desync; both fixed 2026-09-08 (shared owner in the tab-bar parent, as a
-  prop; RecurringRulesPage's is REQUIRED — no standalone route/test unlike Gold/RE).
-  Unlinked `assetType:'GOLD'` Assets still render on Vehicles & Other. `recurring.ts`'s
-  `targetUserId ?? userId` fallback makes an admin's "no selection" own-data-only there
-  (unlike Transactions' family-wide) — masked by a tab-aware label, not backend-fixed.
 - [low] `''`-coerces-to-0 / can't-clear-a-set-field Zod+Prisma bug fixed 2026-09-08
   across RealEstate.tsx, Accounts.tsx, TaxCentre.tsx + backend routes/accountService.ts's
   null-swallowing normalize helpers. Residual: Accounts.tsx's `interestRate` has zero
@@ -97,4 +97,4 @@
   test:coverage` green — **enforced in CI** at PER-DIRECTORY thresholds (not one global
   number). Threshold globs MUST be `'**/src/x/**'` — Vitest matches absolute paths, so
   `'src/x/**'` silently matches nothing and still exits 0.
-- CI (`quality` job) runs all of the above on every PR/push to `main`; every other CI job depends on it passing.
+- CI (`quality` job) gates every other job on every PR/push to `main`.

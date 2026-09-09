@@ -123,6 +123,29 @@ function withInferredPaymentModes(result: ParseResult): ParseResult {
   };
 }
 
+const MONTH_ABBREV_INDEX: Record<string, string> = {
+  jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+  jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
+};
+
+/**
+ * Build a Date from DD/MMM/YYYY parts (any bank's "01 Apr 2025" or "01-Apr-2025"
+ * style) via an explicit UTC-safe ISO string, instead of `new Date("01 Apr 2025")` —
+ * that form is parsed in the PROCESS's LOCAL timezone per the ECMA-262 spec (unlike a
+ * plain `YYYY-MM-DD` string, which is always UTC), so on a non-UTC host the same
+ * calendar day resolves to a different UTC instant than the numeric-date branches in
+ * this file produce for the identical real date. That divergence broke cross-format
+ * (CSV vs PDF) transaction matching — see statementImportService.ts's fuzzy dedup and
+ * makeImportHash's date-string derivation, both of which assume same-day inputs land
+ * on the same UTC day regardless of which branch parsed them.
+ */
+function parseUTCDateFromDayMonthYear(day: string, monthAbbrev: string, year: string): Date | null {
+  const mm = MONTH_ABBREV_INDEX[monthAbbrev.slice(0, 3).toLowerCase()];
+  if (!mm) return null;
+  const date = new Date(`${year}-${mm}-${day.padStart(2, '0')}`);
+  return isNaN(date.getTime()) ? null : date;
+}
+
 function parseBankDate(value: string): Date | null {
   const dateStr = value.trim();
   if (!dateStr) return null;
@@ -142,8 +165,7 @@ function parseBankDate(value: string): Date | null {
 
   match = dateStr.match(/^(\d{1,2})[-\s]([A-Za-z]{3})[-\s](\d{4})$/);
   if (match) {
-    const date = new Date(`${match[1]} ${match[2]} ${match[3]}`);
-    return isNaN(date.getTime()) ? null : date;
+    return parseUTCDateFromDayMonthYear(match[1], match[2], match[3]);
   }
 
   const date = new Date(dateStr);
@@ -253,8 +275,9 @@ function parseSBI(rows: string[][]): ParseResult {
       }
 
       // SBI date: DD-MMM-YYYY
-      const date = new Date(dateStr.replace(/-/g, ' '));
-      if (isNaN(date.getTime())) {
+      const sbiDateMatch = dateStr.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+      const date = sbiDateMatch ? parseUTCDateFromDayMonthYear(sbiDateMatch[1], sbiDateMatch[2], sbiDateMatch[3]) : null;
+      if (!date || isNaN(date.getTime())) {
         errors.push({ row: i + 1, message: 'Invalid date', raw: row.join(',') });
         continue;
       }
@@ -516,8 +539,7 @@ function parsePDFDate(dateStr: string): Date | null {
   // DD MMM YYYY or DD-MMM-YYYY
   m = dateStr.match(/^(\d{2})[\s-]([A-Za-z]{3})[\s-](\d{4})$/);
   if (m) {
-    const d = new Date(`${m[1]} ${m[2]} ${m[3]}`);
-    return isNaN(d.getTime()) ? null : d;
+    return parseUTCDateFromDayMonthYear(m[1], m[2], m[3]);
   }
   // ISO YYYY-MM-DD
   m = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);

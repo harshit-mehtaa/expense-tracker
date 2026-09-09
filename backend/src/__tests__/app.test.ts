@@ -69,6 +69,7 @@ beforeEach(() => {
   m(applyCategoryRules).mockResolvedValue({ transactions: [PARSED_TX], appliedCount: 0 });
   m(persistParsedStatement).mockResolvedValue({
     imported: 1, duplicatesSkipped: 0, importRecord: { id: 'imp-1' },
+    warnings: [],
   });
 });
 

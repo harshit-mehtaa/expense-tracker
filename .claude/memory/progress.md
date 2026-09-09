@@ -1,303 +1,208 @@
 # Task Progress
 
 ## Status: analyze
-## Task: PDF bank statement import fails — "No transactions parsed" for a real ICICI PDF
-## Started: 2026-09-08
+## Task: Fix cross-source (CSV vs PDF) import dedup failure that let 66 duplicate June
+## transactions land in the DB; add a safety-net fuzzy dedup
+## Started: 2026-09-09
 
-## REVISED DIAGNOSIS (2026-09-08, after user supplied the real failing file)
-Earlier diagnosis (multipart boundary / axios Content-Type) was WRONG — see errors.md,
-disproven by the architect agent reading the actually-installed axios 1.13.6 (not the
-1.6.7 range in package.json). User confirmed the real on-screen error is
-"No transactions parsed. Errors: No transactions found in PDF..." (importService.ts:718)
-— this is a PDF PARSING failure, not a transport failure. The request reaches the
-backend and pdf-parse extracts text fine (>50 chars, so it's not the "no extractable
-text"/scanned-PDF path either); zero lines match the transaction-row regexes.
+## Incident summary (already resolved for the user's data):
+User manually imported June CSV (71 txns, categorized/SIP-linked over time), then
+re-imported the same June statement as PDF. `duplicatesSkipped: 0` — dedup completely
+missed it. Root-caused and fixed the DATA: found and soft-deleted exactly the 66
+duplicate, uncategorized transactions (all shared identical `createdAt` from the PDF
+import's batch insert) via the app's own `softDeleteTransaction` service function (not
+raw SQL) — verified 0 duplicates remain and the original 71 categorized transactions are
+fully intact afterward. No BankAccount balance was affected (the PDF import was unlinked
+to any account, so persistParsedStatement's balance-sync code never ran for it).
 
-Root cause, confirmed by running the REAL installed `pdf-parse` against the user's actual
-file (`~/Downloads/OpTransactionHistory16-08-2026_july.pdf`, an ICICI Bank statement —
-confirmed via footer "www.icici.bank.in"):
-1. Dates are formatted `DD.MM.YYYY` (dot separator) — NOT in `PDF_DATE_PATTERNS`
-   (importService.ts:487-493), which only covers `/`, `-`, ISO, and space/dash + 3-letter
-   month. Zero patterns use `.` as a separator.
-2. Every transaction line is prefixed with a serial number, e.g. `"8 01.07.2026 HEENAKOUR"`
-   — `PDF_DATE_PATTERNS` are all anchored `^` at the literal start of the line, so even a
-   correct date pattern would still fail to match because of the `"8 "` prefix.
-3. Rows are wrapped across MULTIPLE lines by pdf-parse's text extraction: the date+payee
-   name is on line 1, the UPI narration wraps across 2-4 continuation lines with NO date
-   or amount, and the transaction amount + running balance appear together as a trailing
-   two-number line with NO date. Confirmed structurally: 66 date-prefixed lines, 63
-   trailing lines matching exactly 2 decimal numbers (amount, balance) — i.e. amounts are
-   never on the same line as the date for this bank's export. The current per-line loop
-   (`for (let i = 0; i < lines.length; i++)`, importService.ts:659) requires date AND
-   amount on the SAME line, so every single row is skipped.
+## Root cause (verified against real DB rows, both import batches):
+1. Description mismatch: parsePDF's block accumulator (importService.ts) always
+   prepends the date-line's remainder (a payee-name/type-label ICICI's PDF shows
+   separately) to the wrapped narration — e.g. PDF: "Payout MMT/IMPS/616398334211/
+   Payout/API Bankin" vs CSV: "MMT/IMPS/616398334211/Payout/API Bankin". Confirmed
+   across 20+ real matched pairs: PDF description == "{label} " + CSV description,
+   100% consistently. Some PDF narrations also have a stray space inserted mid-token
+   where the source PDF visually line-wrapped (pdf.js artifact, not in CSV text).
+2. Scope mismatch: makeImportHash includes `accountId ?? userId` as scopeId. The user's
+   June CSV import was linked to their ICICI BankAccount; the June PDF import was
+   unlinked (no account selected). Different scopeId => different hash regardless of
+   description, so these two imports of the same real statement could never have
+   matched via the existing exact-hash dedup even if descriptions were identical.
 
-This is a real, generalizable parser gap (not this-user-only): the parser's one-line-per-
-transaction assumption does not hold for at least this bank's PDF export layout, likely
-others too (statement layout varies a lot bank-to-bank/product-to-product). Fixing
-requires: (a) a `DD.MM.YYYY` date pattern, (b) tolerating a leading serial-number token
-before the date, (c) accumulating a variable number of lines per transaction (from one
-date-line to the line before the next date-line) before extracting description/amounts,
-instead of requiring both on one line.
-
-Sample structure (payee names/refs already synthetic-looking merchant strings, no PII of
-concern, but keep any further examples in memory/logs generic — don't paste raw account
-numbers or balances into shared files):
-```
-8 01.07.2026 HEENAKOUR
-UPI/HEENAKOUR/9356398456-2@i/parking/BANK
-OF
-BA/654854995465/ICIe6faa46fb40b49f191871730
-e745071e/
-40.00 683783.52
-```
-(serial-no + date + payee) / (wrapped narration, 2-4 lines) / (amount + balance, no date)
-
-## Plan (revised after plan-challenger — verdict NEEDS_WORK, all must_fix resolved below):
-
-Architect's original 4 gaps (A: no DD.MM.YYYY pattern, B: `^`-anchored patterns break on
-a leading serial-number token, C: multi-line rows — date/payee on one line, amount+balance
-on a later line with no date, D: `extractAmounts`'s `\d{1,3}` can't match ungrouped 4+
-digit rupee amounts, silently dropping/mis-extracting most real ICICI rows) are correct,
-independently confirmed by plan-challenger. But challenger found the fix as drafted was
-unsafe — findings and resolutions below.
-
-MUST-FIX resolutions (from plan-challenger, all incorporated):
-1. Amount regex is duplicated at importService.ts:683 (`firstAmtPos` computation) as well
-   as :571 (`extractAmounts`) — factor into ONE shared regex source, use in both places.
-2. The widened amount regex must NOT run unconditionally on every line/bank — challenger
-   proved it creates false-positive amounts from reference-number tokens (e.g.
-   "NEFT-N123456789-1234.00"), which for an unknown/GENERIC bank would silently persist a
-   bogus transaction (no preview/undo exists — see #6). Resolution: widened regex is used
-   ONLY as a fallback — inside the block accumulator (new code, unreachable by existing
-   layouts) and, in `extractAmounts`, only invoked when the ORIGINAL narrow regex found
-   zero matches on that line. Any line that already extracts fine today is byte-for-byte
-   unaffected. This makes the "new path is unreachable by construction for existing
-   layouts" risk justification actually true (it wasn't, in the original draft).
-3. Balance-delta reconciliation needs a statement-ordering precondition and uniqueness
-   check — challenger showed a descending-date statement with two consecutive equal
-   amounts reconciles with an INVERTED sign. Resolution: (a) detect date ordering across
-   already-matched rows before enabling delta inference — only apply when dates are
-   non-decreasing; (b) require the reconciled match to be unique (exactly one candidate
-   within 0.005) among that row's candidate amounts; (c) if delta and a keyword hit
-   disagree, prefer the keyword and add a `warnings` entry rather than silently
-   overriding — delta is a strong-but-not-absolute signal, not an oracle.
-4. `prevBalance` lifecycle must be precise, not "reset on any skip" (which fires on every
-   header/footer line and would make delta inert on real multi-page statements).
-   Resolution: set `prevBalance` only when a row yielded >= 2 amounts (from the last, the
-   balance); reset only when a DATE-MATCHED row is subsequently abandoned (no terminator
-   found) — a plain non-date header/footer line does not touch `prevBalance` at all.
-5. Terminator regex must reject: 3-column zero-balance renders (`"5000.00 0.00 bal"` —
-   don't let a stray `0.00` become the "amount"), embedded reference numbers
-   (`"REF12345.00 683783.52"`), and glossary/footer blocks (`"Legends: 1.00 2.00"`).
-   Resolution: terminator must be a numeric-tail-only line (no alphabetic content after
-   the last amount token, using the same guarded token regex as #1); bail out early on
-   lines matching `/^(legends?|note|disclaimer|page \d)/i`; when 3+ trailing amount
-   tokens are present, drop zero-valued candidates and pick the transaction amount by
-   balance-delta reconciliation among what's left, last token is always balance.
-6. No preview/bulk-undo exists for PDF import (`routes/import.ts` persists in the same
-   request via `persistParsedStatement`, which mutates `bankAccount.currentBalance`
-   atomically; only per-row `DELETE /:id` exists, no bulk reversal). Building a full
-   dry-run/preview mode is real scope creep for this bugfix. Resolution: rely on #2's
-   fallback-only gating to keep existing layouts provably untouched, and log the
-   preview/bulk-undo gap to vision.md's tech-debt inventory as a follow-up — flagged to
-   the user at APPROVE, not silently dropped.
-
-SHOULD-FIX resolutions:
-- Apply the optional serial-prefix group ONLY to the new DD.MM.YYYY pattern, not all 5
-  existing patterns — avoids truncating a block-accumulator lookahead early on a
-  narration continuation line shaped like "1234 05/07/26 desc".
-- Serial prefix widened to `\d{1,6}\s+` (not `\d{1,4}`).
-- Step 7 (real-file validation) also asserts: sum(INCOME) - sum(EXPENSE) reconciles with
-  closing-minus-opening balance (one invariant catching both wrong amounts AND wrong
-  signs), and zero descriptions contain a leftover `\d+\.\d{2}` token.
-- Steps run strictly sequentially (1→2→3→4→5/6→7), not parallelized — step 3/4 depend on
-  step 2's shared regex constant existing first.
-
-## Steps:
-1. [LOW] Widen PDF_DATE_PATTERNS: add DD.MM.YYYY with optional `\d{1,6}\s+` serial prefix
-   (prefix ONLY on this new pattern); widen parsePDFDate's DD-MM-YYYY arm separator to
-   `[-.]`. (importService.ts:487-530)
-2. [MED] Factor amount-token regex into one shared constant; original narrow form stays
-   the default; add a widened ungrouped-digit fallback variant
-   (`(?<![\w.,\-\/])(\d+(?:,\d{2,3})*\.\d{2})(?![\w.,])`) used ONLY when the narrow form
-   finds zero matches on a given line/description-split. Apply to both extractAmounts
-   (:571) and the description-split search (:683). (importService.ts:569-578, 683)
-3. [MED] Add multi-line block fallback in parsePDF's loop: when a date line matches but
-   yields zero same-line amounts, look ahead up to 6 lines for a terminator (numeric-tail
-   -only line via shared regex, no alphabetic content after last amount, bails out on
-   legend/footer patterns, drops zero-valued candidates among 3+ trailing tokens), stops
-   early at the next date-matching line; builds description from accumulated
-   non-terminator lines; advances loop index past the terminator on success, `continue`
-   unchanged on failure. (importService.ts:659-713)
-4. [MED] Add reconciled balance-delta direction inference: date-ordering precondition,
-   uniqueness requirement, keyword-disagreement deference with a warnings entry,
-   precise prevBalance lifecycle per must-fix #4. Wired as the first check in
-   inferTransactionType's call site, above keyword/positional. (importService.ts:542-560
-   + parsePDF loop state)
-5. [LOW] Add realistic multi-line ICICI fixture (serial prefix, dot-dates, wrapped
-   narration, footer/glossary tail, a 3-column zero-balance row, a reference-number token
-   shaped like a false-positive amount) + correctness tests in
-   backend/src/__tests__/importService.test.ts (NOT importServicePdfApi.test.ts).
-6. [LOW] Negative/branch-coverage tests: no terminator within 6 lines; non-reconciling
-   delta; descending-date statement (delta must NOT engage); first row (no prevBalance);
-   footer/legend-only tail; reference-number false-positive rejected by #2's gating.
-7. [LOW] Validate against the user's real file
-   (~/Downloads/OpTransactionHistory16-08-2026_july.pdf): assert transaction count, type
-   distribution, INCOME-minus-EXPENSE reconciles with closing-minus-opening balance, zero
-   descriptions with a leftover amount-shaped token. Counts/structure only, no
-   account numbers or balances in any output.
-8. [LOW] Log the "no PDF-import preview/bulk-undo" gap to vision.md's tech-debt inventory
-   (per must-fix #6) — a follow-up, not blocking this fix.
-
-## Verification Question Mapping:
-VQ1 (real file parses correctly) -> step 7
-VQ2 (HDFC/SBI/other layouts unregressed) -> step 2's fallback-only gating (byte-identical
-  on any line the narrow regex already matches) + existing suite + step 5/6
-VQ3 (debit/credit direction correct, incl. descending-date safety) -> steps 4, 6, 7
-VQ4 (100% branch coverage maintained) -> steps 5, 6
-VQ5 (glossary/footer/reference-number text excluded) -> steps 2, 3, 6
-
-## Task Classification: risk_level MEDIUM (money-amount/direction extraction, but new
-behavior is fallback-gated so existing layouts are provably byte-identical; bounded by
-CI-enforced 100% coverage + real-file validation). task_type: bugfix.
-
-## Steps Completed: analyze, plan
-
-## Design Questions:
-DQ1. What causes the upload to fail, and is it PDF-specific?
-Evidence: `frontend/src/pages/Transactions.tsx:960-963` — `ImportModal`'s `importMutation`
-posts a `FormData` to `/transactions/import` with `headers: { 'Content-Type':
-'multipart/form-data' }` explicitly set, with NO `boundary` parameter. Reproduced against
-the real `multer`/`express` stack (same versions as `backend/node_modules`): a request
-with this exact header and a `FormData` body gets `400 {"error":"Multipart: Boundary not
-found"}` from multer; the same request with NO Content-Type header set (letting the
-browser auto-generate `multipart/form-data; boundary=...`) succeeds
-(`gotFile: true`). The header override wraps BOTH CSV and PDF uploads unconditionally
-(no `isPDF` branch around it) — this is not PDF-specific, CSV import is equally broken.
-This is not new: `git log -S "multipart/form-data" -- frontend/src/pages/Transactions.tsx`
-shows the line was present since the very first commit (`fa1a40f`), so import has never
-actually worked from a real browser.
-
-DQ2. Why wasn't the header simply omitted in the first place — is there a reason it's set?
-Evidence: `frontend/src/lib/api.ts:37-39` — the shared `api` axios instance sets a
-DEFAULT header `'Content-Type': 'application/json'` on every request. Axios's
-`transformRequest` (`node_modules/axios/lib/defaults/index.js:42-54`): for a `FormData`
-payload, if the effective Content-Type contains `application/json`
-(`hasJSONContentType`), it calls `JSON.stringify(formDataToJSON(data))` instead of
-sending the FormData — i.e. if the header were simply deleted from the per-call config,
-the instance default `application/json` would still apply and axios would silently
-JSON-stringify the FormData, losing the file entirely (worse than the current bug). So
-the override is necessary in intent, just wrong in value.
-
-DQ3. What is the correct fix?
-Evidence: `AxiosHeaders.toJSON()` (`node_modules/axios/lib/core/AxiosHeaders.js:254-261`)
-filters out any header whose value is `!= null` — so `headers: { 'Content-Type':
-undefined }` in the per-call config never reaches `xhr.setRequestHeader()`
-(`node_modules/axios/lib/adapters/xhr.js:155-158`), while still overriding (per
-`AxiosHeaders.set()`, `AxiosHeaders.js:81-99`, rewrite semantics) the instance's
-`application/json` default for this one call. Net effect: no Content-Type header is set
-on the XHR at all, so the browser auto-generates the multipart boundary — exactly the
-passing case in the repro. This is the standard, minimal fix: change
-`'Content-Type': 'multipart/form-data'` to `'Content-Type': undefined` at
-`Transactions.tsx:961`.
-
-DQ4. Why did the test suite never catch this?
-Evidence: `frontend/src/__tests__/pages/Transactions.test.tsx:858` — MSW's
-`http.post(url('/transactions/import'), () => HttpResponse.json(...))` intercepts the
-request by URL/method only; MSW never validates the Content-Type header or parses the
-multipart body, so this entire bug class is invisible to the existing test. Backend
-`import.routes.test.ts` / `importServicePdfApi.test.ts` test `parsePDF`/the route directly
-with a correctly-formed multipart body (via supertest, which sets its own correct
-boundary), so they never touch axios's client-side header logic either. No existing test
-exercises the real frontend HTTP layer end-to-end.
-
-## Verification Questions:
-VQ1. Does the fix apply uniformly to CSV import too (not just PDF), since both share the
-same `importMutation`? — maps to a manual/code check that the header change is not
-PDF-gated.
-VQ2. Does removing the explicit header break the `pdfPassword`/`bankAccountId`/`bank`
-fields still being sent as regular FormData fields (unaffected by Content-Type, but worth
-confirming no other code path depends on the exact header string)?
-VQ3. Is there a regression test that would have caught this, and can one be added given
-MSW's inability to inspect multipart bodies (i.e. a lower-level fetch/XHR-level test)?
+## Decision (established with user): do NOT change makeImportHash's formula (would
+silently invalidate every existing transaction's stored importHash, causing the same
+duplication bug at large scale on the next re-import of ANY previously-imported
+statement, by anyone). Instead: ADD an additive, non-breaking secondary fuzzy-dedup
+check in persistParsedStatement — before creating a row, in addition to the existing
+exact-importHash check, also look for an existing non-deleted transaction for this
+USER (deliberately not scoped by accountId, to catch the linked-vs-unlinked case that
+just happened) with the same date+amount+type and a NORMALIZED description match
+(strip a redundant leading label prefix via known narration-marker detection, lowercase,
+strip all whitespace). Skip creating a duplicate if found; surface via an aggregate
+warning, same pattern as the "N dated rows could not be parsed" warning added earlier
+today.
 
 ## Steps Completed: analyze
 
-## Baseline Failures: none — 66 files / 2452 tests passing, 100% coverage (backend), before any edits
+## Plan (revised after plan-challenger — verdict NEEDS_WORK, all must_fix resolved):
+
+Architect's approach confirmed sound (suffix-containment matcher, additive fuzzy query
+outside the $transaction, fold into duplicatesSkipped + warning) — 4 must-fix defects
+found and resolved below, plus 6 should-fix items incorporated.
+
+MUST-FIX resolutions:
+1. Date query bug: `date: { in: uniqueDates } }` as exact-instant equality would silently
+   never match, because month-name date formats (`new Date("15 Jun 2025")`) parse to
+   LOCAL midnight while numeric formats (`new Date("2025-06-15")`) parse to UTC midnight
+   — different instants for the "same" calendar day. Resolution: query via UTC day
+   RANGES (`OR: days.map(d => ({ date: { gte: d, lt: nextDay(d) } }))`), bucket key =
+   UTC ISO date string (`toISOString().slice(0,10)`), matching makeImportHash's own
+   existing convention exactly (self-consistent with the exact-hash path; does not fix
+   the deeper local/UTC parsing inconsistency itself — that's pre-existing, orthogonal,
+   logged as tech debt, out of scope here since the incident's actual dates don't hit it).
+2. No forensic trail for suppressed rows: add `console.info('[import] fuzzy duplicate
+   skipped', {...matched transaction id, both descriptions, date, amount})` for every
+   fuzzy skip, and name the first 2-3 skipped rows' dates/amounts in the warning text
+   (not just a bare count) so a future report is diagnosable, not a silent mystery.
+3. Route change breaks 4 existing test mocks (`persistParsedStatement` mocked without a
+   `warnings` field in route/app tests): use `warnings: [...result.warnings,
+   ...(persistResult.warnings ?? [])]` (defensive) AND update all 4 mock sites
+   (`import.routes.test.ts` x3, `app.test.ts` x1) to include `warnings: []`.
+4. Synthetic cash-leg rows (opposite-type phantom legs from linked-CASH import rows,
+   `statementImportService.ts:175-189`) are non-null-importHash, non-deleted, and could
+   pollute the fuzzy candidate pool — a phantom EXPENSE leg could wrongly suppress a
+   genuine INCOME row. Resolution: exclude `transferPairId: { not: null }` rows from
+   fuzzy candidates (synthetic legs always carry one; ordinary imported/manual rows
+   essentially never do) — conservative, small recall cost, no false-positive risk.
+
+SHOULD-FIX resolutions:
+5. Guard (b) (`dropped-prefix <= shorter.length`) is too permissive for long narrations
+   — add an absolute cap (`droppedPrefixLength <= 60`, generous vs. observed 3-8 char
+   real labels) in addition to the proportional guard.
+6. Fuzzy path is deliberately userId-scoped, not accountId-scoped (that's the whole
+   point — it's what catches the incident) — document as an explicit accepted risk in
+   a code comment, add a matrix case for cross-account collision.
+7. Compare amounts via `Prisma.Decimal.toFixed(2)` string equality (not `round2(Number(
+   ...))`) — matches vision.md's "no float for money" rule and matches makeImportHash's
+   own `amount.toFixed(2)` convention exactly; round the incoming parsed amount the same
+   way before building the query's amount list.
+8. Add a bounded `take` (e.g. 2000) on the candidate query — `date IN (...) AND amount
+   IN (...)` is a cartesian filter, not paired; guards a heavy user's worst case.
+9. Document (code comment only, no schema change) that persisted `BankStatementImport.
+   duplicatesSkipped` now includes fuzzy skips, a silent semantic widening for historical
+   comparison — not worth a migration for a count column.
+10. Add a matrix case + clearer warning wording for "second import all-fuzzy-skips,
+    linked account gets nothing attached, balance correctly stays unchanged" (correct
+    behavior, but confusing without an actionable warning).
+11. Document/test: two new-batch rows fuzzy-matching the same one existing candidate are
+    both skipped (consistent with existing exact-path behavior, accepted limitation).
+
+Nice-to-fix (cheap, included): restate the "CSV is a suffix of PDF" invariant precisely
+(only holds when the terminator line contributes no trailing text); document that a
+restored soft-deleted row is permanently invisible to fuzzy matching (importHash nulled
+on delete); update vision.md's "deduplicated via importHash" invariant to mention the
+fuzzy layer; use `String(t.type)` at the bucket key to avoid relying on implicit enum
+coercion.
+
+## Steps:
+1. [LOW] Add `normalizeForFuzzyMatch`/`isFuzzyDuplicate` pure helpers in
+   statementImportService.ts: full-whitespace-strip + lowercase; duplicate iff equal OR
+   shorter is a suffix of longer, gated by shorter.length >= 12 AND droppedPrefixLength
+   <= min(shorter.length, 60).
+2. [MED] Add batched fuzzy-candidate query (UTC day-range OR, per must-fix #1), amount
+   list built via `.toFixed(2)`, `transferPairId: null` (must-fix #4), `importHash: {
+   not: null }`, bounded `take`; bucket by `date|amount.toFixed(2)|String(type)`.
+3. [MED] Extend `toCreate` filter: after exact-hash/seenInBatch check, consult the
+   bucket via isFuzzyDuplicate; skip + increment fuzzyDuplicatesSkipped + console.info
+   (must-fix #2) if matched. Intra-batch stays exact-hash-only (unchanged reasoning).
+4. [LOW] Aggregate warning naming first 2-3 skipped rows' date/amount; widen return
+   shape with fuzzyDuplicatesSkipped + warnings.
+5. [MED] Merge persist warnings into routes/import.ts's response (defensive `?? []`);
+   update all 4 existing test mocks.
+6. [LOW] Unit tests for the matcher helpers: the 3 real matched pairs, each guard
+   (min-length, prefix-cap, non-suffix), a long-narration false-positive probe.
+7. [MED] Integration tests for persistParsedStatement per the (now-extended) Cases
+   Matrix, fixing the blanket `findMany` mock seam (two call sites now).
+8. [LOW] End-to-end incident-reproduction test: CSV-linked batch then PDF-unlinked
+   batch with real label-prefixed pairs; assert it now dedupes where it previously
+   wouldn't have (this test must fail against the pre-fix code).
+9. [LOW] Update vision.md's dedup invariant; add the local/UTC date-parsing
+   inconsistency as a new deferred tech-debt entry (found here, pre-existing, out of
+   scope).
+
+## Cases Matrix (extended per plan-challenger):
+Happy: same-source re-import (exact path only), incident case (CSV-linked→PDF-unlinked),
+reverse order, wrap-artifact-only, label-is-itself-a-marker-word.
+Sad: genuinely different txn same date/amount/type (must NOT dedupe), manually-edited
+description (graceful degradation, no crash), soft-deleted candidate excluded, manual
+(importHash:null) transaction excluded, empty transaction list, fuzzy query throws
+(propagates before $transaction opens, nothing written).
+Edge: Decimal-string amount comparison, day-range bucketing incl. local-vs-UTC-midnight
+stored dates, row that's both exact AND fuzzy duplicate (counts once via exact path),
+synthetic cash leg excluded from candidates (must-fix #4), fuzzy-skipped CASH row (no
+synthetic leg/balance impact), linked-after-unlinked all-fuzzy-skip (balance correctly
+unchanged, warning must be actionable), cross-account collision (documented accepted
+risk), two new rows matching one existing candidate (both skipped, documented).
+
+## Task Classification: risk_level MEDIUM (additive, no schema/migration, exact-hash
+path untouched — but can silently suppress a genuine transaction if the matcher is
+wrong, which is a money-correctness bug per vision.md; touches API response contract
+and an existing test mock seam).
+
+## Steps Completed: analyze, plan
+
+## Status: implement
 ## Steps Completed: analyze, plan, approve
 
-## Regression Test Run: 66 files / 2472 tests passing (2452 baseline + 20 new), 100% coverage
-## Real-file Validation: both OpTransactionHistory16-08-2026_july.pdf and _june.pdf parse
-  to 66 transactions each, 0 errors, 0 balance-reconciliation mismatches across all
-  transitions, 0 leftover-amount-in-description issues.
-## Deviation from approved plan (evidence-based, found during IMPLEMENT):
-  Flipped delta-vs-keyword disagreement precedence — plan said keyword wins, but the two
-  actual disagreements in the real file (FD-narrated-as-"Deposit", salary NACH credit)
-  both showed the reconciled delta was right and the keyword was wrong. Delta now wins,
-  keyword-vs-delta disagreement still surfaced via a warning.
-## Also fixed during IMPLEMENT (bugs in my own first-pass code, caught via real-file
-  validation, not part of the original plan): (1) block-accumulator terminator scan was
-  using narrow-first amount matching, silently dropping the balance column on lines that
-  mix a narrow-fitting and a wide-only amount — fixed by scanning terminator lines with
-  the wide regex directly. (2) redundant "drop zero-valued candidates" logic was dead
-  code (scanAmountTokens already excludes val=0) — removed rather than faked for coverage.
-## Steps Completed: analyze, plan, approve, implement
+## Implementation complete. 66 files / 2503 tests, 100% coverage. tsc clean both sides
+(frontend untouched this task). Precision audit against real live DB: 0 false positives
+across 256 candidate rows. Incident-reproduction simulation against the real June PDF +
+real DB: 48/66 correctly caught as duplicates by the fuzzy net; the 18 misses are ALL
+confirmed (spot-checked directly in DB) to be transactions the user had manually renamed
+after original import ("Snacks", "Medicine", "Bajaj Finance", "Saving account interest")
+— the documented, unavoidable graceful-degradation limitation, not a bug.
 
 ## Status: review
 
-## REVIEW outcome (Tier 2: quality [strong] + adversarial [balanced], parallel; 1 targeted
-## verification pass after fixes)
-Round 1 (quality + adversarial in parallel): quality reviewer FAIL, adversarial DESTROYED.
-Both stalled once and were relaunched successfully.
-Co-Founder Filter — ACCEPTED and fixed: descending-statement same-date direction
-inversion (A2); phantom transactions from dated summary/opening-balance lines (A3);
-makeImportHash dedup-hash drift from zero-token description-boundary change (A4);
-silent row drops with no user-visible signal (P8, both reviewers) — now an aggregate
-warning; selectAmountForType inconsistency in the final default-EXPENSE branch; stale
-extractAmounts/inferTransactionType comment references; misleading "unaffected by this
-change" comments (resolveTransaction is actually global, not layout-gated); vision.md
-eviction of open (not closed) cash-account debt items — restored.
-ACCEPTED_DEFERRED (logged to vision.md, not fixed — real scope beyond this bugfix):
-overdraft/negative and Cr-Dr-suffixed terminator amounts unsupported.
-DECLINED: AMOUNT_RE_WIDE rejecting "Rs.1234.00"-style prefixed amounts (pre-existing
-limitation, not a regression, out of format scope); resolveTransaction's param-count/
-warnings-out-param style smell (functionally correct, not worth the churn this pass).
+## Round 2 (quality + adversarial in parallel): quality FAIL, adversarial DESTROYED.
+Co-Founder Filter:
+ACCEPTED and fixed:
+- Quality's "High": UTC day-range doesn't sidestep the local-vs-UTC date-parsing bug —
+  CHALLENGED the severity (verified the actual backend only ever runs in a UTC Docker
+  container, no TZ override anywhere; my own incident-reproduction test had already
+  empirically shown 48/66 correct matches against real production-equivalent logic,
+  directly contradicting "silently defeats the fix") but AGREED the underlying code
+  fragility was real and worth fixing properly rather than relying on a deployment
+  assumption. Fixed the root cause: parseBankDate/parsePDFDate's month-name branches now
+  build UTC midnight explicitly (parseUTCDateFromDayMonthYear), not process-local
+  midnight. Verified by re-running the FULL backend suite under TZ=Asia/Kolkata (the
+  exact adversarial condition both reviewers used) — 2514/2514 pass.
+- Adversarial's critical #1: `transferPairId: null` excluded REAL linked-CASH statement
+  rows, not just synthetic legs (verified directly in code — the real row gets the same
+  pairId). Fixed: look up the user's cash-account id once, exclude candidates by
+  bankAccountId instead.
+- Adversarial's critical #3: FUZZY_MIN_MATCH_LENGTH was bypassed on the exact-equality
+  path (`normA === normB` returned true regardless of length). Fixed: guard applies on
+  both paths now.
+- Quality medium: many-to-one match (one existing row could absorb multiple new rows) —
+  fixed via a consumed-candidate-id set.
+- Quality medium: unbounded query truncation with no signal — fixed via orderBy +
+  truncation warning.
+- Quality medium: unbounded/PII-bearing forensic logging — capped at 20, description
+  truncated to 40 chars in logs (matchedId is enough to look up the full row).
+- Adversarial medium (blast radius): 3 stale route/app test mocks — updated all 3,
+  removed the now-unnecessary `?? []` defensive fallback, added a route-level test
+  proving persist warnings actually reach the HTTP response (previously untested despite
+  100% coverage — coverage was measuring the fallback path, not the real merge).
+- Quality low: two weak tests (max-prefix-cap not actually exercised; "different day"
+  test was tautological, asserting a stubbed mock not real query behavior) — rewrote
+  both to be genuinely discriminating.
+Declined: none — every must/high finding from both reviewers was either fixed or its
+severity was directly challenged with executable counter-evidence, not just asserted.
 
-Round 2 (targeted verification of the round-1 fixes): verdict NEEDS_WORK — 3 of 5 fixes
-had residual gaps, all with constructed counterexamples:
-- A2 fix used first-vs-last date comparison — fooled by a single non-transaction dated
-  header/footer line, and defaulted an all-same-day statement to "ascending" (re-enabling
-  the exact inversion). FIXED: switched to a majority-vote over every consecutive dated
-  pair, defaulting to disabled (fail-safe) on any tie.
-- A3 fix's `<2`-amounts threshold still accepted a two-amount summary line (e.g. "TOTAL
-  WITHDRAWALS X TOTAL DEPOSITS Y"), and its own test didn't actually exercise the guard
-  it named (input had zero amounts, not one). FIXED: added SUMMARY_LINE_RE keyword guard
-  (opening/closing balance, total, brought/carried forward) checked before amount
-  scanning, skipped like a future-date artifact (no drop-count increment); fixed the
-  vacuous test and added a dedicated two-amount-summary-line test.
-- AMOUNT_RE_WIDE's guard character class omitted `/` (the dominant separator in Indian
-  UPI/NEFT narration), so a reference-number fragment adjacent to `/` could still hijack
-  the amount on tier-escalated lines. FIXED: widened the lookbehind/lookahead class to
-  `[\w.,\-/:#|()*]`.
-- P8's aggregate warning fired spuriously on every statement containing an opening-
-  balance line (routed through the block accumulator by the A3 guard, which then
-  correctly found no terminator and counted it as "dropped"). FIXED: the SUMMARY_LINE_RE
-  pre-check above resolves this too — summary lines are skipped before reaching either
-  the amount-routing or the drop-counting logic.
-Residual, explicitly deferred (documented in vision.md, not fixed): on a single line
-mixing a narrow-fitting decimal with a real ungrouped amount, tier escalation can still
-pick the wrong token — requires column-position-aware parsing to close properly; no
-evidence this shape occurs in either real ICICI export checked.
-
-## Final validation after all fixes: 66 files / 2482 tests, 100% coverage. Real files:
-July 66/66 txns, 0 errors, 0 balance mismatches, 0 leftover-amount descriptions.
-June 66/71 (5 dropped rows now correctly surfaced via warning — pre-existing pdf.js
-mid-digit line-split on large corporate-scale amounts, documented, deferred), 1 residual
-balance mismatch (same root cause).
+## Final state: 66 files / 2514 tests, 100% coverage, verified under both default TZ
+and TZ=Asia/Kolkata. Precision audit against real live DB (260 candidates, cash-account
+rows excluded): 0 false positives, confirming the transferPairId fix didn't introduce any
+regression. tsc clean.
 
 ## Steps Completed: analyze, plan, approve, implement, review
-
-## Status: idle
-## Last Task: Fix ICICI multi-line PDF bank statement import
-## Last Completed: 2026-09-09
-## Steps Completed: all

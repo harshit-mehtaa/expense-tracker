@@ -74,7 +74,7 @@ router.post(
 
     const categorized = await applyCategoryRules(ownerUserId, result.transactions);
 
-    const { imported, duplicatesSkipped, importRecord } = await persistParsedStatement({
+    const { imported, duplicatesSkipped, importRecord, warnings: persistWarnings } = await persistParsedStatement({
       ownerUserId,
       accountId,
       bank: result.bank,
@@ -101,7 +101,7 @@ router.post(
       // ($transaction is atomic) and a total failure throws before reaching here.
       errors: [],
       parseErrors: result.errors.slice(0, 10),
-      warnings: result.warnings,
+      warnings: [...result.warnings, ...persistWarnings],
     });
   }),
 );
