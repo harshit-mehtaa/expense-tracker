@@ -14,7 +14,7 @@ import {
   Settings,
   IndianRupee,
   Tag,
-  Car,
+  Gem,
   Bell,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -26,7 +26,7 @@ const NAV_ITEMS = [
   { to: '/transactions', icon: Receipt, label: 'Transactions' },
   { to: '/accounts', icon: Building2, label: 'Accounts & Deposits' },
   { to: '/investments', icon: TrendingUp, label: 'Investments' },
-  { to: '/assets', icon: Car, label: 'Assets' },
+  { to: '/assets', icon: Gem, label: 'Assets' },
   { to: '/insurance', icon: Shield, label: 'Insurance' },
   { to: '/budgets', icon: Target, label: 'Budgets' },
   { to: '/loans', icon: CreditCard, label: 'Loans & EMIs' },
