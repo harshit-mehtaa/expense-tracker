@@ -151,7 +151,6 @@ export async function createAccount(
     accountType: string;
     currentBalance?: number;
     currency?: string;
-    interestRate?: number | null;
     creditLimit?: number | null;
     billingCycleStartDay?: number | null;
     billingCycleEndDay?: number | null;
@@ -176,7 +175,6 @@ export async function createAccount(
       accountType: data.accountType as AccountType,
       currentBalance: data.currentBalance ?? 0,
       currency: data.currency ?? 'INR',
-      interestRate: data.interestRate,
       creditLimit: data.creditLimit,
       billingCycleStartDay: data.billingCycleStartDay,
       billingCycleEndDay: data.billingCycleEndDay,
@@ -201,7 +199,6 @@ export async function updateAccount(
     currentBalance: number;
     upiId: string | null;
     isActive: boolean;
-    interestRate: number | null;
     creditLimit: number | null;
     billingCycleStartDay: number | null;
     billingCycleEndDay: number | null;

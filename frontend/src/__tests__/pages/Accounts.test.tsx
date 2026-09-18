@@ -226,25 +226,23 @@ describe('Accounts page — cash account', () => {
     expect(await screen.findByRole('button', { name: /edit account/i })).toBeInTheDocument();
   });
 
-  it('does not show the Account/IFSC/UPI/Interest grid — none of them apply to a cash wallet', async () => {
+  it('does not show the Account/IFSC/UPI grid — none of them apply to a cash wallet', async () => {
     renderPage(<AccountsPage />, {
       route: '/accounts', user: MEMBER_USER, handlers: accountHandlers([CASH_ACCOUNT]),
     });
     await screen.findAllByText(/^Cash$/);
     expect(screen.queryByText('IFSC')).toBeNull();
     expect(screen.queryByText('UPI')).toBeNull();
-    expect(screen.queryByText('Interest')).toBeNull();
     expect(screen.queryByText('Account')).toBeNull();
   });
 
-  it('still shows the Account/IFSC/UPI/Interest grid for a regular (non-cash) account row', async () => {
+  it('still shows the Account/IFSC/UPI grid for a regular (non-cash) account row', async () => {
     renderPage(<AccountsPage />, {
       route: '/accounts', user: MEMBER_USER, handlers: accountHandlers(ACCOUNTS),
     });
     await screen.findByText(/HDFC Bank/);
     expect(await screen.findByText('IFSC')).toBeInTheDocument();
     expect(await screen.findByText('UPI')).toBeInTheDocument();
-    expect(await screen.findByText('Interest')).toBeInTheDocument();
   });
 });
 

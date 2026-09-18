@@ -146,7 +146,6 @@ describe('POST /api/accounts', () => {
       accountNumberLast4: '',
       upiId: '',
       maturityDate: '',
-      interestRate: '',
     });
 
     expect(res.status).toBe(201);
@@ -159,7 +158,6 @@ describe('POST /api/accounts', () => {
         accountNumberLast4: undefined,
         upiId: undefined,
         maturityDate: undefined,
-        interestRate: undefined,
       }),
     );
   });
@@ -226,7 +224,6 @@ describe('PUT /api/accounts/:id', () => {
   });
 
   it.each([
-    'interestRate',
     'creditLimit',
     'billingCycleStartDay',
     'billingCycleEndDay',

@@ -71,7 +71,6 @@ const createAccountSchema = z.object({
   accountType: z.enum(['SAVINGS', 'CURRENT', 'SALARY', 'CREDIT_CARD', 'DEBIT_CARD', 'PREPAID_CARD', 'NRE', 'NRO', 'PPF', 'EPF', 'DEMAT']),
   currentBalance: z.coerce.number().default(0),
   currency: z.string().trim().default('INR'),
-  interestRate: optionalNumber(z.coerce.number().min(0).max(100)),
   creditLimit: optionalNumber(z.coerce.number().min(0)),
   billingCycleStartDay: optionalBillingDay,
   billingCycleEndDay: optionalBillingDay,

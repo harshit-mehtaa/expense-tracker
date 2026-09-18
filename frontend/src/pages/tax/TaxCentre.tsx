@@ -43,8 +43,8 @@ function ProgressBar({ value, max, color = 'bg-green-500', label }: { value: num
 // wire payload can tell it apart from `undefined` ("not touched"). This form sends the
 // full profile object on every save, so `null` is the only representable clear signal
 // (see accounts.ts's backend `.nullable()` precedent). Applied uniformly to every
-// numeric field in one pass, rather than field-by-field, since a field-by-field pass is
-// exactly how interestRate (Accounts.tsx) was previously missed.
+// numeric field in one pass, rather than field-by-field, since a field-by-field pass has
+// previously let a numeric account field slip through unmissed (see Accounts.tsx history).
 const optionalAmount = z.preprocess(
   (v) => (v === '' ? null : v),
   z.coerce.number().min(0).nullable().optional(),

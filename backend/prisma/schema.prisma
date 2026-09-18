@@ -350,7 +350,6 @@ model BankAccount {
   openingBalance       Decimal?    @db.Decimal(15, 2)
   openingBalanceDate   DateTime?
   currency             String      @default("INR")
-  interestRate         Decimal?    @db.Decimal(5, 2)
   creditLimit          Decimal?    @db.Decimal(15, 2)
   billingCycleStartDay Int?
   billingCycleEndDay   Int?

@@ -443,7 +443,7 @@ describe('updateAccount', () => {
     );
   });
 
-  it.each(['upiId', 'interestRate', 'creditLimit', 'billingCycleStartDay', 'billingCycleEndDay', 'paymentDueDay'])(
+  it.each(['upiId', 'creditLimit', 'billingCycleStartDay', 'billingCycleEndDay', 'paymentDueDay'])(
     'passes an explicit null for %s straight through to Prisma (untouched by the spread)',
     async (field) => {
       await updateAccount('acct-1', 'u1', 'MEMBER', { [field]: null } as any);

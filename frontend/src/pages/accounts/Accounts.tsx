@@ -128,7 +128,6 @@ const accountSchema = z.object({
    *  it decides the sign of `currentBalance`. */
   isCreditBalance: z.boolean().default(false),
   upiId: z.string().optional(),
-  interestRate: z.coerce.number().optional(),
   creditLimit: optionalPositiveAmountSchema,
   billingCycleStartDay: optionalDaySchema,
   billingCycleEndDay: optionalDaySchema,
@@ -181,7 +180,6 @@ function cleanAccountPayload(
     ifscCode: isCard ? undefined : data.ifscCode?.trim().toUpperCase() || null,
     currentBalance,
     upiId: isCard ? undefined : data.upiId?.trim() || null,
-    interestRate: Number.isFinite(data.interestRate) ? data.interestRate : undefined,
     creditLimit: accountType === 'CREDIT_CARD' ? (Number.isFinite(data.creditLimit) ? data.creditLimit : null) : undefined,
     billingCycleStartDay: isCard ? (data.billingCycleStartDay ?? null) : undefined,
     billingCycleEndDay: isCard ? (data.billingCycleEndDay ?? null) : undefined,
@@ -570,13 +568,6 @@ export default function AccountsPage() {
               <p className="text-[11px] font-medium uppercase text-muted-foreground">UPI</p>
               <p className="mt-1 truncate font-medium" title={account.upiId || 'Not saved'}>
                 {account.upiId || 'Not saved'}
-              </p>
-            </div>
-
-            <div className="min-w-0 border-t pt-3">
-              <p className="text-[11px] font-medium uppercase text-muted-foreground">Interest</p>
-              <p className="mt-1 truncate font-medium">
-                {account.interestRate ? `${account.interestRate}% p.a.` : 'Not saved'}
               </p>
             </div>
           </div>
