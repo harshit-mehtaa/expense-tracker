@@ -16,6 +16,7 @@ import { insuranceApi } from '@/api/insurance';
 import { formatINRShort } from '@/lib/indianFormat';
 import { formatDate, formatNextOccurrence, toDateInputValue, addMonths } from '@/lib/dateFormat';
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, CustomTooltip } from '@/lib/chartUtils';
+import { CHIP_COLOR_FALLBACK, LOAN_TYPE_COLORS } from '@/lib/chipColors';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
@@ -398,7 +399,7 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
       <div className="flex items-start justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200">
+            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${LOAN_TYPE_COLORS[loan.loanType] ?? CHIP_COLOR_FALLBACK}`}>
               {LOAN_TYPES[loan.loanType] ?? loan.loanType}
             </span>
             {loan.section24bEligible && (

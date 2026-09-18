@@ -17,6 +17,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { cn } from '@/lib/utils';
 import { toDateInputValue, formatDate } from '@/lib/dateFormat';
 import { assetsApi, ASSET_TYPES, VEHICLE_TYPES, FUEL_TYPES, type Asset } from '@/api/assets';
+import { ASSET_TYPE_COLORS, CHIP_COLOR_FALLBACK, FUEL_TYPE_COLORS, VEHICLE_TYPE_COLORS } from '@/lib/chipColors';
 import { insuranceApi } from '@/api/insurance';
 import GoldPage from '@/pages/investments/Gold';
 import RealEstatePage from '@/pages/investments/RealEstate';
@@ -257,16 +258,16 @@ export default function AssetsPage() {
         <div className="flex justify-between items-start">
           <div>
             <div className="flex items-center gap-1.5">
-              <span className="text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 px-2 py-0.5 rounded-full">
+              <span className={cn('text-xs font-medium px-2 py-0.5 rounded-full', ASSET_TYPE_COLORS[a.assetType] ?? CHIP_COLOR_FALLBACK)}>
                 {ASSET_TYPES[a.assetType] ?? a.assetType}
               </span>
               {a.assetType === 'VEHICLE' && a.vehicleType && (
-                <span className="text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 px-2 py-0.5 rounded-full">
+                <span className={cn('text-xs font-medium px-2 py-0.5 rounded-full', VEHICLE_TYPE_COLORS[a.vehicleType] ?? CHIP_COLOR_FALLBACK)}>
                   {VEHICLE_TYPES[a.vehicleType]}
                 </span>
               )}
               {a.assetType === 'VEHICLE' && a.fuelType && (
-                <span className="text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 px-2 py-0.5 rounded-full">
+                <span className={cn('text-xs font-medium px-2 py-0.5 rounded-full', FUEL_TYPE_COLORS[a.fuelType] ?? CHIP_COLOR_FALLBACK)}>
                   {FUEL_TYPES[a.fuelType]}
                 </span>
               )}

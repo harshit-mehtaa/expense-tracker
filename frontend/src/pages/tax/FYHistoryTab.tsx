@@ -4,6 +4,7 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { taxApi } from '@/api/tax';
 import { cn } from '@/lib/utils';
 import { formatINR } from '@/lib/indianFormat';
+import { CHIP_COLOR_FALLBACK, REGIME_COLORS } from '@/lib/chipColors';
 
 interface FYHistoryTabProps {
   fyOptions: string[];
@@ -103,9 +104,7 @@ export default function FYHistoryTab({ fyOptions, viewUserId }: FYHistoryTabProp
                   <td className="px-4 py-3">
                     <span className={cn(
                       'inline-block rounded-full px-2 py-0.5 text-xs font-medium',
-                      data.electedRegime === 'OLD'
-                        ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300'
-                        : 'bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300',
+                      REGIME_COLORS[data.electedRegime] ?? CHIP_COLOR_FALLBACK,
                     )}>
                       {data.electedRegime === 'OLD' ? 'Old' : 'New'}
                     </span>

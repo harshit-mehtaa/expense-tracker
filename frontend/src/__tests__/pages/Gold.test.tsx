@@ -223,3 +223,19 @@ describe('Gold page — recording a sale', () => {
     expect(screen.getByTitle(/delete/i)).toBeInTheDocument();
   });
 });
+
+describe('Gold page — gold-type chip color', () => {
+  it('renders different gold types with distinct colors, not one flat color', async () => {
+    const SGB_HOLDING = { ...HOLDING, id: 'g-2', description: '2028 Series SGB', type: 'SGB' };
+    renderPage(<GoldPage />, { route: '/gold', handlers: goldHandlers([HOLDING, SGB_HOLDING]) });
+    await screen.findByText('Wedding bangles');
+    await screen.findByText('2028 Series SGB');
+
+    const physicalChip = screen.getByText('Physical Gold');
+    const sgbChip = screen.getByText('Sovereign Gold Bond');
+    expect(physicalChip.className).toMatch(/bg-amber-100/);
+    expect(sgbChip.className).toMatch(/bg-indigo-100/);
+    expect(physicalChip.className).toMatch(/dark:bg-amber-900/);
+    expect(sgbChip.className).toMatch(/dark:bg-indigo-900/);
+  });
+});

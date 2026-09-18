@@ -298,3 +298,19 @@ describe('Real Estate page — recording a sale', () => {
     expect(screen.queryByText('Current Value')).not.toBeInTheDocument();
   });
 });
+
+describe('Real Estate page — property-type chip color', () => {
+  it('renders different property types with distinct colors, not one flat color', async () => {
+    const COMMERCIAL = { ...PROPERTY, id: 're-2', propertyName: 'MG Road Office', propertyType: 'COMMERCIAL' };
+    renderPage(<RealEstatePage />, { route: '/real-estate', handlers: reHandlers([PROPERTY, COMMERCIAL]) });
+    await screen.findByText('Koramangala Flat');
+    await screen.findByText('MG Road Office');
+
+    const residentialChip = screen.getByText('Residential');
+    const commercialChip = screen.getByText('Commercial');
+    expect(residentialChip.className).toMatch(/bg-blue-100/);
+    expect(commercialChip.className).toMatch(/bg-purple-100/);
+    expect(residentialChip.className).toMatch(/dark:bg-blue-900/);
+    expect(commercialChip.className).toMatch(/dark:bg-purple-900/);
+  });
+});

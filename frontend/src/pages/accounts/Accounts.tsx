@@ -17,12 +17,18 @@ import { invalidateTransactionMutationCaches } from '@/lib/queryInvalidation';
 
 
 const ACCOUNT_TYPE_COLORS: Record<string, string> = {
-  SAVINGS: 'bg-blue-100 text-blue-800', CURRENT: 'bg-gray-100 text-gray-800',
-  SALARY: 'bg-green-100 text-green-800', NRE: 'bg-purple-100 text-purple-800',
-  CREDIT_CARD: 'bg-rose-100 text-rose-800', DEBIT_CARD: 'bg-sky-100 text-sky-800', PREPAID_CARD: 'bg-violet-100 text-violet-800',
-  NRO: 'bg-indigo-100 text-indigo-800', PPF: 'bg-amber-100 text-amber-800',
-  EPF: 'bg-orange-100 text-orange-800', DEMAT: 'bg-teal-100 text-teal-800',
-  CASH: 'bg-emerald-100 text-emerald-800',
+  SAVINGS: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
+  CURRENT: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
+  SALARY: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
+  NRE: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
+  CREDIT_CARD: 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200',
+  DEBIT_CARD: 'bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200',
+  PREPAID_CARD: 'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200',
+  NRO: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200',
+  PPF: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+  EPF: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200',
+  DEMAT: 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200',
+  CASH: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200',
 };
 
 const BANKS = ['HDFC Bank', 'SBI', 'ICICI Bank', 'Axis Bank', 'Kotak Bank', 'PNB', 'Bank of Baroda', 'Canara Bank', 'Yes Bank', 'IDFC First Bank', 'Other'];

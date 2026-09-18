@@ -2329,6 +2329,13 @@ export default function TransactionsPage() {
   const { data: categories = [] } = useCategories();
   const { data: budgetActuals = [] } = useBudgetsVsActuals(selectedFY, viewUserId);
 
+  // categoryId -> hex color, for the mobile card's category chip (previously flat gray
+  // regardless of category, unlike every other color-coded chip in the app).
+  const categoryColorById = useMemo(
+    () => new Map(categories.map((c: any) => [c.id, c.color as string | null])),
+    [categories],
+  );
+
   // Typed text is debounced before it reaches the query — search is server-side (it goes
   // over the wire in fetchTransactions), so every keystroke would otherwise fire its own
   // request. The chip and date filters are NOT routed through this: they change on click,
@@ -2774,8 +2781,10 @@ export default function TransactionsPage() {
                         )}
                         {tx.categoryName ?? '—'}
                         {(tx.refundedAmount ?? 0) > 0 && (
-                          <div className="text-xs text-amber-600">
-                            Refunded <INRDisplay amount={tx.refundedAmount} />
+                          <div>
+                            <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                              Refunded <INRDisplay amount={tx.refundedAmount} />
+                            </span>
                           </div>
                         )}
                       </div>
@@ -2827,6 +2836,7 @@ export default function TransactionsPage() {
             const isSIP = !!(tx.sipId || tx.sipTransactionId);
             const isPolicy = !!tx.insurancePolicyId;
             const isRefund = !!tx.refundForTransactionId;
+            const mobileCategoryHex = tx.categoryId ? categoryColorById.get(tx.categoryId) : null;
             return (
               <div key={tx.id} className={cn('p-3 space-y-1.5', selectedIds.has(tx.id) && 'bg-primary/5')}>
                 {/* Row 1: description + date */}
@@ -2875,7 +2885,13 @@ export default function TransactionsPage() {
                     </span>
                   )}
                   {tx.categoryName && !isSIP ? (
-                    <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground">
+                    <span
+                      className={cn(
+                        'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium',
+                        mobileCategoryHex ? 'text-foreground' : 'bg-muted text-muted-foreground',
+                      )}
+                      style={mobileCategoryHex ? { backgroundColor: `${mobileCategoryHex}22` } : undefined}
+                    >
                       {tx.categoryName && (
                         <CategoryIcon name={tx.categoryName} icon={tx.categoryIcon} size={12} />
                       )}

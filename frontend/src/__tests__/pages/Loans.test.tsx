@@ -1216,3 +1216,21 @@ describe('Loans — a closed loan', () => {
     expect(screen.getByText(/^next:/i)).toBeInTheDocument();
   });
 });
+
+describe('Loans page — loan-type chip color', () => {
+  it('renders different loan types with distinct colors, not one flat color', async () => {
+    const BUSINESS_LOAN = { ...LOAN, id: 'l-2', lenderName: 'ICICI Business Loan', loanType: 'BUSINESS' };
+    renderPage(<LoansPage />, { route: '/loans', handlers: loanHandlers([LOAN, BUSINESS_LOAN]) });
+    await screen.findByText('HDFC Home Loan');
+    await screen.findByText('ICICI Business Loan');
+
+    const homeChip = screen.getByText('Home Loan');
+    const businessChip = screen.getByText('Business Loan');
+    // Assert the exact hue, not just "different" — a swap between two colors in
+    // LOAN_TYPE_COLORS would still pass a mere inequality check.
+    expect(homeChip.className).toMatch(/bg-blue-100/);
+    expect(businessChip.className).toMatch(/bg-rose-100/);
+    expect(homeChip.className).toMatch(/dark:bg-blue-900/);
+    expect(businessChip.className).toMatch(/dark:bg-rose-900/);
+  });
+});

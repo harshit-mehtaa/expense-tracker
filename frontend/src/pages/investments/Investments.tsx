@@ -31,6 +31,7 @@ import { investmentsApi, type FD, type Investment, type RD, type SIP } from '@/a
 import { useFY } from '@/contexts/FYContext';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import { cn } from '@/lib/utils';
+import { CHIP_COLOR_FALLBACK, INVESTMENT_TYPE_COLORS } from '@/lib/chipColors';
 
 const INV_TYPES: Record<string, string> = {
   STOCKS_INDIA: 'Indian Stocks', STOCKS_FOREIGN: 'Foreign Stocks', MUTUAL_FUND: 'Mutual Fund',
@@ -632,7 +633,7 @@ export default function InvestmentsPage() {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <p className="truncate font-semibold">{inv.name}</p>
-              <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{INV_TYPES[inv.type] ?? inv.type}</span>
+              <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', INVESTMENT_TYPE_COLORS[inv.type] ?? CHIP_COLOR_FALLBACK)}>{INV_TYPES[inv.type] ?? inv.type}</span>
               {inv.isTaxSaving && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">80C</span>}
               {linkedSip && (
                 <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">

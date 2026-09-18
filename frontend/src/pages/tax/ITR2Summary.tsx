@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { taxApi } from '@/api/tax';
 import { formatINR } from '@/lib/indianFormat';
+import { CHIP_COLOR_FALLBACK, REGIME_COLORS } from '@/lib/chipColors';
 
 const formatCurrency = formatINR;
 
@@ -55,7 +56,7 @@ export default function ITR2Summary({ fy, viewUserId }: Props) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h3 className="font-medium text-gray-700">ITR-2 Schedule Overview</h3>
-        <span className={`text-xs px-2 py-1 rounded-full font-medium ${summary.regime === 'NEW' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+        <span className={`text-xs px-2 py-1 rounded-full font-medium ${REGIME_COLORS[summary.regime] ?? CHIP_COLOR_FALLBACK}`}>
           {summary.regime} Regime
         </span>
       </div>

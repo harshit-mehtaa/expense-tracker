@@ -13,6 +13,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { investmentsApi, type RealEstateProperty } from '@/api/investments';
 import { useToast } from '@/contexts/ToastContext';
 import { formatDate, toDateInputValue } from '@/lib/dateFormat';
+import { CHIP_COLOR_FALLBACK, PROPERTY_TYPE_COLORS } from '@/lib/chipColors';
 
 const PROPERTY_TYPES: Record<string, string> = {
   RESIDENTIAL: 'Residential', COMMERCIAL: 'Commercial', LAND: 'Land', PLOT: 'Plot',
@@ -254,7 +255,7 @@ export default function RealEstatePage({ viewUserId }: { viewUserId?: string }) 
             <div className="flex justify-between items-start">
               <div>
                 <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-medium bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${PROPERTY_TYPE_COLORS[p.propertyType] ?? CHIP_COLOR_FALLBACK}`}>
                     {PROPERTY_TYPES[p.propertyType] ?? p.propertyType}
                   </span>
                   {/* There was no delete action on this page at all before this — this

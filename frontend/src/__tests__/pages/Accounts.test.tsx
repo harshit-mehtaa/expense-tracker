@@ -42,6 +42,12 @@ describe('Accounts page — smoke', () => {
     ).toBeInTheDocument();
   });
 
+  it('gives the account-type chip dark-mode classes (previously the one map with none)', async () => {
+    renderPage(<AccountsPage />, { route: '/accounts', handlers: accountHandlers() });
+    const chip = await screen.findByText('Savings');
+    expect(chip.className).toMatch(/dark:/);
+  });
+
   it('masks balances by default and reveals Indian-formatted money on toggle', async () => {
     const user = userEvent.setup();
     renderPage(<AccountsPage />, { route: '/accounts', handlers: accountHandlers() });

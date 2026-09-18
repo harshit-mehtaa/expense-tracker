@@ -191,6 +191,63 @@ const ORDINARY_TRANSFER_TX = {
   transferCounterpartyAccount: { bankName: 'SBI', accountNumberLast4: '9999', accountType: 'SAVINGS' },
 };
 
+describe('Transactions page — category chip color (mobile card) and Refunded chip parity (desktop)', () => {
+  it('colors the mobile category chip from the category\'s own color, not a flat gray', async () => {
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [
+        http.get(url('/categories'), () => HttpResponse.json({
+          data: [{ id: 'cat-food', name: 'Food', type: 'EXPENSE', parentId: null, color: '#ff0000', icon: null }],
+        })),
+        ...txHandlers(),
+      ],
+    });
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+
+    const chips = (await screen.findAllByText('Food')).filter((el) => el.tagName === 'SPAN');
+    expect(chips.length).toBeGreaterThan(0);
+    // jsdom normalizes #ff000022 (hex+alpha) to an rgba() string — assert the translucent
+    // red made it through, not the exact serialization format.
+    expect(chips[0].style.backgroundColor).toMatch(/rgba\(255,\s*0,\s*0,/i);
+  });
+
+  it('falls back to flat gray when the category has no color set', async () => {
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [
+        http.get(url('/categories'), () => HttpResponse.json({
+          data: [{ id: 'cat-food', name: 'Food', type: 'EXPENSE', parentId: null, color: null, icon: null }],
+        })),
+        ...txHandlers(),
+      ],
+    });
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+
+    const chips = (await screen.findAllByText('Food')).filter((el) => el.tagName === 'SPAN');
+    expect(chips.length).toBeGreaterThan(0);
+    expect(chips[0].className).toMatch(/bg-muted/);
+  });
+
+  it('gives the desktop "Refunded" indicator the same chip styling mobile already has, not plain text', async () => {
+    const REFUNDED_TX = { ...TX, refunds: [{ id: 'refund-1', amount: 500 }] };
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers({ transactions: [REFUNDED_TX] }) });
+    await screen.findByRole('heading', { level: 1, name: 'Transactions' });
+
+    // "Refunded" text is split across elements (INRDisplay renders the amount as a
+    // sibling node) — wait for it to land, then find every chip-styled element whose
+    // full textContent includes it (desktop's wrapping span + mobile's).
+    await screen.findAllByText('Grocery run');
+    const refundedChips = Array.from(document.querySelectorAll('span.rounded-full'))
+      .filter((el) => el.textContent?.includes('Refunded'));
+    // Both the desktop and mobile renderings should now be proper dark-mode-aware chips.
+    expect(refundedChips.length).toBeGreaterThanOrEqual(2);
+    refundedChips.forEach((chip) => {
+      expect(chip.className).toMatch(/rounded-full/);
+      expect(chip.className).toMatch(/dark:/);
+    });
+  });
+});
+
 describe('Transactions page — cash withdrawal labeling', () => {
   it('labels the debit leg (bank account) of a withdrawal as "Cash Withdrawal"', async () => {
     renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers({ transactions: [WITHDRAWAL_TX] }) });

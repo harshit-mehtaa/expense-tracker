@@ -522,6 +522,23 @@ describe('Assets page — smoke', () => {
     expect(screen.getByText('Bought 01/05/2022')).toBeInTheDocument();
   });
 
+  it('gives the asset-type, vehicle-type, and fuel-type chips on one card three distinct colors, not one collapsed color (Q5)', async () => {
+    const vehicleWithDetail = { ...VEHICLE, vehicleType: 'FOUR_WHEELER', fuelType: 'ELECTRIC' };
+    renderPage(<AssetsPage />, { route: '/assets', handlers: assetHandlers([vehicleWithDetail]) });
+    await screen.findByText('Honda City');
+
+    // 'Vehicle' also matches the tab button label — scope to the <span> chip specifically.
+    const assetTypeChip = screen.getAllByText('Vehicle').find((el) => el.tagName === 'SPAN')!;
+    const vehicleTypeChip = screen.getByText('4-Wheeler');
+    const fuelTypeChip = screen.getByText('Electric');
+    expect(assetTypeChip.className).toMatch(/bg-slate-100/);
+    expect(vehicleTypeChip.className).toMatch(/bg-indigo-100/);
+    expect(fuelTypeChip.className).toMatch(/bg-green-100/);
+    const classNames = [assetTypeChip.className, vehicleTypeChip.className, fuelTypeChip.className];
+    expect(new Set(classNames).size).toBe(3);
+    classNames.forEach((c) => expect(c).toMatch(/dark:/));
+  });
+
   it('edit form repopulates purchase date and vehicle type, and saves changes to both', async () => {
     const user = userEvent.setup();
     const vehicleWithDetail = { ...VEHICLE, purchaseDate: '2022-05-01T00:00:00.000Z', vehicleType: 'FOUR_WHEELER' };

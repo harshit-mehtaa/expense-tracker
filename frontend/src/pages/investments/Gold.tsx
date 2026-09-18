@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { INRDisplay } from '@/components/shared/INRDisplay';
 import { useAuth } from '@/contexts/AuthContext';
 import { investmentsApi, GoldHolding } from '@/api/investments';
+import { CHIP_COLOR_FALLBACK, GOLD_TYPE_COLORS } from '@/lib/chipColors';
 import { formatINR } from '@/lib/indianFormat';
 import { formatDate, toDateInputValue } from '@/lib/dateFormat';
 import { useToast } from '@/contexts/ToastContext';
@@ -166,7 +167,7 @@ export default function GoldPage({ viewUserId }: { viewUserId?: string }) {
             <div className="flex justify-between items-start">
               <div>
                 <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-medium bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded-full">
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${GOLD_TYPE_COLORS[h.type] ?? CHIP_COLOR_FALLBACK}`}>
                     {GOLD_TYPES[h.type] ?? h.type}
                   </span>
                   {h.soldAt && (

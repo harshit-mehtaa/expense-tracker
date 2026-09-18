@@ -205,3 +205,19 @@ describe('Investments page — smoke', () => {
     });
   });
 });
+
+describe('Investments page — investment-type chip color', () => {
+  it('renders different investment types with distinct colors, incl. CRYPTO not falling back to the default', async () => {
+    const CRYPTO_INV = { ...INVESTMENT, id: 'inv-2', name: 'Bitcoin Holding', type: 'CRYPTO' };
+    renderPage(<InvestmentsPage />, { route: '/investments', handlers: investmentHandlers({ investments: [INVESTMENT, CRYPTO_INV] }) });
+    await screen.findByText('Axis Bluechip Fund');
+    await screen.findByText('Bitcoin Holding');
+
+    const mutualFundChip = screen.getByText('Mutual Fund');
+    const cryptoChip = screen.getByText('Crypto');
+    expect(mutualFundChip.className).toMatch(/bg-violet-100/);
+    expect(cryptoChip.className).toMatch(/bg-fuchsia-100/);
+    expect(mutualFundChip.className).toMatch(/dark:bg-violet-900/);
+    expect(cryptoChip.className).toMatch(/dark:bg-fuchsia-900/);
+  });
+});
