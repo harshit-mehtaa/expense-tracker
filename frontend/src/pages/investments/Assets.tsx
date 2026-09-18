@@ -93,7 +93,7 @@ const DEFAULT_TAB: AssetsTab = 'assets';
 // `null` means "rendered inline below" (only true for the complex default tab); every
 // other tab's body is exactly `<Child />`, with no separate render guard needed.
 const TAB_META: Record<AssetsTab, { label: string; icon: LucideIcon; Child: ComponentType<{ viewUserId?: string }> | null }> = {
-  assets: { label: 'Vehicles & Other', icon: Car, Child: null },
+  assets: { label: 'Vehicle', icon: Car, Child: null },
   gold: { label: 'Gold', icon: Gem, Child: GoldPage },
   'real-estate': { label: 'Real Estate', icon: Home, Child: RealEstatePage },
 };
@@ -245,6 +245,104 @@ export default function AssetsPage() {
 
   const ActiveChild = TAB_META[activeTab].Child;
 
+  const vehicles = assets.filter((a) => a.assetType === 'VEHICLE');
+  const properties = assets.filter((a) => a.assetType === 'PROPERTY');
+  // Anything that isn't VEHICLE or PROPERTY — today that's only OTHER, but this stays
+  // inclusive of any future ASSET_TYPES addition rather than hardcoding 'OTHER'.
+  const otherItems = assets.filter((a) => a.assetType !== 'VEHICLE' && a.assetType !== 'PROPERTY');
+
+  function renderAssetCard(a: Asset) {
+    return (
+      <div key={a.id} className="rounded-lg border bg-card p-4 space-y-2">
+        <div className="flex justify-between items-start">
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 px-2 py-0.5 rounded-full">
+                {ASSET_TYPES[a.assetType] ?? a.assetType}
+              </span>
+              {a.assetType === 'VEHICLE' && a.vehicleType && (
+                <span className="text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 px-2 py-0.5 rounded-full">
+                  {VEHICLE_TYPES[a.vehicleType]}
+                </span>
+              )}
+              {a.assetType === 'VEHICLE' && a.fuelType && (
+                <span className="text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 px-2 py-0.5 rounded-full">
+                  {FUEL_TYPES[a.fuelType]}
+                </span>
+              )}
+              {a.soldAt && (
+                <span className="text-xs font-medium bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300 px-2 py-0.5 rounded-full">
+                  Sold {formatDate(a.soldAt)}
+                </span>
+              )}
+            </div>
+            <h3 className="font-semibold mt-1">{a.name}</h3>
+            {(a.make || a.model) && (
+              <p className="text-xs text-muted-foreground">{[a.make, a.model].filter(Boolean).join(' ')}</p>
+            )}
+            {a.registrationNumber && (
+              <p className="text-xs text-muted-foreground">{a.registrationNumber}</p>
+            )}
+            {a.purchaseDate && (
+              <p className="text-xs text-muted-foreground">Bought {formatDate(a.purchaseDate)}</p>
+            )}
+            {a.insurancePolicy && (
+              <p className="text-xs text-muted-foreground">
+                {a.insurancePolicy.providerName} · {a.insurancePolicy.policyName}
+                {a.insurancePolicy.endDate && ` (till ${formatDate(a.insurancePolicy.endDate)})`}
+              </p>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="icon" onClick={() => openEdit(a)} title="Edit item">
+              <Pencil className="h-4 w-4" />
+            </Button>
+            {!a.soldAt && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => { setSellingAsset(a); setSellPrice(String(a.value)); setSellDate(toDateInputValue(new Date())); }}
+                title="Record sale"
+              >
+                <span className="text-xs font-medium">Sell</span>
+              </Button>
+            )}
+            <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(a.id)} title="Delete">
+              <Trash2 className="h-4 w-4 text-destructive" />
+            </Button>
+          </div>
+        </div>
+        <div className="text-sm">
+          {a.soldAt ? (
+            <div><p className="text-muted-foreground">Sale Price</p><INRDisplay amount={a.salePrice ?? 0} className="font-semibold" /></div>
+          ) : (
+            <div><p className="text-muted-foreground">Value</p><INRDisplay amount={a.value} className="font-semibold" /></div>
+          )}
+        </div>
+        {a.loans && a.loans.length > 0 && (
+          <p className="text-xs text-muted-foreground border-t pt-2">
+            Secures: {a.loans.map((l) => l.lenderName).join(', ')}
+          </p>
+        )}
+        {a.notes && <p className="text-xs text-muted-foreground">{a.notes}</p>}
+      </div>
+    );
+  }
+
+  function renderAssetGroup(title: string, items: Asset[]) {
+    if (items.length === 0) return null;
+    return (
+      <div className="space-y-3">
+        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+          {title} ({items.length})
+        </h2>
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {items.map(renderAssetCard)}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -305,86 +403,17 @@ export default function AssetsPage() {
 
       {activeTab === 'assets' && (
       <>
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {assets.map((a) => (
-          <div key={a.id} className="rounded-lg border bg-card p-4 space-y-2">
-            <div className="flex justify-between items-start">
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 px-2 py-0.5 rounded-full">
-                    {ASSET_TYPES[a.assetType] ?? a.assetType}
-                  </span>
-                  {a.assetType === 'VEHICLE' && a.vehicleType && (
-                    <span className="text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 px-2 py-0.5 rounded-full">
-                      {VEHICLE_TYPES[a.vehicleType]}
-                    </span>
-                  )}
-                  {a.assetType === 'VEHICLE' && a.fuelType && (
-                    <span className="text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 px-2 py-0.5 rounded-full">
-                      {FUEL_TYPES[a.fuelType]}
-                    </span>
-                  )}
-                  {a.soldAt && (
-                    <span className="text-xs font-medium bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300 px-2 py-0.5 rounded-full">
-                      Sold {formatDate(a.soldAt)}
-                    </span>
-                  )}
-                </div>
-                <h3 className="font-semibold mt-1">{a.name}</h3>
-                {(a.make || a.model) && (
-                  <p className="text-xs text-muted-foreground">{[a.make, a.model].filter(Boolean).join(' ')}</p>
-                )}
-                {a.registrationNumber && (
-                  <p className="text-xs text-muted-foreground">{a.registrationNumber}</p>
-                )}
-                {a.purchaseDate && (
-                  <p className="text-xs text-muted-foreground">Bought {formatDate(a.purchaseDate)}</p>
-                )}
-                {a.insurancePolicy && (
-                  <p className="text-xs text-muted-foreground">
-                    {a.insurancePolicy.providerName} · {a.insurancePolicy.policyName}
-                    {a.insurancePolicy.endDate && ` (till ${formatDate(a.insurancePolicy.endDate)})`}
-                  </p>
-                )}
-              </div>
-              <div className="flex items-center gap-1">
-                <Button variant="ghost" size="icon" onClick={() => openEdit(a)} title="Edit item">
-                  <Pencil className="h-4 w-4" />
-                </Button>
-                {!a.soldAt && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => { setSellingAsset(a); setSellPrice(String(a.value)); setSellDate(toDateInputValue(new Date())); }}
-                    title="Record sale"
-                  >
-                    <span className="text-xs font-medium">Sell</span>
-                  </Button>
-                )}
-                <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(a.id)} title="Delete">
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
-              </div>
-            </div>
-            <div className="text-sm">
-              {a.soldAt ? (
-                <div><p className="text-muted-foreground">Sale Price</p><INRDisplay amount={a.salePrice ?? 0} className="font-semibold" /></div>
-              ) : (
-                <div><p className="text-muted-foreground">Value</p><INRDisplay amount={a.value} className="font-semibold" /></div>
-              )}
-            </div>
-            {a.loans && a.loans.length > 0 && (
-              <p className="text-xs text-muted-foreground border-t pt-2">
-                Secures: {a.loans.map((l) => l.lenderName).join(', ')}
-              </p>
-            )}
-            {a.notes && <p className="text-xs text-muted-foreground">{a.notes}</p>}
-          </div>
-        ))}
-        {assets.length === 0 && (
-          <div className="col-span-full text-center py-8 border rounded-lg text-muted-foreground">
+      <div className="space-y-6">
+        {assets.length === 0 ? (
+          <div className="text-center py-8 border rounded-lg text-muted-foreground">
             No items added yet
           </div>
+        ) : (
+          <>
+            {renderAssetGroup('Vehicles', vehicles)}
+            {renderAssetGroup('Property', properties)}
+            {renderAssetGroup('Other', otherItems)}
+          </>
         )}
       </div>
 

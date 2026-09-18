@@ -200,7 +200,7 @@ describe('Assets page — Gold tab', () => {
 
     // The round trip is the actual test: the fragment-unmount alone would already hide
     // the modal on the gold tab, but only the reset effect prevents it reappearing here.
-    await user.click(screen.getByRole('button', { name: /vehicles & other/i }));
+    await user.click(screen.getByRole('button', { name: /^vehicle$/i }));
     await screen.findByText('Honda City');
     expect(screen.queryByRole('heading', { name: /add item/i })).not.toBeInTheDocument();
   });
@@ -241,7 +241,7 @@ describe('Assets page — Real Estate tab', () => {
     expect(screen.getByTestId('search-params').textContent).not.toContain('gold');
   });
 
-  it('an unknown ?tab value falls back to Vehicles & Other, never a blank page', async () => {
+  it('an unknown ?tab value falls back to the Vehicle tab, never a blank page', async () => {
     renderPage(<AssetsPage />, { route: '/assets?tab=bogus', handlers: [...assetHandlers(), ...goldHandlers(), ...reHandlers()] });
     await screen.findByText('Honda City');
     expect(screen.queryByText('Koramangala Flat')).not.toBeInTheDocument();
@@ -266,7 +266,7 @@ describe('Assets page — Real Estate tab', () => {
     await user.click(screen.getByRole('button', { name: /add property/i }));
     await screen.findByRole('heading', { name: /add property/i });
 
-    await user.click(screen.getByRole('button', { name: /vehicles & other/i }));
+    await user.click(screen.getByRole('button', { name: /^vehicle$/i }));
     await screen.findByText('Honda City');
 
     await user.click(screen.getByRole('button', { name: /real estate/i }));
@@ -311,7 +311,7 @@ describe('Assets page — member filter persists across tabs', () => {
     expect(reRequests).toEqual(['u-member']);
     expect((screen.getByLabelText(/view:/i) as HTMLSelectElement).value).toBe('u-member');
 
-    await user.click(screen.getByRole('button', { name: /vehicles & other/i }));
+    await user.click(screen.getByRole('button', { name: /^vehicle$/i }));
     await screen.findByText('Honda City');
     // Returning to Vehicles re-triggers the (now re-enabled) assets query — assert the
     // actual refetch carried the selection, not just that the parent-owned <select>
@@ -357,6 +357,28 @@ describe('Assets page — smoke', () => {
   it('renders the page heading', async () => {
     renderPage(<AssetsPage />, { route: '/assets', handlers: assetHandlers() });
     expect(await screen.findByRole('heading', { level: 1, name: /assets/i })).toBeInTheDocument();
+  });
+
+  it('groups items into separate Vehicles/Property/Other sections, not one mixed grid', async () => {
+    const unlinkedProperty = { ...LINKED_PROPERTY_ASSET, id: 'a-3', name: 'Farmhouse', realEstateId: null };
+    const otherItem = { id: 'a-4', userId: 'u-member', assetType: 'OTHER', name: 'Antique Clock', value: 50000, realEstateId: null, goldHoldingId: null, loans: [] };
+    renderPage(<AssetsPage />, { route: '/assets', handlers: assetHandlers([VEHICLE, unlinkedProperty, otherItem]) });
+
+    const vehiclesHeading = await screen.findByText('Vehicles (1)');
+    const propertyHeading = await screen.findByText('Property (1)');
+    const otherHeading = await screen.findByText('Other (1)');
+
+    // Each item appears under its own section's grid, not any other.
+    expect(vehiclesHeading.nextElementSibling?.textContent).toContain('Honda City');
+    expect(propertyHeading.nextElementSibling?.textContent).toContain('Farmhouse');
+    expect(otherHeading.nextElementSibling?.textContent).toContain('Antique Clock');
+  });
+
+  it('omits a section header entirely when that group has no items', async () => {
+    renderPage(<AssetsPage />, { route: '/assets', handlers: assetHandlers([VEHICLE]) });
+    await screen.findByText('Vehicles (1)');
+    expect(screen.queryByText(/^Property/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Other/)).not.toBeInTheDocument();
   });
 
   it('shows an unsecured vehicle but NOT a property already tracked via RealEstate', async () => {
