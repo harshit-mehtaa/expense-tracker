@@ -342,6 +342,13 @@ model BankAccount {
   accountNumberLast4   String? // Derived from accountNumber for list/dropdown displays
   accountType          AccountType
   currentBalance       Decimal     @default(0) @db.Decimal(15, 2)
+  // Anchor: user-asserted closing balance as of openingBalanceDate. Both null means "no
+  // anchor" (all history counts, current behaviour). Setting/editing/clearing triggers a
+  // full recompute of currentBalance and of every Transaction.balanceSupersededByAnchor
+  // flag on this account via accountService.applyAnchor — never write these two fields
+  // without going through that function.
+  openingBalance       Decimal?    @db.Decimal(15, 2)
+  openingBalanceDate   DateTime?
   currency             String      @default("INR")
   interestRate         Decimal?    @db.Decimal(5, 2)
   creditLimit          Decimal?    @db.Decimal(15, 2)
@@ -676,6 +683,12 @@ model Transaction {
   isRecurring            Boolean         @default(false)
   gstAmount              Decimal?        @db.Decimal(15, 2)
   balanceImpactApplied   Boolean         @default(true)
+  // True when this row is dated on/before its bankAccount's openingBalanceDate and is
+  // therefore excluded from currentBalance (still visible in lists/reports). Recomputed
+  // from scratch by accountService.applyAnchor whenever the anchor is set/edited/cleared
+  // — never set directly. Distinct from balanceImpactApplied: a transfer leg pending
+  // confirmation can be balanceImpactApplied=false with balanceSupersededByAnchor=false.
+  balanceSupersededByAnchor Boolean      @default(false)
   importHash             String? // SHA-256(date+amount+description+accountId) — null for manual
   transferPairId         String? // Links both legs of a double-entry TRANSFER for cascade delete
   loanId                 String? // Linked loan for EMI/payment tracking
@@ -704,6 +717,7 @@ model Transaction {
   @@index([date])
   @@index([type])
   @@index([bankAccountId])
+  @@index([bankAccountId, date])
   @@index([categoryId])
   @@index([deletedAt])
   @@index([importHash])

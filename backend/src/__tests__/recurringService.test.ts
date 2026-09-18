@@ -28,6 +28,7 @@ vi.mock('../config/prisma', () => {
     },
     bankAccount: {
       findFirst: vi.fn(),
+      findUnique: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
     },
@@ -54,6 +55,7 @@ import {
 
 const ruleMock = (prisma as any).recurringRule;
 const txMock = (prisma as any).transaction;
+const acctMock = (prisma as any).bankAccount;
 
 // Pin system time for deterministic date assertions
 beforeAll(() => {
@@ -69,6 +71,8 @@ afterAll(() => {
 beforeEach(() => {
   vi.clearAllMocks();
   (prisma as any).$transaction.mockImplementation(async (fn: any) => fn(prisma));
+  // No opening-balance anchor by default — matches every rule's account pre-feature.
+  (prisma as any).bankAccount.findUnique.mockResolvedValue({ openingBalanceDate: null });
 });
 
 const MOCK_RULE = {
@@ -703,5 +707,60 @@ describe('subscription-owned rules are not directly editable', () => {
     await updateRecurringRule('rule-1', 'u1', { isActive: false });
 
     expect(ruleMock.update).toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// generateDueRecurringTransactions — opening-balance anchor (log-and-break, S5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('generateDueRecurringTransactions — opening-balance anchor', () => {
+  it('stops catch-up (log-and-break) when the due date is on/before the account\'s anchor', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    ruleMock.findMany.mockResolvedValue([MOCK_RULE]); // nextRunDate: 2024-03-01
+    acctMock.findUnique.mockResolvedValue({ openingBalanceDate: new Date('2024-06-01') });
+
+    const result = await generateDueRecurringTransactions('u1');
+
+    expect(result).toEqual({ generated: 0 });
+    expect(ruleMock.updateMany).not.toHaveBeenCalled();
+    expect(txMock.create).not.toHaveBeenCalled();
+  });
+
+  it('generates normally when the account has no anchor', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    ruleMock.findMany.mockResolvedValue([MOCK_RULE]);
+    ruleMock.updateMany.mockResolvedValue({ count: 1 });
+    txMock.create.mockResolvedValue({});
+    acctMock.findUnique.mockResolvedValue({ openingBalanceDate: null });
+
+    const result = await generateDueRecurringTransactions('u1');
+    expect(result).toEqual({ generated: 1 });
+  });
+
+  it('generates normally when the due date is strictly after the anchor', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    ruleMock.findMany.mockResolvedValue([MOCK_RULE]); // nextRunDate: 2024-03-01
+    ruleMock.updateMany.mockResolvedValue({ count: 1 });
+    txMock.create.mockResolvedValue({});
+    acctMock.findUnique.mockResolvedValue({ openingBalanceDate: new Date('2024-01-01') });
+
+    const result = await generateDueRecurringTransactions('u1');
+    expect(result).toEqual({ generated: 1 });
+  });
+
+  it('does not check an anchor at all for a CASH rule that never resolves a bank account', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    const cashRule = { ...MOCK_RULE, bankAccountId: null, paymentMode: 'CASH' };
+    ruleMock.findMany.mockResolvedValue([cashRule]);
+    ruleMock.updateMany.mockResolvedValue({ count: 1 });
+    txMock.create.mockResolvedValue({});
+    // ensureCashAccount fails to resolve (existing break path) — no bank account id at
+    // all, so the anchor check must never even attempt a query.
+    (prisma as any).bankAccount.findFirst.mockRejectedValue(new Error('cash provisioning failed'));
+
+    const result = await generateDueRecurringTransactions('u1');
+    expect(result).toEqual({ generated: 0 });
+    expect(acctMock.findUnique).not.toHaveBeenCalled();
   });
 });

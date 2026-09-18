@@ -786,7 +786,7 @@ describe('persistParsedStatement — fuzzy dedup: candidate query', () => {
     await persistParsedStatement({ ...BASE, transactions: [makeTx()] });
     expect(acctMock.findFirst).toHaveBeenCalledWith({
       where: { userId: 'u1', isCashAccount: true },
-      select: { id: true },
+      select: { id: true, openingBalanceDate: true },
     });
   });
 
@@ -1233,5 +1233,105 @@ describe('persistParsedStatement — fuzzy dedup: no cash account exists yet', (
 
     const result = await persistParsedStatement({ ...BASE, transactions: [makeTx()] });
     expect(result.imported).toBe(1);
+  });
+});
+
+// ─── Opening-balance anchor: rows are still inserted, but excluded from balance deltas ──
+
+describe('persistParsedStatement — opening-balance anchor supersession', () => {
+  function mockLinkedAccountAnchor(anchorDate: Date | null) {
+    acctMock.findFirst.mockImplementation(async (args: any) => {
+      if (args?.where?.isCashAccount) return { id: 'cash-1', openingBalanceDate: null };
+      return { id: 'acc1', userId: 'u1', openingBalanceDate: anchorDate };
+    });
+  }
+
+  it('still INSERTS a pre-anchor row (visible in lists) but flags it superseded and excludes it from the balance delta', async () => {
+    mockLinkedAccountAnchor(new Date('2026-01-01'));
+    const preAnchorTx = makeTx({ date: new Date('2025-12-15T00:00:00.000Z'), amount: 500, type: 'EXPENSE' });
+    const result = await persistParsedStatement({ ...BASE, accountId: 'acc1', transactions: [preAnchorTx] });
+
+    expect(result.imported).toBe(1);
+    expect(result.supersededByAnchorCount).toBe(1);
+    expect(txClient.transaction.createMany.mock.calls[0][0].data[0]).toEqual(
+      expect.objectContaining({ balanceSupersededByAnchor: true }),
+    );
+    // No balance sync call at all — the only row in this batch is excluded from netDelta.
+    expect(txClient.bankAccount.update).not.toHaveBeenCalled();
+  });
+
+  it('a post-anchor row on the same account is not superseded and still moves the balance', async () => {
+    mockLinkedAccountAnchor(new Date('2026-01-01'));
+    const postAnchorTx = makeTx({ date: new Date('2026-02-01T00:00:00.000Z'), amount: 500, type: 'EXPENSE' });
+    const result = await persistParsedStatement({ ...BASE, accountId: 'acc1', transactions: [postAnchorTx] });
+
+    expect(result.supersededByAnchorCount).toBe(0);
+    expect(txClient.transaction.createMany.mock.calls[0][0].data[0]).toEqual(
+      expect.objectContaining({ balanceSupersededByAnchor: false }),
+    );
+    expect(txClient.bankAccount.update).toHaveBeenCalledWith({
+      where: { id: 'acc1' },
+      data: { currentBalance: { increment: -500 } },
+    });
+  });
+
+  it('a transaction dated exactly on the anchor date is superseded (E1)', async () => {
+    mockLinkedAccountAnchor(new Date('2026-01-01'));
+    const sameDayTx = makeTx({ date: new Date('2026-01-01T00:00:00.000Z'), amount: 500, type: 'EXPENSE' });
+    const result = await persistParsedStatement({ ...BASE, accountId: 'acc1', transactions: [sameDayTx] });
+    expect(result.supersededByAnchorCount).toBe(1);
+  });
+
+  it('adds a warning mentioning the superseded count', async () => {
+    mockLinkedAccountAnchor(new Date('2026-01-01'));
+    const preAnchorTx = makeTx({ date: new Date('2025-12-15T00:00:00.000Z'), amount: 500, type: 'EXPENSE' });
+    const result = await persistParsedStatement({ ...BASE, accountId: 'acc1', transactions: [preAnchorTx] });
+    expect(result.warnings.some((w) => /1 row.*opening-balance date/.test(w))).toBe(true);
+  });
+
+  it('checks the cash account\'s anchor INDEPENDENTLY of the linked account\'s, for a linked-CASH row\'s synthetic leg', async () => {
+    // Linked account has NO anchor, but the cash account does — the synthetic
+    // counterpart leg on the cash account must still be excluded from cashDeltas.
+    acctMock.findFirst.mockImplementation(async (args: any) => {
+      if (args?.where?.isCashAccount) return { id: 'cash-1', openingBalanceDate: new Date('2026-01-01') };
+      return { id: 'acc1', userId: 'u1', openingBalanceDate: null };
+    });
+    txClient.bankAccount.findFirst.mockResolvedValue({ id: 'cash-1', userId: 'u1', isCashAccount: true });
+
+    const preAnchorCashTx = makeTx({
+      date: new Date('2025-12-15T00:00:00.000Z'), amount: 500, type: 'EXPENSE', paymentMode: 'CASH' as any,
+    });
+    const result = await persistParsedStatement({ ...BASE, accountId: 'acc1', transactions: [preAnchorCashTx] });
+
+    expect(result.supersededByAnchorCount).toBe(1);
+    // The real row (on the linked, unanchored account) still moves that account's balance...
+    expect(txClient.bankAccount.update).toHaveBeenCalledWith({
+      where: { id: 'acc1' },
+      data: { currentBalance: { increment: -500 } },
+    });
+    // ...but the cash account (anchored) does not get a balance sync call at all, since
+    // its only leg this batch is superseded.
+    expect(txClient.bankAccount.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'cash-1' } }),
+    );
+    const syntheticRow = txClient.transaction.createMany.mock.calls[0][0].data.find((r: any) => r.bankAccountId === 'cash-1');
+    expect(syntheticRow.balanceSupersededByAnchor).toBe(true);
+  });
+
+  it('a pre-cash-anchor row on an UNLINKED CASH import is inserted but excluded from the cash balance', async () => {
+    acctMock.findFirst.mockImplementation(async (args: any) => {
+      if (args?.where?.isCashAccount) return { id: 'cash-1', openingBalanceDate: new Date('2026-01-01') };
+      return { id: 'acc1', userId: 'u1', openingBalanceDate: null };
+    });
+    txClient.bankAccount.findFirst.mockResolvedValue({ id: 'cash-1', userId: 'u1', isCashAccount: true });
+
+    const preAnchorCashTx = makeTx({
+      date: new Date('2025-12-15T00:00:00.000Z'), amount: 500, type: 'EXPENSE', paymentMode: 'CASH' as any,
+    });
+    const result = await persistParsedStatement({ ...BASE, transactions: [preAnchorCashTx] });
+
+    expect(result.imported).toBe(1);
+    expect(result.supersededByAnchorCount).toBe(1);
+    expect(txClient.bankAccount.update).not.toHaveBeenCalled();
   });
 });

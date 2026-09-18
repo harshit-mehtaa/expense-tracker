@@ -143,3 +143,21 @@ export function validateFY(fy: unknown): string {
 export function getMonthStart(): Date {
   return dayjs().tz(IST).startOf('month').toDate();
 }
+
+/**
+ * Returns the IST end-of-day cutoff for a BankAccount opening-balance anchor date, or
+ * null if no anchor is set. A transaction dated on/before this cutoff is superseded by
+ * the anchor (the anchor represents that day's closing balance). This is the single
+ * definition of the cutoff — every anchor set/edit/clear and every pre-anchor date
+ * guard must call this function rather than re-deriving the boundary inline, since a
+ * cutoff computed in two places is a cutoff that will eventually disagree with itself.
+ */
+export function anchorCutoff(openingBalanceDate: Date | null): Date | null {
+  if (!openingBalanceDate) return null;
+  return dayjs(openingBalanceDate).tz(IST).endOf('day').toDate();
+}
+
+/** Formats a Date as its IST calendar date, e.g. "01 Jan 2026" — for user-facing messages. */
+export function formatISTDate(date: Date): string {
+  return dayjs(date).tz(IST).format('DD MMM YYYY');
+}

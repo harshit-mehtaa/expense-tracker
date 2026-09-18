@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../config/prisma';
 import { isTest } from '../config/env';
 
-export type AuditAction = 'CREATE' | 'UPDATE' | 'DELETE' | 'RECONCILE' | 'RESET_PASSWORD' | 'GENERATE';
+export type AuditAction = 'CREATE' | 'UPDATE' | 'DELETE' | 'RECONCILE' | 'SET_OPENING_BALANCE' | 'RESET_PASSWORD' | 'GENERATE';
 
 function toJsonValue(value: unknown): Prisma.InputJsonValue | undefined {
   if (value === undefined) return undefined;

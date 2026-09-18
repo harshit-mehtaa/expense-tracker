@@ -5,6 +5,7 @@ import { AppError } from '../utils/AppError';
 import { sanitizeFilename } from '../utils/sanitizeFilename';
 import { makeImportHash, type ParsedTransaction } from './importService';
 import { ensureCashAccount } from './accountService';
+import { anchorCutoff } from '../utils/financialYear';
 
 /**
  * Persistence half of a bank-statement import. The route owns parsing and the audit log;
@@ -93,6 +94,7 @@ export async function persistParsedStatement(args: PersistArgs) {
   const { ownerUserId, accountId, bank, rowCount, transactions, filename } = args;
 
   // Verify the account belongs to the owner before writing anything against it.
+  let linkedAccountAnchorCutoff: Date | null = null;
   if (accountId) {
     const account = await prisma.bankAccount.findFirst({
       where: { id: accountId, userId: ownerUserId },
@@ -105,6 +107,7 @@ export async function persistParsedStatement(args: PersistArgs) {
     if (account.isCashAccount) {
       throw AppError.badRequest('Cannot import a bank statement into the cash account');
     }
+    linkedAccountAnchorCutoff = anchorCutoff(account.openingBalanceDate);
   }
 
   // scopeId = accountId when linked, userId otherwise — so re-importing the same
@@ -146,10 +149,15 @@ export async function persistParsedStatement(args: PersistArgs) {
   // carries that same transferPairId (see `pairId` above), so that filter would exclude
   // real statement rows too — precisely the ATM-withdrawal/cash-deposit rows a linked-
   // then-unlinked re-import (this fix's own target incident) most needs to catch.
-  const cashAccountId = (await prisma.bankAccount.findFirst({
+  const cashAccountRow = await prisma.bankAccount.findFirst({
     where: { userId: ownerUserId, isCashAccount: true },
-    select: { id: true },
-  }))?.id ?? null;
+    select: { id: true, openingBalanceDate: true },
+  });
+  const cashAccountId = cashAccountRow?.id ?? null;
+  // Checked independently of the linked account's anchor below — a linked-CASH import
+  // row writes to TWO accounts (the real account via its normal row, the cash account
+  // via a synthetic counterpart leg), and each can have its own, different anchor.
+  const cashAnchorCutoff = anchorCutoff(cashAccountRow?.openingBalanceDate ?? null);
   const fuzzyCandidates = uniqueDays.length > 0 && uniqueAmounts.length > 0
     ? await prisma.transaction.findMany({
       where: {
@@ -239,7 +247,9 @@ export async function persistParsedStatement(args: PersistArgs) {
   }
 
   let syntheticCashLegsCreated = 0;
+  let supersededByAnchorCount = 0;
   const cashDeltas: number[] = [];
+  const linkedAccountSupersededHashes = new Set<string>();
 
   try {
     // Explicit timeout. Prisma's interactive-transaction default is 5s, and this is the
@@ -281,10 +291,22 @@ export async function persistParsedStatement(args: PersistArgs) {
         // row's hash, which is unchanged by this fix and already exists in the DB.
         const pairId = isCashRow && accountId ? crypto.randomUUID() : undefined;
 
+        // The row's own leg targets the cash account when unlinked-CASH, otherwise the
+        // linked account (or no account at all, for an unlinked non-cash row — which has
+        // no anchor to check since it never affects any account's balance).
+        const normalRowCutoff = isCashRow && !accountId ? cashAnchorCutoff : linkedAccountAnchorCutoff;
+        const normalRowSuperseded = normalRowCutoff !== null && t.date <= normalRowCutoff;
+        if (normalRowSuperseded) {
+          supersededByAnchorCount += 1;
+          if (accountId) linkedAccountSupersededHashes.add(t.hash);
+        }
+
         // Accumulated at the exact point the routing decision is made, rather than
         // re-derived afterward from a second filter/map pass — one source of truth for
-        // "does this row affect the cash account, and in which direction."
-        if (isCashRow && !accountId) {
+        // "does this row affect the cash account, and in which direction." Excluded when
+        // superseded: the row is still inserted (visible in lists, per the anchor's
+        // "supersede, don't hide" rule) but must not move a balance it's excluded from.
+        if (isCashRow && !accountId && !normalRowSuperseded) {
           cashDeltas.push(round2(t.type === 'INCOME' ? t.amount : -t.amount));
         }
 
@@ -299,6 +321,7 @@ export async function persistParsedStatement(args: PersistArgs) {
           date: t.date,
           paymentMode: t.paymentMode ?? null,
           balanceImpactApplied: true,
+          balanceSupersededByAnchor: normalRowSuperseded,
           importHash: t.hash,
           transferPairId: pairId,
         });
@@ -318,6 +341,11 @@ export async function persistParsedStatement(args: PersistArgs) {
           // condition), so `!` here is provably safe, not a suppressed nullability risk.
           const syntheticType = t.type === 'INCOME' ? 'EXPENSE' : 'INCOME';
           const syntheticHash = crypto.createHash('sha256').update(`${t.hash}|cash-leg`).digest('hex');
+          // Checked independently of normalRowSuperseded (which reflects the linked
+          // account's anchor, not the cash account's) — a linked-CASH row writes to two
+          // separate accounts, each with its own anchor.
+          const syntheticSuperseded = cashAnchorCutoff !== null && t.date <= cashAnchorCutoff;
+          if (syntheticSuperseded) supersededByAnchorCount += 1;
           syntheticRows.push({
             userId: ownerUserId,
             bankAccountId: cashAccount!.id,
@@ -330,10 +358,13 @@ export async function persistParsedStatement(args: PersistArgs) {
             // than `t.paymentMode ?? null`, which would leave an unreachable branch.
             paymentMode: PaymentMode.CASH,
             balanceImpactApplied: true,
+            balanceSupersededByAnchor: syntheticSuperseded,
             importHash: syntheticHash,
             transferPairId: pairId,
           });
-          cashDeltas.push(round2(syntheticType === 'INCOME' ? t.amount : -t.amount));
+          if (!syntheticSuperseded) {
+            cashDeltas.push(round2(syntheticType === 'INCOME' ? t.amount : -t.amount));
+          }
         }
       }
 
@@ -361,7 +392,11 @@ export async function persistParsedStatement(args: PersistArgs) {
         // cancelling set must compare equal to 0 so no bogus increment is written.
         const netDelta = round2(
           toCreate.reduce(
-            (sum, t) => sum + round2(t.type === 'INCOME' ? t.amount : -t.amount),
+            (sum, t) => (
+              linkedAccountSupersededHashes.has(t.hash)
+                ? sum
+                : sum + round2(t.type === 'INCOME' ? t.amount : -t.amount)
+            ),
             0,
           ),
         );
@@ -457,11 +492,19 @@ export async function persistParsedStatement(args: PersistArgs) {
       + 'account history, some duplicates may not have been caught.',
     );
   }
+  if (supersededByAnchorCount > 0) {
+    warnings.push(
+      `${supersededByAnchorCount} row${supersededByAnchorCount === 1 ? '' : 's'} dated on or `
+      + `before an account's opening-balance date ${supersededByAnchorCount === 1 ? 'was' : 'were'} `
+      + 'imported for the record but excluded from the balance calculation.',
+    );
+  }
 
   return {
     imported,
     duplicatesSkipped,
     fuzzyDuplicatesSkipped,
+    supersededByAnchorCount,
     cashLegsCreated: syntheticCashLegsCreated,
     importRecord,
     warnings,

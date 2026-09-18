@@ -15,6 +15,7 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:seed": "ts-node prisma/seed.ts",
     "prisma:backfill-cash": "ts-node prisma/backfill-cash-accounts.ts",
+    "validate:opening-balance": "ts-node scripts/validate-opening-balance.ts",
     "prisma:studio": "prisma studio"
   },
   "dependencies": {

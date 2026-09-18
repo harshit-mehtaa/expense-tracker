@@ -5,6 +5,7 @@ import { AppError } from '../utils/AppError';
 import { ensureCashAccount } from './accountService';
 import { ownerScopedWhere } from '../utils/resolveTargetUserId';
 import { priceAsOf } from '../utils/subscriptionPricing';
+import { anchorCutoff } from '../utils/financialYear';
 
 const MAX_CATCH_UP_PER_RULE = 366;
 
@@ -133,6 +134,9 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
 
   let generated = 0;
   let runDate = rule.nextRunDate;
+  // Cached across iterations — the resolved account (and its anchor, if any) doesn't
+  // change mid-run. `undefined` = not yet resolved, `null` = resolved and has no anchor.
+  let cachedAnchorCutoff: Date | null | undefined;
 
   while (runDate <= now && generated < MAX_CATCH_UP_PER_RULE) {
     const dueDate = runDate;
@@ -183,6 +187,28 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
         );
         break;
       }
+    }
+
+    if (cachedAnchorCutoff === undefined) {
+      cachedAnchorCutoff = null;
+      if (resolvedBankAccountId) {
+        const acct = await prisma.bankAccount.findUnique({
+          where: { id: resolvedBankAccountId },
+          select: { openingBalanceDate: true },
+        });
+        cachedAnchorCutoff = anchorCutoff(acct?.openingBalanceDate ?? null);
+      }
+    }
+    // Same reasoning as the missing-price and cash-resolve-failure breaks above: a due
+    // date on/before the account's opening-balance anchor can't be generated (the anchor
+    // asserts everything before it is superseded), and throwing would abort every OTHER
+    // rule this user has, so this rule's catch-up stops here rather than skipping ahead.
+    if (cachedAnchorCutoff && dueDate <= cachedAnchorCutoff) {
+      console.error(
+        '[recurring] due date is on/before the account\'s opening-balance anchor; billing stopped',
+        { ruleId: rule.id, userId: rule.userId, dueDate: dueDate.toISOString() },
+      );
+      break;
     }
 
     const created = await prisma.$transaction(async (tx) => {

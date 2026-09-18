@@ -17,6 +17,7 @@ vi.mock('../config/prisma', () => {
       count: vi.fn().mockResolvedValue(0),
       findMany: vi.fn().mockResolvedValue([]),
       findUnique: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
       findFirst: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
@@ -49,6 +50,7 @@ vi.mock('../config/prisma', () => {
       delete: vi.fn(),
     },
     $transaction: vi.fn(),
+    $queryRaw: vi.fn(),
   };
   return { default: prisma, prisma };
 });
@@ -107,6 +109,11 @@ beforeEach(() => {
   txMock.count.mockResolvedValue(0);
   txMock.findMany.mockResolvedValue([]);
   txMock.findUnique.mockResolvedValue(MOCK_TX);
+  // updateTransaction re-reads fresh balance flags via findUniqueOrThrow after locking
+  // (to guard against a stale read racing a concurrent applyAnchor) — delegate to
+  // whatever findUnique currently resolves to, so every existing per-test override of
+  // findUnique (which sets up `original`) applies to the re-read automatically too.
+  txMock.findUniqueOrThrow.mockImplementation((...args: unknown[]) => txMock.findUnique(...args));
   txMock.findFirst.mockResolvedValue(null);
   // Default: the transaction is NOT a recurring template. Tests that exercise the guard
   // override this.
@@ -2878,5 +2885,169 @@ describe('createTransaction — subscription attribution', () => {
 
     expect(txMock.create.mock.calls[0][0].data.subscriptionId).toBeUndefined();
     expect((prisma as any).subscription.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Opening-balance anchor guards: assertNotBeforeAnchor (creation/date-change paths) and
+ * contributesToBalance (reversal/net-change sites). Default mocks carry no
+ * openingBalanceDate anywhere, so every existing test above is unaffected; these tests
+ * override acctMock.findUnique per-case to exercise the guard.
+ */
+describe('opening-balance anchor guards', () => {
+  const ANCHORED_ACCOUNT = { ...MOCK_ACCOUNT, isCashAccount: false, openingBalanceDate: new Date('2026-01-01') };
+
+  describe('createTransaction — pre-anchor date rejection (S1)', () => {
+    it('rejects a single-leg transaction dated on or before the anchor', async () => {
+      acctMock.findFirst.mockResolvedValue(MOCK_ACCOUNT);
+      acctMock.findUnique.mockResolvedValue(ANCHORED_ACCOUNT);
+      await expect(createTransaction('u1', {
+        bankAccountId: 'acct-1', amount: 500, type: 'EXPENSE', description: 'old', date: '2025-12-15',
+      } as never)).rejects.toThrow(/opening-balance date/i);
+      expect(txMock.create).not.toHaveBeenCalled();
+    });
+
+    it('allows a single-leg transaction dated strictly after the anchor', async () => {
+      acctMock.findFirst.mockResolvedValue(MOCK_ACCOUNT);
+      acctMock.findUnique.mockResolvedValue(ANCHORED_ACCOUNT);
+      await createTransaction('u1', {
+        bankAccountId: 'acct-1', amount: 500, type: 'EXPENSE', description: 'new', date: '2026-02-01',
+      } as never);
+      expect(txMock.create).toHaveBeenCalled();
+    });
+
+    it('a transaction dated exactly on the anchor date is rejected (E1: anchor is that day\'s closing balance)', async () => {
+      acctMock.findFirst.mockResolvedValue(MOCK_ACCOUNT);
+      acctMock.findUnique.mockResolvedValue(ANCHORED_ACCOUNT);
+      await expect(createTransaction('u1', {
+        bankAccountId: 'acct-1', amount: 500, type: 'EXPENSE', description: 'same-day', date: '2026-01-01',
+      } as never)).rejects.toThrow(/opening-balance date/i);
+    });
+  });
+
+  describe('createTransaction — TRANSFER pre-anchor rejection (S2/S3)', () => {
+    it('rejects when the SOURCE account is anchored after the transaction date', async () => {
+      acctMock.findFirst.mockImplementation(async ({ where }: any) =>
+        (where.id === 'acct-1' ? MOCK_ACCOUNT : { id: 'acct-2', userId: 'u1' }));
+      acctMock.findUnique.mockResolvedValue(ANCHORED_ACCOUNT);
+      await expect(createTransaction('u1', {
+        bankAccountId: 'acct-1', transferToAccountId: 'acct-2', amount: 500, type: 'TRANSFER',
+        description: 'xfer', date: '2025-12-15',
+      } as never)).rejects.toThrow(/opening-balance date/i);
+      expect(txMock.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the DESTINATION account is anchored after the transaction date, even if source is not', async () => {
+      acctMock.findFirst.mockImplementation(async ({ where }: any) =>
+        (where.id === 'acct-1' ? MOCK_ACCOUNT : { id: 'acct-2', userId: 'u1' }));
+      acctMock.findUnique.mockImplementation(async ({ where }: any) =>
+        (where.id === 'acct-2' ? ANCHORED_ACCOUNT : { ...MOCK_ACCOUNT, openingBalanceDate: null }));
+      await expect(createTransaction('u1', {
+        bankAccountId: 'acct-1', transferToAccountId: 'acct-2', amount: 500, type: 'TRANSFER',
+        description: 'xfer', date: '2025-12-15',
+      } as never)).rejects.toThrow(/opening-balance date/i);
+      expect(txMock.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateTransaction — date-cross guard (E7) and superseded-row edit (should_fix)', () => {
+    it('rejects a date edit that would move a transaction across the anchor boundary', async () => {
+      txMock.findUnique.mockResolvedValue({ ...MOCK_TX, balanceSupersededByAnchor: false });
+      acctMock.findUnique.mockResolvedValue(ANCHORED_ACCOUNT);
+      await expect(updateTransaction('tx-1', 'u1', 'MEMBER', { date: '2025-12-01' }))
+        .rejects.toThrow(/crosses this account's opening-balance date/i);
+      expect(txMock.update).not.toHaveBeenCalled();
+    });
+
+    it('allows a date edit that stays on the same side of the anchor', async () => {
+      txMock.findUnique.mockResolvedValue({ ...MOCK_TX, date: new Date('2026-02-01'), balanceSupersededByAnchor: false });
+      acctMock.findUnique.mockResolvedValue(ANCHORED_ACCOUNT);
+      await updateTransaction('tx-1', 'u1', 'MEMBER', { date: '2026-03-01' });
+      expect(txMock.update).toHaveBeenCalled();
+    });
+
+    it('does not reverse or re-apply a delta when editing the amount of an already-superseded (pre-anchor) row', async () => {
+      // Superseded row: never contributed to currentBalance. Editing its amount (not
+      // date) must have zero balance effect — the should_fix case the plan-challenger
+      // flagged (oldDelta/newDelta must both zero out, not just oldDelta).
+      txMock.findUnique.mockResolvedValue({
+        ...MOCK_TX, date: new Date('2025-12-01'), balanceSupersededByAnchor: true, amount: 1000,
+      });
+      acctMock.findUnique.mockResolvedValue(ANCHORED_ACCOUNT);
+      await updateTransaction('tx-1', 'u1', 'MEMBER', { amount: 5000 });
+      expect(acctMock.update).not.toHaveBeenCalled();
+    });
+
+    it('locks the account before trusting the pre-lock read, and uses the FRESH re-read for the reversal decision (concurrency fix)', async () => {
+      // Simulate a concurrent applyAnchor committing between the initial read and the
+      // lock: the first findUnique call returns a STALE flag=false, but the re-read
+      // after the lock (findUniqueOrThrow) returns the up-to-date flag=true. If the
+      // stale value were used, this would incorrectly reverse a delta that was already
+      // excluded by the concurrent anchor.
+      txMock.findUnique.mockResolvedValueOnce({ ...MOCK_TX, balanceSupersededByAnchor: false });
+      txMock.findUniqueOrThrow.mockResolvedValueOnce({ ...MOCK_TX, balanceSupersededByAnchor: true });
+      await updateTransaction('tx-1', 'u1', 'MEMBER', { amount: 5000 });
+      expect((prisma as any).$queryRaw).toHaveBeenCalled();
+      expect(acctMock.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects newly linking (via a paymentMode edit) a pre-anchor-dated transaction to an anchored cash account', async () => {
+      txMock.findUnique.mockResolvedValue({
+        ...MOCK_TX, bankAccountId: null, date: new Date('2025-12-01'), paymentMode: 'UPI',
+      });
+      acctMock.findUnique.mockResolvedValue({ ...ANCHORED_ACCOUNT, isCashAccount: true, id: 'cash-1' });
+      acctMock.create.mockResolvedValue({ ...ANCHORED_ACCOUNT, isCashAccount: true, id: 'cash-1' });
+      await expect(updateTransaction('tx-1', 'u1', 'MEMBER', { paymentMode: 'CASH' }))
+        .rejects.toThrow(/opening-balance date|crosses/i);
+    });
+  });
+
+  describe('convertTransactionToTransfer — pre-anchor rejection (S6)', () => {
+    it('rejects converting to a transfer whose destination account is anchored after the original date', async () => {
+      txMock.findUnique.mockResolvedValue({ ...MOCK_TX, type: 'EXPENSE', transferPairId: null, date: new Date('2025-12-01') });
+      acctMock.findFirst.mockResolvedValue({ id: 'acct-2', userId: 'u1' });
+      acctMock.findUnique.mockResolvedValue(ANCHORED_ACCOUNT);
+      await expect(convertTransactionToTransfer('tx-1', 'u1', 'MEMBER', { transferToAccountId: 'acct-2' }))
+        .rejects.toThrow(/opening-balance date/i);
+      expect(txMock.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('softDeleteTransaction — superseded rows are not reversed (E5)', () => {
+    it('does not reverse currentBalance when deleting a pre-anchor-superseded transaction', async () => {
+      txMock.findUnique.mockResolvedValue({ ...MOCK_TX, balanceSupersededByAnchor: true });
+      await softDeleteTransaction('tx-1', 'u1', 'MEMBER');
+      expect(acctMock.update).not.toHaveBeenCalled();
+    });
+
+    it('still reverses currentBalance for a non-superseded transaction (regression guard)', async () => {
+      txMock.findUnique.mockResolvedValue({ ...MOCK_TX, balanceSupersededByAnchor: false });
+      await softDeleteTransaction('tx-1', 'u1', 'MEMBER');
+      expect(acctMock.update).toHaveBeenCalled();
+    });
+
+    it('locks the account and uses the FRESH re-read for the reversal decision, not the pre-lock read (concurrency fix)', async () => {
+      // The pre-lock read says non-superseded (would reverse); the post-lock re-read —
+      // reflecting a concurrent applyAnchor that committed in between — says superseded.
+      // Using the stale value would wrongly reverse an already-excluded delta.
+      txMock.findUnique.mockResolvedValueOnce({ ...MOCK_TX, balanceSupersededByAnchor: false });
+      txMock.findUniqueOrThrow.mockResolvedValueOnce({ ...MOCK_TX, balanceSupersededByAnchor: true });
+      await softDeleteTransaction('tx-1', 'u1', 'MEMBER');
+      expect((prisma as any).$queryRaw).toHaveBeenCalled();
+      expect(acctMock.update).not.toHaveBeenCalled();
+    });
+
+    it('cascades correctly when only ONE leg of a transfer pair is superseded (E6)', async () => {
+      txMock.findUnique.mockResolvedValue({
+        ...MOCK_TX, transferPairId: 'pair-1', balanceSupersededByAnchor: true, bankAccountId: 'acct-1',
+      });
+      txMock.findFirst.mockResolvedValue({
+        id: 'tx-2', bankAccountId: 'acct-2', amount: 1000, type: 'INCOME', balanceSupersededByAnchor: false, importHash: null,
+      });
+      await softDeleteTransaction('tx-1', 'u1', 'MEMBER');
+      // Only the paired (non-superseded) leg's account balance is reversed.
+      expect(acctMock.update).toHaveBeenCalledTimes(1);
+      expect(acctMock.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'acct-2' } }));
+    });
   });
 });

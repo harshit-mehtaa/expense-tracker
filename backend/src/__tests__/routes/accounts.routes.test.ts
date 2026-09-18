@@ -23,6 +23,7 @@ vi.mock('../../services/accountService', () => ({
   updateAccount: vi.fn(),
   deleteAccount: vi.fn(),
   reconcileAccount: vi.fn(),
+  applyAnchor: vi.fn(),
 }));
 
 import accountsRouter from '../../routes/accounts';
@@ -38,6 +39,7 @@ const createMock = svc.createAccount as ReturnType<typeof vi.fn>;
 const updateMock = svc.updateAccount as ReturnType<typeof vi.fn>;
 const deleteMock = svc.deleteAccount as ReturnType<typeof vi.fn>;
 const reconcileMock = svc.reconcileAccount as ReturnType<typeof vi.fn>;
+const applyAnchorMock = svc.applyAnchor as ReturnType<typeof vi.fn>;
 const auditMock = recordAuditLog as ReturnType<typeof vi.fn>;
 
 const MOCK_ACCOUNT = { id: 'acc-1', bankName: 'HDFC', accountType: 'SAVINGS', currentBalance: 50000 };
@@ -50,6 +52,7 @@ beforeEach(() => {
   updateMock.mockResolvedValue(MOCK_ACCOUNT);
   deleteMock.mockResolvedValue(undefined);
   reconcileMock.mockResolvedValue({ ...MOCK_ACCOUNT, currentBalance: 45000 });
+  applyAnchorMock.mockResolvedValue({ account: { ...MOCK_ACCOUNT, openingBalance: 50000, openingBalanceDate: new Date('2026-01-01') }, supersededTransactionCount: 3 });
 });
 
 describe('GET /api/accounts', () => {
@@ -282,5 +285,52 @@ describe('POST /api/accounts/:id/reconcile', () => {
     const res = await request(app).post('/api/accounts/acc-1/reconcile').send({ actualBalance: -100 });
     expect(res.status).toBe(200);
     expect(reconcileMock).toHaveBeenCalledWith('acc-1', 'u1', 'ADMIN', -100, undefined);
+  });
+});
+
+describe('PUT /api/accounts/:id/opening-balance', () => {
+  it('returns 200 and includes supersededTransactionCount on a valid set', async () => {
+    const res = await request(app).put('/api/accounts/acc-1/opening-balance')
+      .send({ openingBalance: 50000, openingBalanceDate: '2026-01-01' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.supersededTransactionCount).toBe(3);
+    expect(applyAnchorMock).toHaveBeenCalledWith('acc-1', 'u1', 'ADMIN', 50000, '2026-01-01');
+  });
+
+  it('accepts both null (clear) as a valid request', async () => {
+    const res = await request(app).put('/api/accounts/acc-1/opening-balance')
+      .send({ openingBalance: null, openingBalanceDate: null });
+    expect(res.status).toBe(200);
+    expect(applyAnchorMock).toHaveBeenCalledWith('acc-1', 'u1', 'ADMIN', null, null);
+  });
+
+  it('returns 422 when only openingBalance is provided (both-or-neither)', async () => {
+    const res = await request(app).put('/api/accounts/acc-1/opening-balance').send({ openingBalance: 50000 });
+    expect(res.status).toBe(422);
+    expect(applyAnchorMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 when only openingBalanceDate is provided (both-or-neither)', async () => {
+    const res = await request(app).put('/api/accounts/acc-1/opening-balance').send({ openingBalanceDate: '2026-01-01' });
+    expect(res.status).toBe(422);
+  });
+
+  it('returns 422 for a malformed date string', async () => {
+    const res = await request(app).put('/api/accounts/acc-1/opening-balance')
+      .send({ openingBalance: 100, openingBalanceDate: '01-01-2026' });
+    expect(res.status).toBe(422);
+  });
+
+  it('returns 422 for a future date', async () => {
+    const future = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const res = await request(app).put('/api/accounts/acc-1/opening-balance')
+      .send({ openingBalance: 100, openingBalanceDate: future });
+    expect(res.status).toBe(422);
+    expect(applyAnchorMock).not.toHaveBeenCalled();
+  });
+
+  it('audit-logs with action SET_OPENING_BALANCE', async () => {
+    await request(app).put('/api/accounts/acc-1/opening-balance').send({ openingBalance: 50000, openingBalanceDate: '2026-01-01' });
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ action: 'SET_OPENING_BALANCE', entityType: 'BankAccount' }));
   });
 });

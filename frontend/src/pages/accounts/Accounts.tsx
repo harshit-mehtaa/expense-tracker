@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Building2, CreditCard, Plus, Trash2, Edit2, Eye, EyeOff, RefreshCw } from 'lucide-react';
+import { Building2, CreditCard, Plus, Trash2, Edit2, Eye, EyeOff, RefreshCw, CalendarClock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -13,6 +13,7 @@ import { useMemberSelector } from '@/hooks/useMemberSelector';
 import api from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { ACCOUNT_TYPE_LABELS } from '@/lib/accountFormat';
+import { invalidateTransactionMutationCaches } from '@/lib/queryInvalidation';
 
 
 const ACCOUNT_TYPE_COLORS: Record<string, string> = {
@@ -204,6 +205,13 @@ function isCardAccount(account: any) {
   return isCardTypeValue(account.accountType);
 }
 
+// The backend validates the opening-balance date against the IST calendar day
+// (getISTDateBoundary), not UTC — new Date().toISOString() would block "today" for
+// roughly 00:00-05:30 IST, since the UTC date is still "yesterday" in that window.
+function todayInIST(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+}
+
 function hashString(value: string) {
   let hash = 0;
   for (let i = 0; i < value.length; i += 1) {
@@ -263,13 +271,43 @@ export default function AccountsPage() {
     mutationFn: ({ id, actualBalance, note }: { id: string; actualBalance: number; note?: string }) =>
       api.post(`/accounts/${id}/reconcile`, { actualBalance, note }),
     onSuccess: () => {
-      invalidateAccounts();
-      qc.invalidateQueries({ queryKey: ['transactions'] });
+      // Reconciling can move money, same as any other transaction mutation — was
+      // missing dashboard/reports/budgets invalidation before this fix (adjacent bug
+      // found while wiring the opening-balance anchor mutation below, which needs the
+      // same shared helper).
+      invalidateTransactionMutationCaches(qc);
       setReconciling(null);
       setReconcileBalance('');
       setReconcileNote('');
     },
   });
+
+  const [settingAnchor, setSettingAnchor] = useState<any>(null);
+  const [anchorBalance, setAnchorBalance] = useState('');
+  const [anchorDate, setAnchorDate] = useState('');
+  const [anchorIsCreditBalance, setAnchorIsCreditBalance] = useState(false);
+  const [anchorResult, setAnchorResult] = useState<{ supersededTransactionCount: number } | null>(null);
+
+  const openingBalanceMutation = useMutation({
+    mutationFn: ({ id, openingBalance, openingBalanceDate }: { id: string; openingBalance: number | null; openingBalanceDate: string | null }) =>
+      api.put(`/accounts/${id}/opening-balance`, { openingBalance, openingBalanceDate }),
+    onSuccess: (res: any) => {
+      invalidateTransactionMutationCaches(qc);
+      // Stay open and show the result rather than closing immediately — same-day
+      // supersession is a non-obvious rule (DQ10), so the user should see how many
+      // transactions were affected before dismissing, not find out later on Dashboard.
+      setAnchorResult({ supersededTransactionCount: res?.data?.data?.supersededTransactionCount ?? 0 });
+    },
+  });
+
+  function closeAnchorDialog() {
+    setSettingAnchor(null);
+    setAnchorBalance('');
+    setAnchorDate('');
+    setAnchorIsCreditBalance(false);
+    setAnchorResult(null);
+    openingBalanceMutation.reset();
+  }
 
   function startEdit(account: any) {
     const mode: AccountFormMode = isCardAccount(account) ? 'CREDIT_CARD' : 'BANK';
@@ -289,6 +327,13 @@ export default function AccountsPage() {
     setValue('billingCycleEndDay', account.billingCycleEndDay ?? undefined);
     setValue('paymentDueDay', account.paymentDueDay ?? undefined);
     setShowForm(true);
+  }
+
+  function openAnchorDialog(account: any) {
+    setSettingAnchor(account);
+    setAnchorBalance(account.openingBalance !== null && account.openingBalance !== undefined ? String(Math.abs(Number(account.openingBalance))) : '');
+    setAnchorDate(account.openingBalanceDate ? String(account.openingBalanceDate).slice(0, 10) : '');
+    setAnchorIsCreditBalance(account.accountType === 'CREDIT_CARD' && Number(account.openingBalance ?? 0) > 0);
   }
 
   function openAddBankAccount() {
@@ -457,6 +502,7 @@ export default function AccountsPage() {
           </div>
           <div className="flex shrink-0 gap-1">
             <Button variant="ghost" size="icon" title="Reconcile balance" aria-label="Reconcile balance" onClick={() => { setReconciling(account); setReconcileBalance(String(balance)); setReconcileNote(''); }}><RefreshCw className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" title="Set opening balance" aria-label="Set opening balance" onClick={() => openAnchorDialog(account)}><CalendarClock className="h-4 w-4" /></Button>
             {!account.isCashAccount && (
               <>
                 <Button variant="ghost" size="icon" title="Edit account" aria-label="Edit account" onClick={() => startEdit(account)}><Edit2 className="h-4 w-4" /></Button>
@@ -576,6 +622,16 @@ export default function AccountsPage() {
                 onClick={() => { setReconciling(account); setReconcileBalance(String(balance)); setReconcileNote(''); }}
               >
                 <RefreshCw className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-white hover:bg-white/15 hover:text-white"
+                title="Set opening balance"
+                aria-label="Set opening balance"
+                onClick={() => openAnchorDialog(account)}
+              >
+                <CalendarClock className="h-3.5 w-3.5" />
               </Button>
               <Button
                 variant="ghost"
@@ -853,6 +909,109 @@ export default function AccountsPage() {
                 {reconcileMutation.isPending ? 'Reconciling…' : 'Reconcile'}
               </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Opening Balance Modal */}
+      {settingAnchor && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-background rounded-lg border shadow-xl w-full max-w-sm p-6 space-y-4">
+            <h2 className="text-xl font-semibold">Opening Balance</h2>
+            <p className="text-sm text-muted-foreground">
+              {settingAnchor.bankName} {settingAnchor.accountNumberLast4 ? `•••• ${settingAnchor.accountNumberLast4}` : ''}
+            </p>
+            {anchorResult ? (
+              <>
+                <p className="text-sm">
+                  Balance updated.
+                  {anchorResult.supersededTransactionCount > 0 ? (
+                    <> {anchorResult.supersededTransactionCount} transaction{anchorResult.supersededTransactionCount === 1 ? '' : 's'} dated on or
+                    before this date {anchorResult.supersededTransactionCount === 1 ? 'is' : 'are'} now excluded from this account's
+                    balance (still visible in your transaction list).</>
+                  ) : ' No existing transactions were affected.'}
+                </p>
+                <div className="flex justify-end pt-2">
+                  <Button onClick={closeAnchorDialog}>Done</Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Assert what this account's balance was at the end of a specific date. Every
+                  transaction dated on or before that date will be excluded from the balance
+                  going forward (they stay visible everywhere else).
+                </p>
+                <div className="space-y-1">
+                  <Label required>Balance as of that date (₹)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={anchorBalance}
+                    onChange={(e) => setAnchorBalance(e.target.value)}
+                    placeholder="e.g. 50000"
+                  />
+                </div>
+                {settingAnchor.accountType === 'CREDIT_CARD' && (
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={anchorIsCreditBalance}
+                      onChange={(e) => setAnchorIsCreditBalance(e.target.checked)}
+                    />
+                    This is a credit balance (card owed you money), not an amount you owed
+                  </label>
+                )}
+                <div className="space-y-1">
+                  <Label required>As of date</Label>
+                  <Input
+                    type="date"
+                    value={anchorDate}
+                    max={todayInIST()}
+                    onChange={(e) => setAnchorDate(e.target.value)}
+                  />
+                </div>
+                {openingBalanceMutation.isError && (
+                  <p className="text-sm text-destructive">
+                    {(openingBalanceMutation.error as any)?.response?.data?.message ?? 'Failed to set opening balance'}
+                  </p>
+                )}
+                <div className="flex justify-between gap-3 pt-2">
+                  {settingAnchor.openingBalanceDate && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="text-destructive"
+                      onClick={() => {
+                        if (!window.confirm(
+                          "Clearing recomputes this account's balance from its FULL transaction history — "
+                          + 'if that history predates this app, the result may look wrong. Continue?',
+                        )) return;
+                        openingBalanceMutation.mutate({ id: settingAnchor.id, openingBalance: null, openingBalanceDate: null });
+                      }}
+                      disabled={openingBalanceMutation.isPending}
+                    >
+                      Clear anchor
+                    </Button>
+                  )}
+                  <div className="flex flex-1 justify-end gap-3">
+                    <Button type="button" variant="outline" onClick={closeAnchorDialog}>Cancel</Button>
+                    <Button
+                      onClick={() => openingBalanceMutation.mutate({
+                        id: settingAnchor.id,
+                        openingBalance: settingAnchor.accountType === 'CREDIT_CARD'
+                          ? (anchorIsCreditBalance ? 1 : -1) * Math.abs(parseFloat(anchorBalance))
+                          : parseFloat(anchorBalance),
+                        openingBalanceDate: anchorDate,
+                      })}
+                      disabled={openingBalanceMutation.isPending || !anchorBalance || isNaN(parseFloat(anchorBalance)) || !anchorDate}
+                    >
+                      {openingBalanceMutation.isPending ? 'Saving…' : 'Set Balance'}
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -14,14 +14,19 @@ vi.mock('../config/prisma', () => {
     bankAccount: {
       findMany: vi.fn(),
       findUnique: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
       findFirst: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
     },
     transaction: {
       create: vi.fn(),
+      updateMany: vi.fn(),
+      groupBy: vi.fn(),
+      count: vi.fn(),
     },
     $transaction: vi.fn(),
+    $queryRaw: vi.fn(),
   };
   return { default: mockPrisma, prisma: mockPrisma };
 });
@@ -36,6 +41,7 @@ import {
   reconcileAccount,
   deleteAccount,
   ensureCashAccount,
+  applyAnchor,
 } from '../services/accountService';
 
 const acctMock = (prisma as any).bankAccount;
@@ -55,7 +61,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   (prisma as any).$transaction.mockImplementation(async (fn: any) => fn(prisma));
   acctMock.findUnique.mockResolvedValue(MOCK_ACCOUNT);
+  acctMock.findUniqueOrThrow.mockResolvedValue(MOCK_ACCOUNT);
   acctMock.update.mockResolvedValue(MOCK_ACCOUNT);
+  txMock.groupBy.mockResolvedValue([]);
+  txMock.count.mockResolvedValue(0);
+  txMock.updateMany.mockResolvedValue({ count: 0 });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -456,6 +466,28 @@ describe('updateAccount', () => {
       expect.objectContaining({ data: expect.objectContaining({ maturityDate: undefined }) }),
     );
   });
+
+  // Opening-balance anchor bypass guard (S9 in the Cases Matrix): once an anchor is
+  // set, currentBalance must only move via applyAnchor or reconcileAccount.
+  it('rejects a currentBalance change via PUT when an opening-balance anchor is set', async () => {
+    acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, openingBalanceDate: new Date('2026-01-01') });
+    await expect(
+      updateAccount('acct-1', 'u1', 'MEMBER', { currentBalance: 999999 } as any),
+    ).rejects.toThrow(/opening-balance anchor/i);
+    expect(acctMock.update).not.toHaveBeenCalled();
+  });
+
+  it('allows a PUT that resends the SAME currentBalance unchanged even with an anchor set', async () => {
+    acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, currentBalance: 100000, openingBalanceDate: new Date('2026-01-01') });
+    await updateAccount('acct-1', 'u1', 'MEMBER', { currentBalance: 100000, bankName: 'ICICI' } as any);
+    expect(acctMock.update).toHaveBeenCalled();
+  });
+
+  it('allows a currentBalance change via PUT when no anchor is set', async () => {
+    acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, openingBalanceDate: null });
+    await updateAccount('acct-1', 'u1', 'MEMBER', { currentBalance: 999999 } as any);
+    expect(acctMock.update).toHaveBeenCalled();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -597,5 +629,189 @@ describe('reconcileAccount', () => {
   it('throws Forbidden when MEMBER tries to reconcile another user\'s account', async () => {
     acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, userId: 'u2' });
     await expect(reconcileAccount('acct-1', 'u1', 'MEMBER', 100000)).rejects.toThrow(/forbidden|access denied/i);
+  });
+
+  // TOCTOU fix (VQ3 / a pre-existing bug found and fixed alongside this feature): the
+  // delta must be computed from a FRESH read taken inside the $transaction, not the
+  // stale outer read used only for the ownership check.
+  it('computes the delta from a fresh in-transaction read, not the stale ownership-check read', async () => {
+    acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, currentBalance: 100000 });
+    // A concurrent mutation landed between the ownership check and the transaction.
+    acctMock.findUniqueOrThrow.mockResolvedValue({ ...MOCK_ACCOUNT, currentBalance: 105000 });
+    await reconcileAccount('acct-1', 'u1', 'MEMBER', 110000);
+    expect(txMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ amount: 5000, type: 'INCOME' }) }),
+    );
+  });
+
+  it('uses Decimal arithmetic for the delta, avoiding float drift', async () => {
+    acctMock.findUniqueOrThrow.mockResolvedValue({ ...MOCK_ACCOUNT, currentBalance: new Prisma.Decimal('100000.10') });
+    await reconcileAccount('acct-1', 'u1', 'MEMBER', 100000.2);
+    expect(txMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ amount: 0.1, type: 'INCOME' }) }),
+    );
+  });
+
+  it('locks the account row before reading currentBalance inside the transaction', async () => {
+    await reconcileAccount('acct-1', 'u1', 'MEMBER', 110000);
+    expect((prisma as any).$queryRaw).toHaveBeenCalled();
+  });
+
+  // Reconcile always dates its correction `new Date()` (today). If the account's anchor
+  // ALSO covers today, that correction lands in the superseded window — inserted as
+  // non-superseded (wrong), then silently reverted on the next applyAnchor recompute.
+  // Reject rather than corrupt the invariant.
+  it('rejects reconciling an account whose opening-balance anchor covers today', async () => {
+    acctMock.findUniqueOrThrow.mockResolvedValue({ ...MOCK_ACCOUNT, openingBalanceDate: new Date() });
+    await expect(reconcileAccount('acct-1', 'u1', 'MEMBER', 110000)).rejects.toThrow(/opening-balance anchor covering today/i);
+    expect(txMock.create).not.toHaveBeenCalled();
+    expect(acctMock.update).not.toHaveBeenCalled();
+  });
+
+  it('allows reconciling an account whose anchor is strictly in the past', async () => {
+    acctMock.findUniqueOrThrow.mockResolvedValue({ ...MOCK_ACCOUNT, openingBalanceDate: new Date('2020-01-01') });
+    await reconcileAccount('acct-1', 'u1', 'MEMBER', 110000);
+    expect(acctMock.update).toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// applyAnchor
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('applyAnchor', () => {
+  beforeEach(() => {
+    acctMock.findUnique.mockResolvedValue(MOCK_ACCOUNT);
+    acctMock.update.mockImplementation(async ({ data }: any) => ({ ...MOCK_ACCOUNT, ...data }));
+  });
+
+  it('sets an anchor on a fresh account: resets then re-flags supersession, sums Decimal, absolute-sets currentBalance', async () => {
+    txMock.groupBy.mockResolvedValue([
+      { type: 'INCOME', _sum: { amount: new Prisma.Decimal(2000) } },
+      { type: 'EXPENSE', _sum: { amount: new Prisma.Decimal(500) } },
+    ]);
+    // Only the SECOND updateMany call's count (the cutoff-scoped one) becomes
+    // supersededTransactionCount; the first call's return value is discarded.
+    txMock.updateMany.mockResolvedValue({ count: 3 });
+
+    const { account, supersededTransactionCount } = await applyAnchor('acct-1', 'u1', 'MEMBER', 50000, '2026-01-01');
+
+    // Reset-then-set is the idempotent recompute-from-scratch pattern (DQ5).
+    expect(txMock.updateMany).toHaveBeenNthCalledWith(1, {
+      where: { bankAccountId: 'acct-1', deletedAt: null },
+      data: { balanceSupersededByAnchor: false },
+    });
+    expect(txMock.updateMany).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      data: { balanceSupersededByAnchor: true },
+    }));
+    expect(txMock.groupBy).toHaveBeenCalledWith(expect.objectContaining({
+      by: ['type'],
+      where: expect.objectContaining({
+        bankAccountId: 'acct-1',
+        deletedAt: null,
+        balanceImpactApplied: true,
+        balanceSupersededByAnchor: false,
+      }),
+    }));
+    // 50000 (opening) + 2000 (INCOME) - 500 (EXPENSE) = 51500
+    expect(Number(account.currentBalance)).toBe(51500);
+    expect(supersededTransactionCount).toBe(3);
+  });
+
+  it('clearing (both null) resurrects all superseded rows and resets supersede flag with no cutoff', async () => {
+    txMock.groupBy.mockResolvedValue([{ type: 'INCOME', _sum: { amount: new Prisma.Decimal(1000) } }]);
+    const { supersededTransactionCount } = await applyAnchor('acct-1', 'u1', 'MEMBER', null, null);
+
+    // Only the reset updateMany runs — no cutoff, nothing to re-flag as superseded.
+    expect(txMock.updateMany).toHaveBeenCalledTimes(1);
+    expect(txMock.updateMany).toHaveBeenCalledWith({
+      where: { bankAccountId: 'acct-1', deletedAt: null },
+      data: { balanceSupersededByAnchor: false },
+    });
+    expect(supersededTransactionCount).toBe(0);
+    expect(acctMock.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ openingBalance: null, openingBalanceDate: null }),
+    }));
+  });
+
+  it('is idempotent: setting the identical anchor twice produces the identical result', async () => {
+    txMock.groupBy.mockResolvedValue([{ type: 'INCOME', _sum: { amount: new Prisma.Decimal(1000) } }]);
+    const first = await applyAnchor('acct-1', 'u1', 'MEMBER', 50000, '2026-01-01');
+    const second = await applyAnchor('acct-1', 'u1', 'MEMBER', 50000, '2026-01-01');
+    expect(Number(second.account.currentBalance)).toBe(Number(first.account.currentBalance));
+  });
+
+  it('is anchorable on the cash account (no isCashAccount guard)', async () => {
+    acctMock.findUnique.mockResolvedValue({ ...MOCK_ACCOUNT, isCashAccount: true, accountType: 'CASH' });
+    txMock.groupBy.mockResolvedValue([]);
+    await expect(applyAnchor('acct-1', 'u1', 'MEMBER', 8000, '2026-01-01')).resolves.toBeDefined();
+  });
+
+  it('preserves Decimal precision across 300 penny-sized amounts (no float drift)', async () => {
+    txMock.groupBy.mockResolvedValue([{ type: 'INCOME', _sum: { amount: new Prisma.Decimal('3.00') } }]);
+    const { account } = await applyAnchor('acct-1', 'u1', 'MEMBER', 0.01, '2026-01-01');
+    expect(Number(account.currentBalance)).toBeCloseTo(3.01, 10);
+  });
+
+  it('retries on a P2034 serialization failure and succeeds on the next attempt', async () => {
+    txMock.groupBy.mockResolvedValue([]);
+    let attempt = 0;
+    (prisma as any).$transaction.mockImplementation(async (fn: any) => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Prisma.PrismaClientKnownRequestError('conflict', { code: 'P2034', clientVersion: '5.22.0' });
+      }
+      return fn(prisma);
+    });
+    await expect(applyAnchor('acct-1', 'u1', 'MEMBER', 50000, '2026-01-01')).resolves.toBeDefined();
+    expect(attempt).toBe(2);
+  });
+
+  it('does not retry and rethrows a non-serialization error', async () => {
+    (prisma as any).$transaction.mockRejectedValue(new Error('boom'));
+    await expect(applyAnchor('acct-1', 'u1', 'MEMBER', 50000, '2026-01-01')).rejects.toThrow('boom');
+  });
+
+  it('maps exhausted P2034 retries to a friendly conflict error, not a raw 500', async () => {
+    (prisma as any).$transaction.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('conflict', { code: 'P2034', clientVersion: '5.22.0' }),
+    );
+    const err = await applyAnchor('acct-1', 'u1', 'MEMBER', 50000, '2026-01-01').catch((e) => e);
+    expect(err.message).toMatch(/being updated concurrently/i);
+    expect(err.statusCode).toBe(409);
+  });
+
+  it('locks the account row as the first statement, before any recompute query', async () => {
+    txMock.groupBy.mockResolvedValue([]);
+    await applyAnchor('acct-1', 'u1', 'MEMBER', 50000, '2026-01-01');
+    expect((prisma as any).$queryRaw).toHaveBeenCalled();
+  });
+
+  // Both-or-neither and future-date are enforced by the route's Zod schema, but
+  // applyAnchor is the sole sanctioned writer — a direct call (script, future caller)
+  // must not be able to bypass either rule.
+  it('rejects a direct call with only openingBalance set (both-or-neither)', async () => {
+    await expect(applyAnchor('acct-1', 'u1', 'MEMBER', 50000, null)).rejects.toThrow(/must both be set/i);
+    expect((prisma as any).$transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects a direct call with only openingBalanceDate set (both-or-neither)', async () => {
+    await expect(applyAnchor('acct-1', 'u1', 'MEMBER', null, '2026-01-01')).rejects.toThrow(/must both be set/i);
+  });
+
+  it('rejects a direct call with a future date', async () => {
+    const future = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    await expect(applyAnchor('acct-1', 'u1', 'MEMBER', 50000, future)).rejects.toThrow(/cannot be in the future/i);
+    expect((prisma as any).$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyAnchor — defensive null _sum handling', () => {
+  it('treats a null _sum.amount from groupBy as zero (defensive against an empty aggregate group)', async () => {
+    acctMock.findUnique.mockResolvedValue(MOCK_ACCOUNT);
+    acctMock.update.mockImplementation(async ({ data }: any) => ({ ...MOCK_ACCOUNT, ...data }));
+    txMock.groupBy.mockResolvedValue([{ type: 'INCOME', _sum: { amount: null } }]);
+    const { account } = await applyAnchor('acct-1', 'u1', 'MEMBER', 1000, '2026-01-01');
+    expect(Number(account.currentBalance)).toBe(1000);
   });
 });

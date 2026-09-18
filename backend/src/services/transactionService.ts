@@ -2,8 +2,8 @@ import crypto from 'crypto';
 import { PaymentMode, Prisma, TransactionType } from '@prisma/client';
 import prisma from '../config/prisma';
 import { AppError } from '../utils/AppError';
-import { ensureCashAccount } from './accountService';
-import { getFYRange, getISTDateBoundary } from '../utils/financialYear';
+import { ensureCashAccount, lockAccountsForBalanceWrite } from './accountService';
+import { anchorCutoff, formatISTDate, getFYRange, getISTDateBoundary } from '../utils/financialYear';
 import { buildPaginationArgs, processPaginationResult } from '../utils/pagination';
 
 export interface TransactionFilters {
@@ -112,6 +112,7 @@ type TransferCounterpartCandidate = {
   amount: Prisma.Decimal;
   type: TransactionType;
   balanceImpactApplied: boolean;
+  balanceSupersededByAnchor: boolean;
   bankAccount: TransferAccountSummary | null;
 };
 
@@ -144,6 +145,7 @@ async function findTransferCounterpartCandidates(
       amount: true,
       type: true,
       balanceImpactApplied: true,
+      balanceSupersededByAnchor: true,
       bankAccount: { select: { bankName: true, accountNumberLast4: true, accountType: true } },
     },
     orderBy: { createdAt: 'asc' },
@@ -380,6 +382,8 @@ export async function createTransaction(
   }
 
   return prisma.$transaction(async (tx) => {
+    const txDate = new Date(data.date);
+
     // Validate source account ownership
     if (data.bankAccountId) {
       const account = await tx.bankAccount.findFirst({ where: { id: data.bankAccountId, userId } });
@@ -403,6 +407,12 @@ export async function createTransaction(
     if (data.type === 'TRANSFER' && data.transferToAccountId) {
       const destAccount = await tx.bankAccount.findFirst({ where: { id: data.transferToAccountId, userId } });
       if (!destAccount) throw AppError.notFound('Destination bank account');
+      // Lock before the anchor check — otherwise a concurrent applyAnchor could commit
+      // a new anchor between this read and the increments below, letting a now-invalid
+      // transaction through.
+      await lockAccountsForBalanceWrite(tx, [data.bankAccountId, data.transferToAccountId]);
+      await assertNotBeforeAnchor(tx, data.bankAccountId, txDate);
+      await assertNotBeforeAnchor(tx, data.transferToAccountId, txDate);
 
       const pairId = crypto.randomUUID();
 
@@ -516,6 +526,9 @@ export async function createTransaction(
       if (originalExpense.transferPairId) throw AppError.badRequest('Transfer transactions cannot be refunded');
     }
 
+    await lockAccountsForBalanceWrite(tx, [cashResolvedBankAccountId]);
+    await assertNotBeforeAnchor(tx, cashResolvedBankAccountId, txDate);
+
     // Single-leg transaction (INCOME or EXPENSE)
     const created = await tx.transaction.create({
       data: {
@@ -569,6 +582,38 @@ export async function createTransaction(
 /** Returns the balance delta for a transaction type. INCOME → positive, EXPENSE/TRANSFER → negative. */
 function balanceDelta(type: string, amount: number): number {
   return type === 'INCOME' ? amount : -amount;
+}
+
+// Whether a row's delta is actually reflected in its bankAccount.currentBalance right
+// now. False for an unconfirmed transfer counterpart (balanceImpactApplied: false) AND
+// for a row dated on/before its account's opening-balance anchor (balanceSupersededByAnchor:
+// true) — reversing either on delete/edit would apply a delta that was never counted.
+// The single sanctioned check at every balance-reversal site; never inline the two
+// conditions separately.
+function contributesToBalance(row: { balanceImpactApplied: boolean | null; balanceSupersededByAnchor: boolean }): boolean {
+  return row.balanceImpactApplied !== false && !row.balanceSupersededByAnchor;
+}
+
+// Throws if `date` falls on/before bankAccountId's opening-balance anchor date. No-op if
+// the account has no anchor or bankAccountId is not set. Must be called with the same
+// transactional client (tx) the mutation runs in, so the anchor check sees a consistent
+// snapshot alongside the write it's guarding.
+async function assertNotBeforeAnchor(
+  tx: Prisma.TransactionClient,
+  bankAccountId: string | null | undefined,
+  date: Date,
+): Promise<void> {
+  if (!bankAccountId) return;
+  const account = await tx.bankAccount.findUnique({
+    where: { id: bankAccountId },
+    select: { openingBalanceDate: true },
+  });
+  const cutoff = anchorCutoff(account?.openingBalanceDate ?? null);
+  if (cutoff && date <= cutoff) {
+    throw AppError.badRequest(
+      `Transaction is dated on or before this account's opening-balance date (${formatISTDate(account!.openingBalanceDate!)})`,
+    );
+  }
 }
 
 export async function updateTransaction(
@@ -661,6 +706,45 @@ export async function updateTransaction(
       }
     }
 
+    // Lock before trusting `original`'s balanceSupersededByAnchor/balanceImpactApplied —
+    // those were read before this point, and a concurrent applyAnchor could have
+    // committed a new anchor state in between. Re-read fresh once the lock is held, so
+    // every balance decision below (the date-cross guard and the reversal/net-change
+    // block) sees state that can't change out from under it.
+    await lockAccountsForBalanceWrite(ptx, [original.bankAccountId, cashResolvedBankAccountId]);
+    const freshFlags = await ptx.transaction.findUniqueOrThrow({
+      where: { id: transactionId },
+      select: { balanceSupersededByAnchor: true, balanceImpactApplied: true },
+    });
+    original.balanceSupersededByAnchor = freshFlags.balanceSupersededByAnchor;
+    original.balanceImpactApplied = freshFlags.balanceImpactApplied;
+
+    // Guard the two ways this edit could cross an opening-balance anchor boundary: (a) a
+    // date-only (or date+other) edit moving an already-linked transaction across its
+    // account's cutoff in either direction, or (b) a paymentMode edit newly linking this
+    // transaction to a cash account whose anchor the transaction's (unchanged) date
+    // already falls on/before. Both are rejected — supersession state must never change
+    // as a side effect of an edit; delete and re-create instead.
+    if (!cashAccountUnlinking && cashResolvedBankAccountId && (data.date !== undefined || cashAccountNewlyLinked)) {
+      const targetAccount = await ptx.bankAccount.findUnique({
+        where: { id: cashResolvedBankAccountId },
+        select: { openingBalanceDate: true },
+      });
+      const cutoff = anchorCutoff(targetAccount?.openingBalanceDate ?? null);
+      if (cutoff) {
+        const effectiveDate = data.date !== undefined ? new Date(data.date) : original.date;
+        const willBeSuperseded = effectiveDate <= cutoff;
+        const violatesNewLink = cashAccountNewlyLinked && willBeSuperseded;
+        const violatesDateCross =
+          !cashAccountNewlyLinked && data.date !== undefined && willBeSuperseded !== original.balanceSupersededByAnchor;
+        if (violatesNewLink || violatesDateCross) {
+          throw AppError.badRequest(
+            `Transaction date crosses this account's opening-balance date (${formatISTDate(targetAccount!.openingBalanceDate!)}) — delete and re-create it instead.`,
+          );
+        }
+      }
+    }
+
     const updated = await ptx.transaction.update({
       where: { id: transactionId },
       data: {
@@ -670,6 +754,7 @@ export async function updateTransaction(
         insurancePolicyId: data.type && data.type !== 'EXPENSE' ? null : undefined,
         refundForTransactionId: data.type && data.type !== 'INCOME' ? null : undefined,
         bankAccountId: cashAccountNewlyLinked ? cashResolvedBankAccountId : (cashAccountUnlinking ? null : undefined),
+        balanceSupersededByAnchor: cashAccountUnlinking ? false : undefined,
         updatedAt: new Date(),
       } as Prisma.TransactionUncheckedUpdateInput,
     });
@@ -686,15 +771,16 @@ export async function updateTransaction(
       }
     }
 
-    if (cashAccountUnlinking && original.balanceImpactApplied !== false) {
+    if (cashAccountUnlinking && contributesToBalance(original)) {
       // Mutually exclusive with the block below: unlinking always fully reverses the
       // transaction's prior impact against the OLD (cash) account, regardless of
       // whether amount/type ALSO changed in this same request — after unlink, nothing
       // is linked to receive a "new" delta, so a simultaneous amount/type change has
       // zero balance effect anywhere (same as any other unlinked, non-CASH transaction).
-      // Guarded on balanceImpactApplied !== false (mirrors softDeleteTransaction's own
-      // reversal guard) — an unapplied-impact leg (e.g. an unconfirmed transfer
-      // counterpart) never affected the account balance, so there's nothing to reverse.
+      // Guarded via contributesToBalance (mirrors softDeleteTransaction's own reversal
+      // guard) — an unapplied-impact leg (e.g. an unconfirmed transfer counterpart) or a
+      // pre-anchor-superseded leg never affected the account balance, so there's nothing
+      // to reverse.
       const reversal = -balanceDelta(original.type, Number(original.amount));
       if (reversal !== 0) {
         await ptx.bankAccount.update({
@@ -705,11 +791,19 @@ export async function updateTransaction(
     } else if (!cashAccountUnlinking && (amountChanged || typeChanged || cashAccountNewlyLinked) && (original.bankAccountId || cashAccountNewlyLinked)) {
       // Reverse the original delta, apply the new delta. A newly-linked cash account had
       // zero prior balance impact (it was unlinked), regardless of whether amount/type
-      // also changed in the same edit — so the "old" delta is 0, not a real reversal.
-      const oldDelta = cashAccountNewlyLinked ? 0 : balanceDelta(original.type, Number(original.amount));
+      // also changed in the same edit — so the "old" delta is 0, not a real reversal. A
+      // pre-anchor-superseded original also contributed 0, same reasoning. The guard
+      // above (violatesDateCross/violatesNewLink) already forbids this edit from
+      // changing supersession state, so the row's post-edit supersede state always
+      // equals its pre-edit state (false when newly linked, since that would have
+      // thrown) — newDelta is zeroed on that same basis, not recomputed.
+      const oldDelta = cashAccountNewlyLinked || !contributesToBalance(original)
+        ? 0
+        : balanceDelta(original.type, Number(original.amount));
       const newType = data.type ?? original.type;
       const newAmount = data.amount ?? Number(original.amount);
-      const newDelta = balanceDelta(newType, newAmount);
+      const postEditSuperseded = cashAccountNewlyLinked ? false : original.balanceSupersededByAnchor;
+      const newDelta = postEditSuperseded ? 0 : balanceDelta(newType, newAmount);
       const netChange = newDelta - oldDelta;
 
       if (netChange !== 0) {
@@ -785,6 +879,8 @@ export async function convertTransactionToTransfer(
         where: { id: data.transferToAccountId, userId: original.userId },
       });
       if (!destination) throw AppError.notFound('Destination bank account');
+      await lockAccountsForBalanceWrite(ptx, [original.bankAccountId, data.transferToAccountId]);
+      await assertNotBeforeAnchor(ptx, data.transferToAccountId, original.date);
 
       const pairId = crypto.randomUUID();
       const existingDestinationLeg = await resolveTransferCounterpart(ptx, original, {
@@ -838,7 +934,11 @@ export async function convertTransactionToTransfer(
         });
       }
 
-      if (data.adjustDestinationBalance && !existingDestinationLeg?.balanceImpactApplied) {
+      if (
+        data.adjustDestinationBalance
+        && !existingDestinationLeg?.balanceImpactApplied
+        && !existingDestinationLeg?.balanceSupersededByAnchor
+      ) {
         await ptx.bankAccount.update({
           where: { id: data.transferToAccountId },
           data: { currentBalance: { increment: Number(original.amount) } },
@@ -858,6 +958,8 @@ export async function convertTransactionToTransfer(
       where: { id: data.transferFromAccountId, userId: original.userId },
     });
     if (!source) throw AppError.notFound('Source bank account');
+    await lockAccountsForBalanceWrite(ptx, [original.bankAccountId, data.transferFromAccountId]);
+    await assertNotBeforeAnchor(ptx, data.transferFromAccountId, original.date);
 
     const pairId = crypto.randomUUID();
     const existingSourceLeg = await resolveTransferCounterpart(ptx, original, {
@@ -912,7 +1014,11 @@ export async function convertTransactionToTransfer(
       });
     }
 
-    if (data.adjustSourceBalance && !existingSourceLeg?.balanceImpactApplied) {
+    if (
+      data.adjustSourceBalance
+      && !existingSourceLeg?.balanceImpactApplied
+      && !existingSourceLeg?.balanceSupersededByAnchor
+    ) {
       await ptx.bankAccount.update({
         where: { id: data.transferFromAccountId },
         data: { currentBalance: { decrement: Number(original.amount) } },
@@ -1185,7 +1291,7 @@ export async function softDeleteTransaction(
   requesterRole: string,
 ) {
   return prisma.$transaction(async (ptx) => {
-    const original = await ptx.transaction.findUnique({ where: { id: transactionId } });
+    let original = await ptx.transaction.findUnique({ where: { id: transactionId } });
     if (!original || original.deletedAt) throw AppError.notFound('Transaction');
     if (requesterRole !== 'ADMIN' && original.userId !== userId) throw AppError.forbidden();
     const activeRefundCount = await ptx.transaction.count({
@@ -1194,6 +1300,21 @@ export async function softDeleteTransaction(
     if (activeRefundCount > 0) {
       throw AppError.badRequest('Remove refund links before deleting the original expense');
     }
+
+    // Look up the paired leg (if any) for its account id only, then lock every
+    // involved BankAccount BEFORE trusting original's balanceSupersededByAnchor — it
+    // was read before the lock and a concurrent applyAnchor could have committed in
+    // between. Re-read original fresh once the lock is held. (The paired leg's own flag
+    // carries the same narrower residual risk — a transfer-pair delete racing a
+    // concurrent anchor change on specifically the OTHER leg's account — accepted here
+    // rather than adding a second, differently-keyed re-read.)
+    const paired = original.transferPairId
+      ? await ptx.transaction.findFirst({
+          where: { transferPairId: original.transferPairId, id: { not: transactionId }, deletedAt: null },
+        })
+      : null;
+    await lockAccountsForBalanceWrite(ptx, [original.bankAccountId, paired?.bankAccountId]);
+    original = await ptx.transaction.findUniqueOrThrow({ where: { id: transactionId } });
 
     const deleted = await ptx.transaction.update({
       where: { id: transactionId },
@@ -1205,7 +1326,7 @@ export async function softDeleteTransaction(
     });
 
     // Reverse the balance impact of this transaction
-    if (original.bankAccountId && original.balanceImpactApplied !== false) {
+    if (original.bankAccountId && contributesToBalance(original)) {
       const reversal = -balanceDelta(original.type, Number(original.amount));
       await ptx.bankAccount.update({
         where: { id: original.bankAccountId },
@@ -1214,22 +1335,17 @@ export async function softDeleteTransaction(
     }
 
     // Cascade to paired TRANSFER leg (atomically in the same $transaction)
-    if (original.transferPairId) {
-      const paired = await ptx.transaction.findFirst({
-        where: { transferPairId: original.transferPairId, id: { not: transactionId }, deletedAt: null },
+    if (paired) {
+      await ptx.transaction.update({
+        where: { id: paired.id },
+        data: { deletedAt: new Date(), importHash: paired.importHash ? null : undefined },
       });
-      if (paired) {
-        await ptx.transaction.update({
-          where: { id: paired.id },
-          data: { deletedAt: new Date(), importHash: paired.importHash ? null : undefined },
+      if (paired.bankAccountId && contributesToBalance(paired)) {
+        const pairedReversal = -balanceDelta(paired.type, Number(paired.amount));
+        await ptx.bankAccount.update({
+          where: { id: paired.bankAccountId },
+          data: { currentBalance: { increment: pairedReversal } },
         });
-        if (paired.bankAccountId && paired.balanceImpactApplied !== false) {
-          const pairedReversal = -balanceDelta(paired.type, Number(paired.amount));
-          await ptx.bankAccount.update({
-            where: { id: paired.bankAccountId },
-            data: { currentBalance: { increment: pairedReversal } },
-          });
-        }
       }
     }
 

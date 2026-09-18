@@ -6,6 +6,7 @@ import { requireAuth } from '../middleware/auth';
 import { resolveTargetUserId, resolveWriteUserId } from '../utils/resolveTargetUserId';
 import * as accountService from '../services/accountService';
 import { recordAuditLog } from '../services/auditService';
+import { getISTDateBoundary } from '../utils/financialYear';
 
 const router = Router();
 router.use(requireAuth);
@@ -183,6 +184,45 @@ router.post(
       newValue: account,
     });
     sendSuccess(res, account, 'Account reconciled');
+  }),
+);
+
+// Both-or-neither: an opening balance with no date (or a date with no balance) is not a
+// meaningful anchor. Both null clears the anchor. A future date can never be a "closing
+// balance as of" assertion — rejected against the IST calendar day, matching how the
+// date itself is interpreted everywhere else in this codebase.
+const openingBalanceSchema = z.object({
+  openingBalance: z.number().nullable(),
+  openingBalanceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').nullable(),
+}).refine(
+  (data) => (data.openingBalance === null) === (data.openingBalanceDate === null),
+  { message: 'openingBalance and openingBalanceDate must both be set, or both be null to clear the anchor' },
+).refine(
+  (data) => data.openingBalanceDate === null || getISTDateBoundary(data.openingBalanceDate, 'start') <= new Date(),
+  { message: 'Opening-balance date cannot be in the future', path: ['openingBalanceDate'] },
+);
+
+router.put(
+  '/:id/opening-balance',
+  asyncHandler(async (req: Request, res: Response) => {
+    const { openingBalance, openingBalanceDate } = openingBalanceSchema.parse(req.body);
+    const oldAccount = await accountService.getAccountById(req.params.id, req.user!.userId, req.user!.role);
+    const { account, supersededTransactionCount } = await accountService.applyAnchor(
+      req.params.id,
+      req.user!.userId,
+      req.user!.role,
+      openingBalance,
+      openingBalanceDate,
+    );
+    await recordAuditLog({
+      performedByUserId: req.user!.userId,
+      action: 'SET_OPENING_BALANCE',
+      entityType: 'BankAccount',
+      entityId: account.id,
+      oldValue: oldAccount,
+      newValue: account,
+    });
+    sendSuccess(res, { ...account, supersededTransactionCount }, 'Opening balance updated');
   }),
 );
 

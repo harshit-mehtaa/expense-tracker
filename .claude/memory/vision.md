@@ -1,7 +1,7 @@
 # Project Vision
 
 <!-- Cap: 100 lines. Updated by /initialize, /update-system, or manually. -->
-<!-- Last updated: 2026-09-09 -->
+<!-- Last updated: 2026-09-18 -->
 
 ## Design Principles
 - Money handling is correctness-first: `Decimal` everywhere, never a float, because a
@@ -32,6 +32,12 @@
   (silent miss, not a false positive) once a description is manually edited.
 - API responses always use the `{ success, data, message?, pagination? }` envelope from
   `utils/response.ts` — never a hand-built response shape.
+- `BankAccount.openingBalance`/`openingBalanceDate` (since 2026-09-18): a user-asserted
+  closing balance as of a date. `currentBalance == openingBalance + Σ(non-superseded
+  deltas since the anchor)` is the invariant — only `accountService.applyAnchor` may
+  write these two fields or `Transaction.balanceSupersededByAnchor`. Every balance-
+  reversal site must gate on `contributesToBalance()`, never `balanceImpactApplied`
+  alone. Anchor cutoff has exactly one definition: `financialYear.ts`'s `anchorCutoff()`.
 
 ## Operational Notes
 - A failed migration takes the whole stack down (backend `depends_on` migrate completing).
@@ -42,18 +48,13 @@
   (`importService.ts`/`routes/import.ts`), none fixed here (real scope beyond a parser
   bugfix): (1) import persists straight to the DB, mutates `bankAccount.currentBalance`
   in-request — no dry-run, no bulk undo, only per-row `DELETE /:id`. (2)
-  `detectBankFromText` picks the first keyword hit in FIXED order, not the first
-  occurrence in the text — a real ICICI statement mislabeled "HDFC" via a beneficiary
-  IFSC code in a remark; label + auto-match only, not parsing. (3) The block
-  accumulator can't rejoin a large (7-8 digit) amount pdf.js splits mid-digit across two
-  lines, or a terminator with a minus sign/Cr-Dr suffix — both now surfaced via an
-  aggregate "N dated rows could not be parsed" warning, not recovered. (4) mixing a
-  narrow-fitting decimal with a real ungrouped amount on one line can pick the wrong
-  token — not seen in the two real exports checked. (5) date-parsing local-vs-UTC
-  inconsistency found AND fixed 2026-09-09: every month-name branch now builds UTC
-  midnight via `parseUTCDateFromDayMonthYear`, verified under `TZ=Asia/Kolkata`. The
-  free-form fallback (`new Date(dateStr)`, a few sites) stays locale-dependent —
-  open-ended format detection, deliberately not fixed here.
+  `detectBankFromText` picks the first keyword hit in FIXED order, not first occurrence
+  — a real ICICI statement mislabeled "HDFC" via a beneficiary IFSC code in a remark.
+  (3) block accumulator can't rejoin a pdf.js mid-digit split large amount, or a
+  narrow/wide amount-regex ambiguity on one line — surfaced via an aggregate warning,
+  not recovered. (4) date-parsing local-vs-UTC fixed 2026-09-09 for month-name branches
+  (`parseUTCDateFromDayMonthYear`); the free-form `new Date(dateStr)` fallback stays
+  locale-dependent, deliberately not fixed.
 - [medium] 43 raw `prisma.` calls remain in route handlers (`documents.ts` 19,
   `categories.ts` 11, `budgets.ts` 8, one each in 5 others) — push into services when
   touched. `resolveTargetUserId` is hand-duplicated in 3 route files instead of using
@@ -75,13 +76,12 @@
   filter excluding overdue loans; `!isViewingFamilyWide` gates create buttons across 10
   pages. No modal has role="dialog"/focus-trap/Escape/aria-live on errors; `Sidebar.tsx`
   `<nav>` lacks aria-label; BUDGET_ALERT shows LIMIT as "due".
-- [low] `''`-coerces-to-0 / can't-clear-a-set-field Zod+Prisma bug fixed 2026-09-08
-  across RealEstate.tsx, Accounts.tsx, TaxCentre.tsx + backend routes/accountService.ts's
-  null-swallowing normalize helpers. Residual: Accounts.tsx's `interestRate` has zero
-  rendered `<input>` — write-path unreachable, display-only — needs a UI input added,
-  deliberately left out here. Investments.tsx's `optionalString`/`optionalPositiveNumber`/
-  `optionalExchange`/`optionalDate` still swallow `''`→`undefined` (same bug class,
-  unaudited whether any maps to a nullable column) — out of this task's stated scope.
+- [medium] Opening-balance anchor (2026-09-18): `currentBalance` is a cached aggregate
+  with NO verifier — 14 write sites keep it correct by convention, nothing cross-checks.
+  `NetWorthSnapshot` deliberately left stale after a past-dated anchor (no per-account
+  breakdown to correct from; matches import/recurring precedent). Run
+  `backend/scripts/validate-opening-balance.ts` (manual, not CI) after touching any
+  balance-write path — it's the only drift audit that exists.
 
 ## What We Will NOT Do
 - No controllers layer — routes call services directly; an unrequested abstraction.
