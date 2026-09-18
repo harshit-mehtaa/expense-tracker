@@ -868,9 +868,13 @@ describe('Transactions page — edit/delete/import/bulk/convert cache invalidati
     await user.upload(fileInput, file);
     await user.click(screen.getByRole('button', { name: /^import$/i }));
 
+    // Longer timeout: this chain (click -> mutate -> MSW intercept -> onSuccess ->
+    // invalidateQueries) is comfortably under the 1000ms RTL default locally, but has
+    // been observed to intermittently miss it on GitHub Actions' shared runners under
+    // load — the assertion itself is unchanged, this only gives it more time to settle.
     await waitFor(() => {
       for (const key of FULL_INVALIDATION_KEYS) expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [key] });
-    });
+    }, { timeout: 5000 });
   });
 
   it('handleBulkDelete invalidates the full key set on success', async () => {
