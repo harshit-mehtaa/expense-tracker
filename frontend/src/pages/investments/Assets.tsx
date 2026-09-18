@@ -419,7 +419,7 @@ export default function AssetsPage() {
 
       {showForm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-background rounded-lg border shadow-xl w-full max-w-md p-6">
+          <div className="bg-background rounded-lg border shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto p-6">
             <h2 className="text-xl font-semibold mb-4">{editingAsset ? 'Edit Item' : 'Add Item'}</h2>
             <form
               onSubmit={form.handleSubmit((data) =>

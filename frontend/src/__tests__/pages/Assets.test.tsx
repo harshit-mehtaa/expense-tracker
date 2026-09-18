@@ -372,6 +372,20 @@ describe('Assets page — smoke', () => {
     });
   });
 
+  // Regression guard: the VEHICLE branch of this form adds ~6 extra fields
+  // (vehicleType/make/model/registration/fuelType/insurance), so without a height cap
+  // and scroll, the form can grow past the viewport with no way to reach Add/Cancel.
+  it('caps the Add Item modal height and makes it scrollable, matching every other modal in the app', async () => {
+    const user = userEvent.setup();
+    renderPage(<AssetsPage />, { route: '/assets', user: MEMBER_USER, handlers: [...assetHandlers(), ...insuranceHandlers()] });
+    await screen.findByText('Honda City');
+
+    await user.click(screen.getByRole('button', { name: /add item/i }));
+    const heading = await screen.findByRole('heading', { name: /^add item$/i });
+    expect(heading.parentElement?.className).toMatch(/max-h-\[90vh\]/);
+    expect(heading.parentElement?.className).toMatch(/overflow-y-auto/);
+  });
+
   it('a MEMBER can open the add-asset form and create one', async () => {
     const user = userEvent.setup();
     let body: any;
