@@ -521,61 +521,66 @@ export default function AccountsPage() {
           )}
         </div>
 
-        <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
-          <div className="min-w-0 border-t pt-3">
-            <p className="text-[11px] font-medium uppercase text-muted-foreground">Account</p>
-            <div className="mt-1 flex min-w-0 items-center gap-1.5">
-              <p className="min-w-0 truncate font-mono font-medium" title={accountNumber}>{accountNumber}</p>
-              {account.accountNumber && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 shrink-0"
-                  aria-label={visibleAccountNumbers.has(account.id) ? 'Hide account number' : 'Show account number'}
-                  title={visibleAccountNumbers.has(account.id) ? 'Hide account number' : 'Show account number'}
-                  onClick={() => toggleAccountNumber(account.id)}
-                >
-                  {visibleAccountNumbers.has(account.id) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                </Button>
-              )}
+        {/* Account number / IFSC / UPI / interest are all bank-specific — a cash wallet
+            has none of them, so showing this grid for isCashAccount is just four
+            "not saved" boxes with no meaningful content. */}
+        {!account.isCashAccount && (
+          <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
+            <div className="min-w-0 border-t pt-3">
+              <p className="text-[11px] font-medium uppercase text-muted-foreground">Account</p>
+              <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                <p className="min-w-0 truncate font-mono font-medium" title={accountNumber}>{accountNumber}</p>
+                {account.accountNumber && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0"
+                    aria-label={visibleAccountNumbers.has(account.id) ? 'Hide account number' : 'Show account number'}
+                    title={visibleAccountNumbers.has(account.id) ? 'Hide account number' : 'Show account number'}
+                    onClick={() => toggleAccountNumber(account.id)}
+                  >
+                    {visibleAccountNumbers.has(account.id) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            <div className="min-w-0 border-t pt-3">
+              <p className="text-[11px] font-medium uppercase text-muted-foreground">IFSC</p>
+              <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                <p className="min-w-0 truncate font-mono font-medium" title={ifscCode}>{ifscCode}</p>
+                {account.ifscCode && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0"
+                    aria-label={visibleIfscCodes.has(account.id) ? 'Hide IFSC code' : 'Show IFSC code'}
+                    title={visibleIfscCodes.has(account.id) ? 'Hide IFSC code' : 'Show IFSC code'}
+                    onClick={() => toggleIfscCode(account.id)}
+                  >
+                    {visibleIfscCodes.has(account.id) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            <div className="min-w-0 border-t pt-3">
+              <p className="text-[11px] font-medium uppercase text-muted-foreground">UPI</p>
+              <p className="mt-1 truncate font-medium" title={account.upiId || 'Not saved'}>
+                {account.upiId || 'Not saved'}
+              </p>
+            </div>
+
+            <div className="min-w-0 border-t pt-3">
+              <p className="text-[11px] font-medium uppercase text-muted-foreground">Interest</p>
+              <p className="mt-1 truncate font-medium">
+                {account.interestRate ? `${account.interestRate}% p.a.` : 'Not saved'}
+              </p>
             </div>
           </div>
-
-          <div className="min-w-0 border-t pt-3">
-            <p className="text-[11px] font-medium uppercase text-muted-foreground">IFSC</p>
-            <div className="mt-1 flex min-w-0 items-center gap-1.5">
-              <p className="min-w-0 truncate font-mono font-medium" title={ifscCode}>{ifscCode}</p>
-              {account.ifscCode && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 shrink-0"
-                  aria-label={visibleIfscCodes.has(account.id) ? 'Hide IFSC code' : 'Show IFSC code'}
-                  title={visibleIfscCodes.has(account.id) ? 'Hide IFSC code' : 'Show IFSC code'}
-                  onClick={() => toggleIfscCode(account.id)}
-                >
-                  {visibleIfscCodes.has(account.id) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                </Button>
-              )}
-            </div>
-          </div>
-
-          <div className="min-w-0 border-t pt-3">
-            <p className="text-[11px] font-medium uppercase text-muted-foreground">UPI</p>
-            <p className="mt-1 truncate font-medium" title={account.upiId || 'Not saved'}>
-              {account.upiId || 'Not saved'}
-            </p>
-          </div>
-
-          <div className="min-w-0 border-t pt-3">
-            <p className="text-[11px] font-medium uppercase text-muted-foreground">Interest</p>
-            <p className="mt-1 truncate font-medium">
-              {account.interestRate ? `${account.interestRate}% p.a.` : 'Not saved'}
-            </p>
-          </div>
-        </div>
+        )}
       </div>
     );
   }
