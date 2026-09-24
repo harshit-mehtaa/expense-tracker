@@ -315,7 +315,9 @@ export async function persistParsedStatement(args: PersistArgs) {
           bankAccountId: isCashRow && !accountId ? cashAccount!.id : (accountId ?? null),
           amount: t.amount,
           type: t.type,
-          categoryId: t.categoryId ?? null,
+          // A linked-CASH row is half of a transfer pair, and transfers are never
+          // categorized (same rule as createTransaction/updateTransaction).
+          categoryId: pairId ? null : (t.categoryId ?? null),
           description: t.description,
           remark: t.remark ?? null,
           date: t.date,

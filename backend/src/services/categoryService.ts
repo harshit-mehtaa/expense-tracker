@@ -202,9 +202,18 @@ export async function updateCategory(id: string, parsed: Record<string, unknown>
     throw AppError.badRequest('The type of a default category cannot be changed');
   }
   if (nextType !== undefined && nextType !== cat.type) {
-    const childCount = await prisma.category.count({ where: { parentId: cat.id } });
-    if (childCount > 0) {
+    const { children, transactions, budgets, rules, recurringRules } = await getCategoryDependencies(cat.id);
+    if (children > 0) {
       throw AppError.badRequest('Category type cannot be changed while it has sub-categories');
+    }
+    // Retyping a category in use would silently mismatch every transaction, recurring
+    // rule, budget and auto-categorization rule filed under it — the one write path
+    // assertCategoryMatchesTransactionType can't guard.
+    if (transactions + budgets + rules + recurringRules > 0) {
+      throw AppError.badRequest(
+        'Category type cannot be changed while it is in use (transactions, budgets or rules). '
+        + 'Create a new category of the other type instead.',
+      );
     }
   }
   await validateParentCategory(parsed.parentId as string | null | undefined, nextType ?? cat.type, cat.id);
@@ -221,6 +230,37 @@ export async function updateCategory(id: string, parsed: Record<string, unknown>
       throw AppError.conflict('A category with that name and type already exists');
     }
     throw err;
+  }
+}
+
+const withArticle = (word: string) => `${/^[aeiou]/.test(word) ? 'an' : 'a'} ${word}`;
+
+/**
+ * The one check every write path that files a transaction under a caller-chosen category
+ * goes through (transaction create/update, recurring rules, subscriptions): the category
+ * must exist and have the transaction's own type. Only INCOME/EXPENSE transactions carry
+ * a category — transfers never do. No ownership check: categories are family-wide.
+ *
+ * `client` lets a caller inside an interactive transaction read through it.
+ */
+export async function assertCategoryMatchesTransactionType(
+  categoryId: string,
+  transactionType: string,
+  client: Pick<Prisma.TransactionClient, 'category'> = prisma,
+): Promise<void> {
+  if (transactionType !== 'INCOME' && transactionType !== 'EXPENSE') {
+    throw AppError.badRequest('Transfers cannot be categorized');
+  }
+  const category = await client.category.findUnique({
+    where: { id: categoryId },
+    select: { name: true, type: true },
+  });
+  if (!category) throw AppError.notFound('Category');
+  if (category.type !== transactionType) {
+    throw AppError.badRequest(
+      `Category "${category.name}" is ${withArticle(category.type.toLowerCase())} category `
+      + `and can't be used on ${withArticle(transactionType.toLowerCase())} transaction`,
+    );
   }
 }
 

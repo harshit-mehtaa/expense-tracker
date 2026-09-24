@@ -930,7 +930,9 @@ describe('Loans — recording a prepayment', () => {
     { id: 'acct-1', bankName: 'HDFC Bank', accountType: 'SAVINGS', accountNumberLast4: '4821' },
   ];
   const CATEGORIES = [
-    { id: 'cat-1', name: 'Loan Repayment', parentId: null, icon: null, color: null },
+    { id: 'cat-1', name: 'Loan Repayment', type: 'EXPENSE', parentId: null, icon: null, color: null },
+    // A prepayment is an EXPENSE — the picker must not offer this one.
+    { id: 'cat-inc', name: 'Interest Received', type: 'INCOME', parentId: null, icon: null, color: null },
   ];
   const RECORD_RESULT = {
     transaction: { id: 'txn-1' },
@@ -1005,6 +1007,7 @@ describe('Loans — recording a prepayment', () => {
       within(s as HTMLSelectElement).queryByText('Loan Repayment'));
     expect(accountPicker).toBeDefined();
     expect(categoryPicker).toBeDefined();
+    expect(within(categoryPicker as HTMLSelectElement).queryByText('Interest Received')).toBeNull();
 
     await user.selectOptions(accountPicker!, 'acct-1');
     await user.selectOptions(categoryPicker!, 'cat-1');

@@ -4,6 +4,7 @@ import prisma from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import { ensureCashAccount } from './accountService';
 import { resolveCategoryForTransaction } from './categoryRuleService';
+import { assertCategoryMatchesTransactionType } from './categoryService';
 import { ownerScopedWhere } from '../utils/resolveTargetUserId';
 import { priceAsOf } from '../utils/subscriptionPricing';
 import { anchorCutoff } from '../utils/financialYear';
@@ -43,6 +44,10 @@ export interface CreateRecurringRuleInput {
 }
 
 export async function createRecurringRule(userId: string, data: CreateRecurringRuleInput) {
+  // A rule's type and category can't be edited afterwards (routes/recurring.ts
+  // updateRuleSchema), so checking here covers every row catch-up generates from it —
+  // generation itself writes directly and must not throw mid-batch.
+  if (data.categoryId) await assertCategoryMatchesTransactionType(data.categoryId, data.type);
   const nextRunDate = data.nextRunDate ? new Date(data.nextRunDate) : new Date();
 
   // One row. The spec used to be written as a Transaction as well, which put a charge

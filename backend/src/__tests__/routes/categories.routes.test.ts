@@ -283,6 +283,25 @@ describe('PUT /api/categories/:id', () => {
     expect(res.body.message).toMatch(/while it has sub-categories/i);
   });
 
+  it.each([
+    ['transactions', () => (prisma as any).transaction.count.mockResolvedValue(3)],
+    ['budgets', () => budgetMock.count.mockResolvedValue(1)],
+    ['auto-categorization rules', () => (prisma as any).categoryRule.count.mockResolvedValue(2)],
+    ['recurring rules', () => (prisma as any).recurringRule.count.mockResolvedValue(1)],
+  ])('rejects a type change while %s use the category (it would mismatch them)', async (_label, arrange) => {
+    arrange();
+    const res = await request(app).put('/api/categories/cat-1').send({ type: 'INCOME' });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/type cannot be changed while it is in use/i);
+    expect(catMock.update).not.toHaveBeenCalled();
+  });
+
+  it('does not count dependents when the type is not actually changing', async () => {
+    (prisma as any).transaction.count.mockResolvedValue(3);
+    const res = await request(app).put('/api/categories/cat-1').send({ type: MOCK_CAT.type, name: 'Renamed' });
+    expect(res.status).toBe(200);
+  });
+
   it('allows a type change when the category has no sub-categories', async () => {
     catMock.count.mockResolvedValue(0);
     const res = await request(app).put('/api/categories/cat-1').send({ type: 'INCOME' });

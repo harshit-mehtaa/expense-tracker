@@ -320,6 +320,35 @@ const SUBSCRIPTION_RULE = {
  * 409. The row still belongs in this list — it is real recurring money — but offering
  * buttons that can only fail is worse than pointing at the page that works.
  */
+describe('Recurring tab — category picker follows the rule type', () => {
+  async function openAddRule(user: ReturnType<typeof userEvent.setup>) {
+    renderPage(<TransactionsPage />, {
+      route: '/transactions?tab=recurring',
+      handlers: [http.get(url('/recurring'), () => HttpResponse.json({ data: [] })), ...txHandlers()],
+    });
+    await user.click(await screen.findByRole('button', { name: /add rule/i }));
+    return screen.findByLabelText('Category (optional)');
+  }
+
+  it('offers only categories of the selected type, none for a transfer, and resets on a type change', async () => {
+    const user = userEvent.setup();
+    const category = await openAddRule(user);
+    const type = screen.getByLabelText(/^type/i);
+
+    await within(category).findByRole('option', { name: 'Food' });
+    expect(within(category).queryByRole('option', { name: 'Salary' })).toBeNull();
+    await user.selectOptions(category, 'cat-food');
+
+    await user.selectOptions(type, 'INCOME');
+    expect(category).toHaveValue('');
+    expect(within(category).getByRole('option', { name: 'Salary' })).toBeInTheDocument();
+    expect(within(category).queryByRole('option', { name: 'Food' })).toBeNull();
+
+    await user.selectOptions(type, 'TRANSFER');
+    expect(within(category).getAllByRole('option')).toHaveLength(1); // just "— None —"
+  });
+});
+
 describe('Recurring tab — subscription-owned rules', () => {
   it('offers a link to the subscription instead of edit/delete controls', async () => {
     renderPage(<TransactionsPage />, {
@@ -863,6 +892,160 @@ describe('Transactions page — search', () => {
 // transaction row (Tailwind's responsive classes don't hide either in jsdom), so every
 // query below reaches for the FIRST match via getAllBy*.
 const FULL_INVALIDATION_KEYS = ['transactions', 'loans', 'budgets', 'budgets-actuals', 'accounts', 'dashboard', 'profit-and-loss', 'report-spending'];
+
+describe('Transactions page — category ↔ type (edit + bulk re-categorize)', () => {
+  const INCOME_TX = {
+    ...TX, id: 'tx-2', description: 'Salary credit', type: 'INCOME',
+    categoryId: 'cat-sal', category: { id: 'cat-sal', name: 'Salary', type: 'INCOME' },
+  };
+
+  async function openEdit(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getAllByTitle('Transaction actions')[0]);
+    await user.click(await screen.findByText('Edit transaction'));
+    await screen.findByRole('heading', { name: 'Edit Transaction' });
+  }
+
+  function capturePut(id: string, onBody: (body: any) => void, status = 200, message?: string) {
+    return http.put(url(`/transactions/${id}`), async ({ request }) => {
+      onBody(await request.json());
+      return status === 200
+        ? HttpResponse.json({ data: TX })
+        : HttpResponse.json({ message }, { status });
+    });
+  }
+
+  it('choosing "Uncategorized" actually clears the category (sends null, not "unchanged")', async () => {
+    const user = userEvent.setup();
+    let body: any = null;
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [...txHandlers(), capturePut('tx-1', (b) => { body = b; })],
+    });
+    await screen.findAllByText('Grocery run');
+    await openEdit(user);
+
+    await user.selectOptions(await screen.findByLabelText('Category (optional)'), '');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(body).not.toBeNull());
+    expect(body.categoryId).toBeNull();
+  });
+
+  it('resends the unchanged category on an ordinary save', async () => {
+    const user = userEvent.setup();
+    let body: any = null;
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [...txHandlers(), capturePut('tx-1', (b) => { body = b; })],
+    });
+    await screen.findAllByText('Grocery run');
+    await openEdit(user);
+    await screen.findByRole('option', { name: 'Food' });
+
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(body?.categoryId).toBe('cat-food'));
+  });
+
+  it('switching the type away and back restores the original category', async () => {
+    const user = userEvent.setup();
+    renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers() });
+    await screen.findAllByText('Grocery run');
+    await openEdit(user);
+    const category = await screen.findByLabelText('Category (optional)');
+    await screen.findByRole('option', { name: 'Food' });
+    const type = screen.getByDisplayValue('Expense');
+
+    await user.selectOptions(type, 'INCOME');
+    expect(category).toHaveValue('');
+    await user.selectOptions(type, 'EXPENSE');
+    expect(category).toHaveValue('cat-food');
+  });
+
+  it('bulk: only offers income/expense categories', async () => {
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [
+        ...txHandlers(),
+        http.get(url('/categories'), () => HttpResponse.json({
+          data: [...CATEGORIES, { id: 'cat-gold', name: 'Gold', type: 'ASSET', parentId: null }],
+        })),
+      ],
+    });
+    await screen.findAllByText('Grocery run');
+    const user = userEvent.setup();
+    await user.click(within(screen.getAllByRole('row')[1]).getByRole('checkbox'));
+    const picker = screen.getByDisplayValue(/assign category/i);
+    await within(picker).findByRole('option', { name: 'Rent' });
+    expect(within(picker).queryByRole('option', { name: 'Gold' })).toBeNull();
+  });
+
+  it('bulk: skips rows whose type does not fit the chosen category, and says why', async () => {
+    const user = userEvent.setup();
+    const puts: string[] = [];
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [
+        ...txHandlers({ transactions: [TX, INCOME_TX] }),
+        http.get(url('/categories'), () => HttpResponse.json({ data: CATEGORIES })),
+        http.put(url('/transactions/:id'), ({ params }) => {
+          puts.push(params.id as string);
+          return HttpResponse.json({ data: TX });
+        }),
+      ],
+    });
+    await screen.findAllByText('Grocery run');
+
+    await user.click(within(screen.getAllByRole('row')[1]).getByRole('checkbox'));
+    await user.click(within(screen.getAllByRole('row')[2]).getByRole('checkbox'));
+    await user.selectOptions(screen.getByDisplayValue(/assign category/i), 'cat-rent');
+    await user.click(screen.getByRole('button', { name: /^apply$/i }));
+
+    expect(await screen.findByText('Categorized 1 · skipped 1')).toBeInTheDocument();
+    expect(screen.getByText('Rent is an expense category, so transactions of other types were skipped.')).toBeInTheDocument();
+    expect(puts).toEqual(['tx-1']);
+  });
+
+  it('bulk: still reports skipped rows when others fail', async () => {
+    const user = userEvent.setup();
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [
+        ...txHandlers({ transactions: [TX, INCOME_TX] }),
+        http.get(url('/categories'), () => HttpResponse.json({ data: CATEGORIES })),
+        capturePut('tx-1', () => {}, 400, 'Transfers cannot be categorized'),
+      ],
+    });
+    await screen.findAllByText('Grocery run');
+
+    await user.click(within(screen.getAllByRole('row')[1]).getByRole('checkbox'));
+    await user.click(within(screen.getAllByRole('row')[2]).getByRole('checkbox'));
+    await user.selectOptions(screen.getByDisplayValue(/assign category/i), 'cat-rent');
+    await user.click(screen.getByRole('button', { name: /^apply$/i }));
+
+    expect(await screen.findByText('Categorized 0/1 — 1 failed · skipped 1')).toBeInTheDocument();
+  });
+
+  it('bulk: shows the server\'s reason when a row is rejected', async () => {
+    const user = userEvent.setup();
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [
+        ...txHandlers(),
+        http.get(url('/categories'), () => HttpResponse.json({ data: CATEGORIES })),
+        capturePut('tx-1', () => {}, 400, 'Transfers cannot be categorized'),
+      ],
+    });
+    await screen.findAllByText('Grocery run');
+
+    await user.click(within(screen.getAllByRole('row')[1]).getByRole('checkbox'));
+    await user.selectOptions(screen.getByDisplayValue(/assign category/i), 'cat-rent');
+    await user.click(screen.getByRole('button', { name: /^apply$/i }));
+
+    expect(await screen.findByText('Categorized 0/1 — 1 failed')).toBeInTheDocument();
+    expect((await screen.findAllByText('Transfers cannot be categorized')).length).toBeGreaterThan(0);
+  });
+});
 
 describe('Transactions page — edit/delete/import/bulk/convert cache invalidation', () => {
   it('editMutation invalidates the full key set on success', async () => {

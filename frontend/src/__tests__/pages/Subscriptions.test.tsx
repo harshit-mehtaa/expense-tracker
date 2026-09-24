@@ -60,8 +60,9 @@ const ACCOUNTS = [
 ];
 
 const CATEGORIES = [
-  { id: 'cat-1', name: 'Streaming', parentId: null, icon: null, color: null },
-  { id: 'cat-2', name: 'Utilities', parentId: null, icon: null, color: null },
+  { id: 'cat-1', name: 'Streaming', type: 'EXPENSE', parentId: null, icon: null, color: null },
+  { id: 'cat-2', name: 'Utilities', type: 'EXPENSE', parentId: null, icon: null, color: null },
+  { id: 'cat-sal', name: 'Salary', type: 'INCOME', parentId: null, icon: null, color: null },
 ];
 
 const handlers = (subscriptions: unknown[] = [NETFLIX]) => [
@@ -543,6 +544,41 @@ describe('Subscriptions page — payment method', () => {
     expect(await screen.findByLabelText(/payment type/i)).toHaveValue('UPI');
     expect(await screen.findByLabelText(/paid from/i)).toHaveValue('acct-1');
     expect(await screen.findByLabelText(/^category$/i)).toHaveValue('cat-1');
+  });
+
+  it('only offers expense categories — a subscription only ever generates expenses', async () => {
+    const user = userEvent.setup();
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
+    });
+    await screen.findByText('Netflix');
+    await user.click(screen.getByRole('button', { name: /edit/i }));
+
+    const select = await screen.findByLabelText(/^category$/i);
+    await within(select).findByRole('option', { name: 'Utilities' });
+    expect(within(select).queryByRole('option', { name: 'Salary' })).toBeNull();
+  });
+
+  it('still shows (and keeps) a current category that the filter would hide', async () => {
+    // Otherwise the select would read "Not set" while the form silently resubmits the id.
+    const user = userEvent.setup();
+    const legacy = {
+      ...NETFLIX,
+      recurringRule: {
+        ...NETFLIX.recurringRule,
+        categoryId: 'cat-sal',
+        category: { id: 'cat-sal', name: 'Salary', icon: null, color: null },
+      },
+    };
+    renderPage(<SubscriptionsPage />, {
+      route: '/subscriptions', user: MEMBER_USER, handlers: handlers([legacy]),
+    });
+    await screen.findByText('Netflix');
+    await user.click(screen.getByRole('button', { name: /edit/i }));
+
+    const select = await screen.findByLabelText(/^category$/i);
+    expect(select).toHaveValue('cat-sal');
+    expect(within(select).getByRole('option', { name: 'Salary' })).toBeInTheDocument();
   });
 });
 

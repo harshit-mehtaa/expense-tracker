@@ -701,13 +701,15 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
   const selectedCategoryId = watch('categoryId') ?? '';
   const previousType = useRef(selectedType);
 
-  // Reset categoryId only when the user actually changes type. React StrictMode
-  // runs effects twice in dev, so a first-render flag can still clear this value.
+  // Reset categoryId only when the user actually changes type — a category only fits one
+  // type. Switching back to the row's own type restores its category, so an accidental
+  // toggle doesn't silently clear it (the form now sends "" as an explicit clear).
+  // React StrictMode runs effects twice in dev, so a first-render flag can still clear this.
   useEffect(() => {
     if (previousType.current === selectedType) return;
     previousType.current = selectedType;
-    setValue('categoryId', '');
-  }, [selectedType, setValue]);
+    setValue('categoryId', selectedType === tx.type ? (tx.categoryId ?? '') : '');
+  }, [selectedType, setValue, tx.type, tx.categoryId]);
 
   const transactionCategories = categories.filter((c: any) => {
     if (selectedType === 'INCOME') return c.type === 'INCOME';
@@ -725,7 +727,9 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
         ...data,
         remark: data.remark?.trim() || null,
         paymentMode: data.paymentMode || undefined,
-        categoryId: data.categoryId || undefined,
+        // null, not undefined: "— Uncategorized —" must clear the category. The backend
+        // treats an unchanged value as a no-op, so resending the stored one is harmless.
+        categoryId: data.categoryId || null,
       }),
     onSuccess: () => {
       invalidateTransactionMutationCaches(qc);
@@ -2213,7 +2217,17 @@ export default function TransactionsPage() {
     if (!bulkCategoryId) return;
     setIsBulkCategorizing(true);
     try {
-      const ids = [...selectedIds];
+      // A category fits only its own type; the backend rejects the rest. Skip rows we
+      // KNOW won't fit rather than fire requests that must fail — but still send any row
+      // whose type isn't loaded, and let the backend decide (never silently drop it).
+      const category = categories.find((c: any) => c.id === bulkCategoryId);
+      const typeById = new Map(transactions.map((t) => [t.id, t.type]));
+      const selected = [...selectedIds];
+      const ids = selected.filter((id) => {
+        const type = typeById.get(id);
+        return !category || type === undefined || type === category.type;
+      });
+      const skipped = selected.length - ids.length;
       const results = await Promise.allSettled(ids.map((id) => api.put(`/transactions/${id}`, { categoryId: bulkCategoryId })));
       const failed = results.filter((r) => r.status === 'rejected').length;
       const succeeded = ids.length - failed;
@@ -2222,10 +2236,20 @@ export default function TransactionsPage() {
       // none of which a categoryId-only PUT can set — accounts/loans deliberately NOT
       // invalidated here (see the sibling bulk-delete, which does need them).
       invalidateTransactionMutationCaches(qc, { includeAccountsAndLoans: false });
-      if (failed === 0) {
+      // A failed row's own reason already reaches the user via the global api:error toast;
+      // a skipped row's reason is ours to give, and must be reported even when others fail.
+      if (failed === 0 && skipped === 0) {
         toast({ title: `Categorized ${succeeded} transaction${succeeded !== 1 ? 's' : ''}`, variant: 'success' });
       } else {
-        toast({ title: `Categorized ${succeeded}/${ids.length} — ${failed} failed`, variant: 'warning' });
+        const outcome = failed > 0 ? `Categorized ${succeeded}/${ids.length} — ${failed} failed` : `Categorized ${succeeded}`;
+        const categoryType = category ? String(category.type).toLowerCase() : '';
+        toast({
+          title: skipped > 0 ? `${outcome} · skipped ${skipped}` : outcome,
+          description: skipped > 0
+            ? `${category.name} is ${categoryType === 'expense' ? 'an expense' : 'an income'} category, so transactions of other types were skipped.`
+            : undefined,
+          variant: 'warning',
+        });
       }
       setSelectedIds(new Set());
       setBulkCategoryId('');
@@ -2557,7 +2581,7 @@ export default function TransactionsPage() {
               className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
             >
               <option value="">Assign category…</option>
-              {toCategoryTreeOptions(categories).map(({ category: c, depth }) => (
+              {toCategoryTreeOptions(categories.filter((c: any) => c.type === 'INCOME' || c.type === 'EXPENSE')).map(({ category: c, depth }) => (
                   <option key={c.id} value={c.id}>{getCategoryTreeOptionLabel(c, depth)}</option>
                 ))}
             </select>

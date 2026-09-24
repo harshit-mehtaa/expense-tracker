@@ -4,6 +4,7 @@ import prisma from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import { ensureCashAccount, lockAccountsForBalanceWrite } from './accountService';
 import { resolveCategoryForTransaction } from './categoryRuleService';
+import { assertCategoryMatchesTransactionType } from './categoryService';
 import { anchorCutoff, formatISTDate, getFYRange, getISTDateBoundary } from '../utils/financialYear';
 import { buildPaginationArgs, processPaginationResult } from '../utils/pagination';
 
@@ -382,10 +383,15 @@ export async function createTransaction(
     throw AppError.badRequest('transferToAccountId is required for TRANSFER transactions');
   }
 
+  // A caller-chosen category must exist and match the type — and a TRANSFER can't have
+  // one (its two legs are an EXPENSE and an INCOME; no category fits both). Checked
+  // before any write, so a rejected loan prepayment (loanService) leaves nothing behind.
+  if (data.categoryId) await assertCategoryMatchesTransactionType(data.categoryId, data.type);
+
   // A category the user chose always wins; otherwise the owner's auto-categorization
-  // rules may supply one. Resolved OUTSIDE the $transaction: regex rules can take up to
-  // SINGLE_TRANSACTION_BUDGET_MS, which must not be spent holding account row locks.
-  // TRANSFER legs are never categorized (see the TRANSFER branch below).
+  // rules may supply one (always type-matched — matchRules filters on it). Resolved
+  // OUTSIDE the $transaction: regex rules can take up to SINGLE_TRANSACTION_BUDGET_MS,
+  // which must not be spent holding account row locks.
   const categoryId = data.categoryId
     ?? (data.type === 'TRANSFER' ? undefined : await resolveCategoryForTransaction(userId, {
       type: data.type,
@@ -432,7 +438,6 @@ export async function createTransaction(
         data: {
           userId,
           bankAccountId: data.bankAccountId,
-          categoryId: data.categoryId,
           amount: data.amount,
           type: 'EXPENSE',
           paymentMode: data.paymentMode as PaymentMode | undefined,
@@ -452,7 +457,6 @@ export async function createTransaction(
         data: {
           userId,
           bankAccountId: data.transferToAccountId,
-          categoryId: data.categoryId,
           amount: data.amount,
           type: 'INCOME',
           description: data.description,
@@ -657,8 +661,9 @@ export async function updateTransaction(
 
     // TRANSFER transactions are paired double-entry records; editing a paired leg's
     // amount or type would desync the pair's balance impact. Delete and re-create the
-    // transfer instead. Other fields (description/category/date/tags/etc.) are safe to
-    // edit on a leg and stay allowed — only an actual amount/type CHANGE is blocked.
+    // transfer instead. Other fields (description/date/tags/etc.) are safe to edit on a
+    // leg and stay allowed — only an actual amount/type CHANGE is blocked. (A category
+    // can't be set on a leg at all — see the category check below.)
     // NOTE: `original.type === 'TRANSFER'` was the previous guard here and never fired
     // for a PAIRED leg — createTransaction/convertTransactionToTransfer always persist
     // paired legs as EXPENSE/INCOME, never type:'TRANSFER'; `transferPairId` is the
@@ -695,6 +700,31 @@ export async function updateTransaction(
     const paymentModeChanged = data.paymentMode !== undefined && data.paymentMode !== original.paymentMode;
     const effectivePaymentMode = data.paymentMode ?? original.paymentMode;
     const effectiveType = data.type ?? original.type;
+
+    // Category ↔ type. Same "changed, not merely present" rule as amount/type above: the
+    // edit form resends the stored categoryId on every save, so a presence check would
+    // reject description-only edits of any row whose category was since retyped.
+    const categoryChanged = data.categoryId !== undefined && data.categoryId !== original.categoryId;
+    // A type change that doesn't pick a new category (omitted, or the stored one resent)
+    // makes the old one stale only if its type no longer fits — then clear it rather than
+    // reject a request the client got right. If it still fits, it's already verified.
+    let categoryPatch = data.categoryId;
+    let categoryVerified = false;
+    if (typeChanged && !categoryChanged && original.categoryId) {
+      const current = await ptx.category.findUnique({
+        where: { id: original.categoryId },
+        select: { type: true },
+      });
+      if (current?.type === effectiveType) categoryVerified = true;
+      else categoryPatch = null;
+    }
+    const effectiveCategoryId = categoryPatch === undefined ? original.categoryId : categoryPatch;
+    if (effectiveCategoryId && (categoryChanged || typeChanged) && !categoryVerified) {
+      // A paired leg is stored as EXPENSE/INCOME but is half of a transfer, which is
+      // never categorized (createTransaction and convertTransactionToTransfer agree).
+      if (original.transferPairId) throw AppError.badRequest('Transfers cannot be categorized');
+      await assertCategoryMatchesTransactionType(effectiveCategoryId, effectiveType, ptx);
+    }
     let cashResolvedBankAccountId: string | null = original.bankAccountId;
     let cashAccountNewlyLinked = false;
     let cashAccountUnlinking = false;
@@ -760,6 +790,7 @@ export async function updateTransaction(
       where: { id: transactionId },
       data: {
         ...data,
+        categoryId: categoryPatch,
         type: data.type as TransactionType | undefined,
         date: data.date ? new Date(data.date) : undefined,
         insurancePolicyId: data.type && data.type !== 'EXPENSE' ? null : undefined,

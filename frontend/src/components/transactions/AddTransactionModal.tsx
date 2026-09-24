@@ -90,8 +90,9 @@ export function AddTransactionModal({
       // backend's Zod schema types them `z.string().cuid()/.enum().optional()` — which
       // accepts `undefined`, not `''`. A quick-add filling only description+amount
       // (the exact minimal-friction path this feature exists for) would submit `''`
-      // for all four and get rejected 422. EditTransactionModal already normalizes this
-      // the same way (Transactions.tsx's editMutation); this modal needs it too.
+      // for all four and get rejected 422. (EditTransactionModal sends `null` for an empty
+      // category instead — there it means "clear it"; on create, omitting it is what lets
+      // the owner's auto-categorization rules apply.)
       categoryId: data.categoryId || undefined,
       bankAccountId: data.bankAccountId || undefined,
       transferToAccountId: data.transferToAccountId || undefined,

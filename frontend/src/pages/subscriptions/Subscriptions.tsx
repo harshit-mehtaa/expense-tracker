@@ -254,8 +254,15 @@ export default function SubscriptionsPage() {
   });
 
   // Same sorted, indented tree the transaction form uses, so a category is in the place
-  // you expect on both screens.
-  const categoryOptions = toCategoryTreeOptions(categories);
+  // you expect on both screens. Expense categories only: a subscription only ever
+  // generates expenses, and the backend rejects any other type.
+  const categoryOptions = toCategoryTreeOptions(categories.filter((c: any) => c.type === 'EXPENSE'));
+  // The rule's current category, when the filter would hide it (e.g. one retyped before
+  // retyping in-use categories was blocked): show it rather than read "Not set" while the
+  // form silently resubmits its id.
+  const editingCategory = editing?.recurringRule?.category;
+  const showCurrentCategoryFallback = !!editingCategory
+    && !categoryOptions.some(({ category }) => category.id === editingCategory.id);
 
   const {
     register, handleSubmit, reset, formState: { errors },
@@ -583,6 +590,9 @@ export default function SubscriptionsPage() {
                     className="w-full rounded-md border bg-background px-3 py-2 text-sm"
                   >
                     <option value="">— Not set —</option>
+                    {showCurrentCategoryFallback && editingCategory && (
+                      <option value={editingCategory.id}>{editingCategory.name}</option>
+                    )}
                     {categoryOptions.map(({ category, depth }) => (
                       <option key={category.id} value={category.id}>
                         {getCategoryTreeOptionLabel(category, depth)}

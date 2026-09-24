@@ -346,7 +346,11 @@ function LoanCard({ loan, onEdit, onDelete, readOnly = false }: { loan: Loan; on
     queryFn: () => api.get<{ data: any[] }>('/categories').then((r) => r.data.data),
     enabled: showRecordForm,
   });
-  const categoryOptions = useMemo(() => toCategoryTreeOptions(categories), [categories]);
+  // A prepayment is recorded as an EXPENSE; the backend rejects any other category type.
+  const categoryOptions = useMemo(
+    () => toCategoryTreeOptions(categories.filter((c: any) => c.type === 'EXPENSE')),
+    [categories],
+  );
 
   const simulateMutation = useMutation({
     mutationFn: () => loansApi.simulatePrepayment(loan.id, { prepaymentAmount: Number(prepayAmt), mode: prepayMode }),

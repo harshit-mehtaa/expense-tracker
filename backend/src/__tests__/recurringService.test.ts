@@ -47,8 +47,14 @@ vi.mock('../services/categoryRuleService', () => ({
   resolveCategoryForTransaction: vi.fn(),
 }));
 
+vi.mock('../services/categoryService', () => ({
+  assertCategoryMatchesTransactionType: vi.fn(),
+}));
+
 import prisma from '../config/prisma';
 import { resolveCategoryForTransaction } from '../services/categoryRuleService';
+import { assertCategoryMatchesTransactionType } from '../services/categoryService';
+import { AppError } from '../utils/AppError';
 import {
   createRecurringRule,
   listRecurringRules,
@@ -122,6 +128,32 @@ describe('listRecurringRules', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('createRecurringRule', () => {
+  const assertMock = assertCategoryMatchesTransactionType as ReturnType<typeof vi.fn>;
+  const BASE = { amount: 5000, type: 'EXPENSE', description: 'Rent', frequency: 'MONTHLY' as const };
+
+  // A rule's type and category can't be edited later (routes/recurring.ts updateRuleSchema),
+  // so checking at creation covers every transaction catch-up will ever generate from it.
+  it('validates a chosen category against the rule\'s type before creating it', async () => {
+    assertMock.mockResolvedValue(undefined);
+    ruleMock.create.mockResolvedValue({ id: 'rule-new' });
+    await createRecurringRule('u1', { ...BASE, categoryId: 'cat-rent' });
+    expect(assertMock).toHaveBeenCalledWith('cat-rent', 'EXPENSE');
+    expect(ruleMock.create).toHaveBeenCalled();
+  });
+
+  it('creates nothing when the category is rejected', async () => {
+    assertMock.mockRejectedValue(AppError.badRequest('mismatch'));
+    await expect(createRecurringRule('u1', { ...BASE, type: 'INCOME', categoryId: 'cat-rent' }))
+      .rejects.toMatchObject({ statusCode: 400 });
+    expect(ruleMock.create).not.toHaveBeenCalled();
+  });
+
+  it('does not look anything up for a rule without a category', async () => {
+    ruleMock.create.mockResolvedValue({ id: 'rule-new' });
+    await createRecurringRule('u1', BASE);
+    expect(assertMock).not.toHaveBeenCalled();
+  });
+
   it('creates the rule as a single row, with no ledger-visible template', async () => {
     // The spec used to be written as a Transaction as well, putting a charge that never
     // happened into the ledger and every aggregate built on it.

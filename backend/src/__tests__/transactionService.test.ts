@@ -45,6 +45,11 @@ vi.mock('../config/prisma', () => {
     sIP: {
       findFirst: vi.fn(),
     },
+    // updateTransaction reads the current category's type to decide whether a type
+    // change makes it stale.
+    category: {
+      findUnique: vi.fn(),
+    },
     sIPTransaction: {
       create: vi.fn(),
       delete: vi.fn(),
@@ -60,9 +65,16 @@ vi.mock('../config/prisma', () => {
 vi.mock('../services/categoryRuleService', () => ({
   resolveCategoryForTransaction: vi.fn(),
 }));
+// The category ↔ type check itself is unit-tested in categoryService.test.ts; here we
+// only assert when each path consults it and with what.
+vi.mock('../services/categoryService', () => ({
+  assertCategoryMatchesTransactionType: vi.fn(),
+}));
 
 import prisma from '../config/prisma';
 import { resolveCategoryForTransaction } from '../services/categoryRuleService';
+import { assertCategoryMatchesTransactionType } from '../services/categoryService';
+import { AppError } from '../utils/AppError';
 import {
   getTransactions,
   getTransactionById,
@@ -140,6 +152,8 @@ beforeEach(() => {
   sipTxMock.delete.mockResolvedValue({ id: 'sip-tx-1' });
   (prisma as any).$transaction.mockImplementation(async (fn: any) => fn(prisma));
   (resolveCategoryForTransaction as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  (assertCategoryMatchesTransactionType as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  (prisma as any).category.findUnique.mockResolvedValue(null);
 });
 
 // ─── Helper: capture WHERE from getTransactions ────────────────────────────────
@@ -896,6 +910,149 @@ describe('createTransaction — rule-based auto-categorization', () => {
     txMock.create.mockResolvedValue({ ...MOCK_TX, id: 'debit-1' });
     await createTransaction('u1', { ...DATA, type: 'TRANSFER', transferToAccountId: 'acct-2' });
     expect(resolveMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('createTransaction — category ↔ type validation', () => {
+  const assertMock = assertCategoryMatchesTransactionType as ReturnType<typeof vi.fn>;
+  const DATA = { amount: 100, type: 'EXPENSE', description: 'Groceries', date: '2025-04-01', bankAccountId: 'acct-1' };
+
+  it('validates a caller-chosen category against the transaction type, before any DB write', async () => {
+    const order: string[] = [];
+    assertMock.mockImplementation(async () => { order.push('assert'); });
+    (prisma as any).$transaction.mockImplementation(async (fn: any) => { order.push('$transaction'); return fn(prisma); });
+
+    await createTransaction('u1', { ...DATA, categoryId: 'cat-food' });
+
+    expect(assertMock).toHaveBeenCalledWith('cat-food', 'EXPENSE');
+    expect(order).toEqual(['assert', '$transaction']);
+  });
+
+  it('writes nothing when the category is rejected', async () => {
+    assertMock.mockRejectedValue(AppError.badRequest('Category "Salary" is an income category'));
+    await expect(createTransaction('u1', { ...DATA, categoryId: 'cat-sal' })).rejects.toMatchObject({ statusCode: 400 });
+    expect((prisma as any).$transaction).not.toHaveBeenCalled();
+    expect(txMock.create).not.toHaveBeenCalled();
+  });
+
+  it('does not re-validate a rule-derived category (rules are type-matched already)', async () => {
+    (resolveCategoryForTransaction as ReturnType<typeof vi.fn>).mockResolvedValue('cat-food');
+    await createTransaction('u1', DATA);
+    expect(assertMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a category on a TRANSFER (the check refuses the TRANSFER type) with no legs written', async () => {
+    assertMock.mockRejectedValue(AppError.badRequest('Transfers cannot be categorized'));
+    await expect(createTransaction('u1', { ...DATA, type: 'TRANSFER', transferToAccountId: 'acct-2', categoryId: 'cat-food' }))
+      .rejects.toThrow('Transfers cannot be categorized');
+    expect(assertMock).toHaveBeenCalledWith('cat-food', 'TRANSFER');
+    expect(txMock.create).not.toHaveBeenCalled();
+  });
+
+  it('never writes a category onto transfer legs', async () => {
+    acctMock.findFirst.mockResolvedValue({ ...MOCK_ACCOUNT, id: 'acct-2' });
+    txMock.create.mockResolvedValue({ ...MOCK_TX, id: 'debit-1' });
+    await createTransaction('u1', { ...DATA, type: 'TRANSFER', transferToAccountId: 'acct-2' });
+    expect(txMock.create).toHaveBeenCalledTimes(2);
+    for (const [call] of txMock.create.mock.calls) {
+      expect(call.data).not.toHaveProperty('categoryId');
+    }
+  });
+});
+
+describe('updateTransaction — category ↔ type validation', () => {
+  const assertMock = assertCategoryMatchesTransactionType as ReturnType<typeof vi.fn>;
+  const catFindMock = () => (prisma as any).category.findUnique as ReturnType<typeof vi.fn>;
+  const CATEGORIZED = { ...MOCK_TX, type: 'EXPENSE', categoryId: 'cat-food' };
+  const updateData = () => txMock.update.mock.calls[0][0].data;
+
+  it('validates a category change against the row\'s own type (e.g. a bulk re-categorize)', async () => {
+    txMock.findUnique.mockResolvedValue(CATEGORIZED);
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { categoryId: 'cat-rent' });
+    expect(assertMock).toHaveBeenCalledWith('cat-rent', 'EXPENSE', prisma);
+  });
+
+  it('rolls back (no update) when the new category is rejected', async () => {
+    txMock.findUnique.mockResolvedValue(CATEGORIZED);
+    assertMock.mockRejectedValue(AppError.badRequest('mismatch'));
+    await expect(updateTransaction('tx-1', 'u1', 'MEMBER', { categoryId: 'cat-sal' })).rejects.toMatchObject({ statusCode: 400 });
+    expect(txMock.update).not.toHaveBeenCalled();
+  });
+
+  it('does not validate an unchanged category the edit form merely resends', async () => {
+    txMock.findUnique.mockResolvedValue(CATEGORIZED);
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { description: 'Renamed', categoryId: 'cat-food', type: 'EXPENSE' });
+    expect(assertMock).not.toHaveBeenCalled();
+  });
+
+  it('does not validate clearing the category', async () => {
+    txMock.findUnique.mockResolvedValue(CATEGORIZED);
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { categoryId: null });
+    expect(assertMock).not.toHaveBeenCalled();
+    expect(updateData().categoryId).toBeNull();
+  });
+
+  it('clears a category that a type change makes stale, when no new one is given', async () => {
+    txMock.findUnique.mockResolvedValue(CATEGORIZED);
+    catFindMock().mockResolvedValue({ type: 'EXPENSE' });
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { type: 'INCOME' });
+    expect(catFindMock()).toHaveBeenCalledWith({ where: { id: 'cat-food' }, select: { type: true } });
+    expect(updateData().categoryId).toBeNull();
+    expect(assertMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps a category that already fits the new type, without a second lookup (single-leg TRANSFER row edited to EXPENSE)', async () => {
+    txMock.findUnique.mockResolvedValue({ ...CATEGORIZED, type: 'TRANSFER' });
+    catFindMock().mockResolvedValue({ type: 'EXPENSE' });
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { type: 'EXPENSE' });
+    expect(updateData().categoryId).toBeUndefined();
+    expect(assertMock).not.toHaveBeenCalled();
+  });
+
+  it('validates a new category chosen alongside a type change against the NEW type', async () => {
+    txMock.findUnique.mockResolvedValue(CATEGORIZED);
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { type: 'INCOME', categoryId: 'cat-sal' });
+    expect(assertMock).toHaveBeenCalledWith('cat-sal', 'INCOME', prisma);
+    expect(catFindMock()).not.toHaveBeenCalled();
+  });
+
+  it('treats a type change that merely RESENDS the old category like one that omits it — clears it if stale', async () => {
+    // The edit form forces a legacy single-leg TRANSFER row to EXPENSE and resends its
+    // stored category; that save must not fail on a category the user didn't touch.
+    txMock.findUnique.mockResolvedValue(CATEGORIZED);
+    catFindMock().mockResolvedValue({ type: 'EXPENSE' });
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { type: 'INCOME', categoryId: 'cat-food' });
+    expect(updateData().categoryId).toBeNull();
+    expect(assertMock).not.toHaveBeenCalled();
+  });
+
+  it('a type change with an explicit null needs no lookup at all', async () => {
+    txMock.findUnique.mockResolvedValue(CATEGORIZED);
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { type: 'INCOME', categoryId: null });
+    expect(catFindMock()).not.toHaveBeenCalled();
+    expect(assertMock).not.toHaveBeenCalled();
+    expect(updateData().categoryId).toBeNull();
+  });
+
+  it('leaves an uncategorized row uncategorized on a type change, with no lookup', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, categoryId: null });
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { type: 'INCOME' });
+    expect(catFindMock()).not.toHaveBeenCalled();
+    expect(updateData().categoryId).toBeUndefined();
+  });
+
+  it('rejects categorizing a transfer-paired leg', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, transferPairId: 'pair-1' });
+    await expect(updateTransaction('tx-1', 'u1', 'MEMBER', { categoryId: 'cat-food' }))
+      .rejects.toThrow('Transfers cannot be categorized');
+    expect(assertMock).not.toHaveBeenCalled();
+    expect(txMock.update).not.toHaveBeenCalled();
+  });
+
+  it('still lets a transfer-paired leg be un-categorized', async () => {
+    txMock.findUnique.mockResolvedValue({ ...MOCK_TX, transferPairId: 'pair-1', categoryId: 'cat-food' });
+    await updateTransaction('tx-1', 'u1', 'MEMBER', { categoryId: null });
+    expect(updateData().categoryId).toBeNull();
   });
 });
 

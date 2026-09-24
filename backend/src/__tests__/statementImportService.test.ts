@@ -379,6 +379,21 @@ describe('persistParsedStatement — CASH rows, linked import (accountId present
     expect(result.cashLegsCreated).toBe(1);
   });
 
+  it('drops a rule-derived category from BOTH legs of a linked-CASH pair (transfers are never categorized)', async () => {
+    const tx = { ...makeTx({ type: 'EXPENSE', amount: 1000, paymentMode: 'CASH' as any, description: 'ATM WDL' }), categoryId: 'cat-misc' };
+    await persistParsedStatement({ ...BASE, accountId: 'acc1', transactions: [tx] });
+    const batch = txClient.transaction.createMany.mock.calls[0][0].data;
+    expect(batch.every((r: any) => r.transferPairId && r.categoryId === null)).toBe(true);
+  });
+
+  it('keeps a rule-derived category on an ordinary (unpaired) imported row', async () => {
+    const tx = { ...makeTx({ type: 'EXPENSE', amount: 250, description: 'SWIGGY' }), categoryId: 'cat-food' };
+    await persistParsedStatement({ ...BASE, accountId: 'acc1', transactions: [tx] });
+    const [row] = txClient.transaction.createMany.mock.calls[0][0].data;
+    expect(row.transferPairId).toBeUndefined();
+    expect(row.categoryId).toBe('cat-food');
+  });
+
   it('flips the synthetic leg\'s type for a CASH INCOME row (e.g. a cash deposit into the bank)', async () => {
     const tx = makeTx({ type: 'INCOME', amount: 300, paymentMode: 'CASH' as any });
     await persistParsedStatement({ ...BASE, accountId: 'acc1', transactions: [tx] });

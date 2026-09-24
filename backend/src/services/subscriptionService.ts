@@ -1,6 +1,7 @@
 import { PaymentMode, Prisma, RecurringFrequency, TransactionType } from '@prisma/client';
 import prisma from '../config/prisma';
 import { AppError } from '../utils/AppError';
+import { assertCategoryMatchesTransactionType } from './categoryService';
 import { ownerScopedWhere } from '../utils/resolveTargetUserId';
 import { priceAsOf, currentPrice, annualisedCost } from '../utils/subscriptionPricing';
 
@@ -65,11 +66,9 @@ async function assertLinkedRecordsOwned(
     if (!account) throw AppError.notFound('Bank account');
   }
   if (categoryId) {
-    // Categories may be global (userId null) or personal; a personal one must be theirs.
-    const category = await prisma.category.findFirst({
-      where: { id: categoryId, OR: [{ userId }, { userId: null }] }, select: { id: true },
-    });
-    if (!category) throw AppError.notFound('Category');
+    // Categories are family-wide (Category.userId is always null), so there is no
+    // ownership to check — but a subscription only ever generates EXPENSE charges.
+    await assertCategoryMatchesTransactionType(categoryId, 'EXPENSE');
   }
 }
 
@@ -315,7 +314,7 @@ export async function updateSubscription(
 ) {
   const existing = await prisma.subscription.findFirst({
     where: { ...ownerScopedWhere(id, requesterId, requesterRole), deletedAt: null },
-    include: { recurringRule: { select: { id: true } } },
+    include: { recurringRule: { select: { id: true, categoryId: true } } },
   });
   if (!existing) throw AppError.notFound('Subscription');
 
@@ -327,8 +326,13 @@ export async function updateSubscription(
   // Same ownership check the create path runs. Without it a requester could point their
   // subscription at somebody else's account or category by id, and the rule would happily
   // generate charges against it.
-  if (data.bankAccountId || data.categoryId) {
-    await assertLinkedRecordsOwned(existing.userId, data.bankAccountId, data.categoryId);
+  // The category is checked only when it actually changes: the edit form resends the
+  // stored one on every save, and a rename must not fail on it.
+  const changedCategoryId = data.categoryId && data.categoryId !== existing.recurringRule?.categoryId
+    ? data.categoryId
+    : undefined;
+  if (data.bankAccountId || changedCategoryId) {
+    await assertLinkedRecordsOwned(existing.userId, data.bankAccountId, changedCategoryId);
   }
 
   await prisma.$transaction(async (tx) => {

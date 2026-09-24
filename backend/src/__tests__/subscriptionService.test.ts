@@ -23,7 +23,14 @@ vi.mock('../config/prisma', () => {
   return { default: mockPrisma, prisma: mockPrisma };
 });
 
+// The category ↔ type check is unit-tested in categoryService.test.ts.
+vi.mock('../services/categoryService', () => ({
+  assertCategoryMatchesTransactionType: vi.fn(),
+}));
+
 import prisma from '../config/prisma';
+import { assertCategoryMatchesTransactionType } from '../services/categoryService';
+import { AppError } from '../utils/AppError';
 import {
   listSubscriptions, getSubscription, createSubscription, updateSubscription,
   recordPriceChange, cancelSubscription, resumeSubscription, deleteSubscription,
@@ -62,6 +69,7 @@ beforeEach(() => {
   txnMock.findMany.mockResolvedValue([]);
   (prisma as any).bankAccount.findFirst.mockResolvedValue({ id: 'acct-1' });
   (prisma as any).category.findFirst.mockResolvedValue({ id: 'cat-1' });
+  (assertCategoryMatchesTransactionType as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 });
 
 describe('createSubscription', () => {
@@ -551,12 +559,23 @@ describe('updateSubscription', () => {
     expect(ruleMock.update).not.toHaveBeenCalled();
   });
 
-  it('refuses a category belonging to somebody else', async () => {
-    (prisma as any).category.findFirst.mockResolvedValue(null);
+  it('refuses a changed category that is unknown or not an EXPENSE category', async () => {
+    (assertCategoryMatchesTransactionType as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(AppError.badRequest('Category "Salary" is an income category'));
     await expect(
-      updateSubscription('u1', 'sub-1', { categoryId: 'someone-elses' }),
-    ).rejects.toThrow();
+      updateSubscription('u1', 'sub-1', { categoryId: 'cat-sal' }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    // Subscriptions always generate EXPENSE charges
+    expect(assertCategoryMatchesTransactionType).toHaveBeenCalledWith('cat-sal', 'EXPENSE');
     expect(ruleMock.update).not.toHaveBeenCalled();
+  });
+
+  it('does not re-validate the unchanged category the edit form resends', async () => {
+    // Same "changed, not merely present" rule as transactions: a rename must not fail
+    // just because the stored category would no longer pass the check.
+    subMock.findFirst.mockResolvedValue({ ...MOCK_SUB, recurringRule: { id: 'rule-1', categoryId: 'cat-1' } });
+    await updateSubscription('u1', 'sub-1', { name: 'Renamed', categoryId: 'cat-1' });
+    expect(assertCategoryMatchesTransactionType).not.toHaveBeenCalled();
   });
 
   it('extending a trial moves the first charge with it', async () => {
@@ -750,13 +769,16 @@ describe('subscriptions without an owned rule', () => {
     await expect(recordPriceChange('u2', 'sub-1', 1, '2027-01-01')).rejects.toThrow(/not found/i);
   });
 
-  it('refuses a category belonging to someone else', async () => {
-    (prisma as any).category.findFirst.mockResolvedValue(null);
+  it('refuses a category that is unknown or not an EXPENSE category', async () => {
+    (assertCategoryMatchesTransactionType as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(AppError.notFound('Category'));
 
     await expect(createSubscription('u1', {
       name: 'X', amount: 100, frequency: 'MONTHLY',
-      startDate: '2025-01-01', categoryId: 'cat-of-u2',
+      startDate: '2025-01-01', categoryId: 'cat-missing',
     } as never)).rejects.toThrow(/category/i);
+    expect(assertCategoryMatchesTransactionType).toHaveBeenCalledWith('cat-missing', 'EXPENSE');
+    expect(subMock.create).not.toHaveBeenCalled();
   });
 
   it('honours an explicit nextRunDate at creation', async () => {

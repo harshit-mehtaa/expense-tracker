@@ -23,6 +23,9 @@
   load-bearing for recovery, not just for the trail.
 - Two roles only (`Role.ADMIN` | `Role.MEMBER`) — ADMIN can act family-wide, MEMBER is
   scoped to their own data. No finer-grained permission model exists; don't assume one.
+- A categorized transaction's category has the transaction's own type; transfers (incl. paired
+  legs) are never categorized. Every caller-chosen category goes through
+  `categoryService.assertCategoryMatchesTransactionType`; in-use categories can't be retyped.
 - Bank statement imports are deduplicated via `importHash` and safe to re-run. Since
   2026-09-09, `persistParsedStatement` ALSO runs an additive fuzzy check (date/amount/
   type + normalized-description suffix/equality match, min-length-guarded on both
@@ -44,17 +47,11 @@
   Recovery from P3009 is documented and tested in DEPLOY.md.
 
 ## Tech Debt Inventory
-- [medium] PDF/CSV import gaps found 2026-09-09 fixing ICICI multi-line parsing
-  (`importService.ts`/`routes/import.ts`), none fixed here (real scope beyond a parser
-  bugfix): (1) import persists straight to the DB, mutates `bankAccount.currentBalance`
-  in-request — no dry-run, no bulk undo, only per-row `DELETE /:id`. (2)
-  `detectBankFromText` picks the first keyword hit in FIXED order, not first occurrence
-  — a real ICICI statement mislabeled "HDFC" via a beneficiary IFSC code in a remark.
-  (3) block accumulator can't rejoin a pdf.js mid-digit split large amount, or a
-  narrow/wide amount-regex ambiguity on one line — surfaced via an aggregate warning,
-  not recovered. (4) date-parsing local-vs-UTC fixed 2026-09-09 for month-name branches
-  (`parseUTCDateFromDayMonthYear`); the free-form `new Date(dateStr)` fallback stays
-  locale-dependent, deliberately not fixed.
+- [medium] PDF/CSV import gaps (2026-09-09, `importService.ts`/`routes/import.ts`): (1) persists
+  straight to DB + mutates balances in-request — no dry-run/bulk undo. (2) `detectBankFromText`
+  takes first keyword in FIXED order (ICICI mislabeled HDFC via a remark IFSC). (3) can't rejoin
+  a pdf.js mid-digit split amount (aggregate warning only). (4) free-form `new Date(dateStr)`
+  fallback stays locale-dependent (month-name branches fixed).
 - [medium] 43 raw `prisma.` calls remain in route handlers (`documents.ts` 19,
   `categories.ts` 11, `budgets.ts` 8, one each in 5 others) — push into services when
   touched. `resolveTargetUserId` is hand-duplicated in 3 route files instead of using
@@ -71,6 +68,9 @@
   idx/FK, Asset.updatedAt default, RecurringRule FK. No CI drift check. Separate task.
 - [low] Category rules: timed-out regex rules tracked in-process only, not shown in UI;
   recurring catch-up loads rules per due template (N+1, only when due).
+- [low] Category↔type invariant (2026-09-24) is app-level only: retype-vs-create race (check and
+  write not atomic; no DB trigger); other deployments may hold legacy categorized TRANSFER
+  rules/legs (local DB: 0). Any MEMBER can retype/merge/delete shared categories (pre-existing).
 - [low] `CashflowMonth`/`UpcomingAlert`/`useAccounts`/`useCategories`/`selectedMemberName`
   each duplicated instead of shared; `computeTotalLiabilities` has an undocumented endDate
   filter excluding overdue loans; `!isViewingFamilyWide` gates create buttons across 10

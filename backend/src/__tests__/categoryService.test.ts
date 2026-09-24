@@ -1,15 +1,16 @@
 /**
  * Unit tests for categoryService.
  *
- * Focus: the usage rollup, the safe-delete path that replaced silent orphaning, and the
- * merge, which moves data across four tables and re-parents children.
+ * Focus: the usage rollup, the safe-delete path that replaced silent orphaning, the
+ * merge, which moves data across four tables and re-parents children, and the
+ * category ↔ transaction type check every categorizing write path shares.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../config/prisma', () => {
   const mock = {
     category: {
-      findMany: vi.fn(), findFirst: vi.fn(), findFirstOrThrow: vi.fn(),
+      findMany: vi.fn(), findFirst: vi.fn(), findFirstOrThrow: vi.fn(), findUnique: vi.fn(),
       create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), delete: vi.fn(), count: vi.fn(),
     },
     transaction: { groupBy: vi.fn(), count: vi.fn(), updateMany: vi.fn() },
@@ -24,6 +25,7 @@ vi.mock('../config/prisma', () => {
 import { prisma } from '../config/prisma';
 import {
   getCategoryUsage, listCategories, deleteCategory, mergeCategories, getCategoryDependencies,
+  assertCategoryMatchesTransactionType,
 } from '../services/categoryService';
 
 const catMock = (prisma as any).category;
@@ -401,5 +403,44 @@ describe('listCategories', () => {
     expect(row.usage).toEqual({
       directCount: 0, directTotal: 0, rollupCount: 0, rollupTotal: 0, lastUsed: null,
     });
+  });
+});
+
+describe('assertCategoryMatchesTransactionType', () => {
+  it('passes when the category exists and its type matches', async () => {
+    catMock.findUnique.mockResolvedValue({ name: 'Food', type: 'EXPENSE' });
+    await expect(assertCategoryMatchesTransactionType('cat-food', 'EXPENSE')).resolves.toBeUndefined();
+    expect(catMock.findUnique).toHaveBeenCalledWith({ where: { id: 'cat-food' }, select: { name: true, type: true } });
+  });
+
+  it.each([
+    ['INCOME', 'EXPENSE', 'Category "Salary" is an income category and can\'t be used on an expense transaction'],
+    ['EXPENSE', 'INCOME', 'Category "Food" is an expense category and can\'t be used on an income transaction'],
+    ['ASSET', 'EXPENSE', 'Category "Gold" is an asset category and can\'t be used on an expense transaction'],
+    ['LIABILITY', 'INCOME', 'Category "Card" is a liability category and can\'t be used on an income transaction'],
+  ])('rejects a %s category on an %s transaction with a 400 naming it', async (catType, txType, message) => {
+    const name = { INCOME: 'Salary', EXPENSE: 'Food', ASSET: 'Gold', LIABILITY: 'Card' }[catType];
+    catMock.findUnique.mockResolvedValue({ name, type: catType });
+    await expect(assertCategoryMatchesTransactionType('cat-x', txType))
+      .rejects.toMatchObject({ statusCode: 400, message });
+  });
+
+  it('404s an unknown category', async () => {
+    catMock.findUnique.mockResolvedValue(null);
+    await expect(assertCategoryMatchesTransactionType('cat-missing', 'EXPENSE'))
+      .rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('rejects any category on a TRANSFER without looking it up', async () => {
+    await expect(assertCategoryMatchesTransactionType('cat-food', 'TRANSFER'))
+      .rejects.toMatchObject({ statusCode: 400, message: 'Transfers cannot be categorized' });
+    expect(catMock.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('reads through the given client (e.g. an interactive-transaction client)', async () => {
+    const tx = { category: { findUnique: vi.fn().mockResolvedValue({ name: 'Food', type: 'EXPENSE' }) } };
+    await assertCategoryMatchesTransactionType('cat-food', 'EXPENSE', tx as any);
+    expect(tx.category.findUnique).toHaveBeenCalled();
+    expect(catMock.findUnique).not.toHaveBeenCalled();
   });
 });

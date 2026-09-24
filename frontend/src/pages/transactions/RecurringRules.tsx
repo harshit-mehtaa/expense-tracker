@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
@@ -89,10 +89,9 @@ export default function RecurringRulesPage({ viewUserId }: { viewUserId: string 
   });
 
   const { data: categories = [] } = useCategories();
-  const ruleCategories = categories.filter((c) => c.type === 'INCOME' || c.type === 'EXPENSE');
   const { data: accounts = [] } = useBankAccounts(viewUserId);
 
-  const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm<RuleForm>({
+  const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<RuleForm>({
     resolver: zodResolver(ruleSchema),
     defaultValues: {
       type: 'EXPENSE',
@@ -100,6 +99,18 @@ export default function RecurringRulesPage({ viewUserId }: { viewUserId: string 
       nextRunDate: toDateInputValue(new Date()),
     },
   });
+
+  // A category fits only its own type, and a transfer takes none — the backend rejects
+  // anything else. The category can't be edited on an existing rule (hidden below), so
+  // the reset only runs while creating; startEdit's setValue calls must not trip it.
+  const selectedType = watch('type');
+  const ruleCategories = categories.filter((c) => c.type === selectedType);
+  const previousType = useRef(selectedType);
+  useEffect(() => {
+    if (previousType.current === selectedType) return;
+    previousType.current = selectedType;
+    if (!editingRule) setValue('categoryId', '');
+  }, [selectedType, editingRule, setValue]);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['recurring-rules', viewUserId] });
 
