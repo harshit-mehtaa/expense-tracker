@@ -4,6 +4,7 @@ import { requireAuth, requireAdmin } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendNoContent } from '../utils/response';
 import * as svc from '../services/adminService';
+import { optionalQueryInt } from '../utils/querySchemas';
 import { recordAuditLog } from '../services/auditService';
 
 const router = Router();
@@ -82,9 +83,14 @@ router.post('/users/:id/reset-password', asyncHandler(async (req, res) => {
   sendSuccess(res, { message: 'Password reset. User will be prompted to change on next login.' });
 }));
 
+const auditLogQuery = z.object({
+  page: optionalQueryInt(1, 100_000).transform((p) => p ?? 1),
+  // Capped rather than rejected, matching pagination.ts's MAX_LIMIT contract.
+  limit: optionalQueryInt(1).transform((l) => Math.min(l ?? 50, 100)),
+});
+
 router.get('/audit-log', asyncHandler(async (req, res) => {
-  const page = Number(req.query.page ?? 1);
-  const limit = Number(req.query.limit ?? 50);
+  const { page, limit } = auditLogQuery.parse(req.query);
   const data = await svc.getAuditLog(page, limit);
   sendSuccess(res, data);
 }));

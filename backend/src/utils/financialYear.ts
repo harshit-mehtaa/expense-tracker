@@ -127,13 +127,24 @@ export function formatFYLabel(fy: string): string {
 }
 
 /**
+ * True for a real financial-year label: "YYYY-YY" where YY is the year after YYYY, and
+ * YYYY in a sane range. Shape alone is not enough — "9999-99" matches /^\d{4}-\d{2}$/ but
+ * its range ends in year 10000, which Prisma cannot serialise (a 500 on every FY route).
+ */
+export function isValidFY(fy: unknown): fy is string {
+  if (typeof fy !== 'string') return false;
+  const m = /^(\d{4})-(\d{2})$/.exec(fy);
+  if (!m) return false;
+  const start = Number(m[1]);
+  return start >= 1900 && start <= 2200 && Number(m[2]) === (start + 1) % 100;
+}
+
+/**
  * Validates and normalises a FY string (e.g. "2024-25").
  * Returns the input if valid, otherwise falls back to the current FY.
  */
 export function validateFY(fy: unknown): string {
-  const s = typeof fy === 'string' ? fy : getCurrentFY();
-  if (!/^\d{4}-\d{2}$/.test(s)) return getCurrentFY();
-  return s;
+  return isValidFY(fy) ? fy : getCurrentFY();
 }
 
 /**

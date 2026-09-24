@@ -9,6 +9,7 @@ import {
   listFYOptions,
   formatFYLabel,
   validateFY,
+  isValidFY,
   getMonthStart,
   getISTDateBoundary,
 } from '../utils/financialYear';
@@ -208,3 +209,38 @@ describe('getISTDateBoundary', () => {
     expect(Number.isNaN(getISTDateBoundary('garbage', 'start').getTime())).toBe(true);
   });
 });
+
+describe('isValidFY', () => {
+  it.each(['2024-25', '2025-26', '1999-00', '2099-00'])('accepts %s', (fy) => {
+    expect(isValidFY(fy)).toBe(true);
+  });
+
+  it.each([
+    ['9999-99', 'year beyond what the database can store (FY end = year 10000)'],
+    ['0000-00', 'year zero'],
+    ['2025-99', 'end year is not start + 1'],
+    ['2025-25', 'end year equals start year'],
+    ['2025-2026', 'long form'],
+    ['garbage', 'not a FY at all'],
+    ['', 'empty'],
+  ])('rejects %s (%s)', (fy) => {
+    expect(isValidFY(fy)).toBe(false);
+  });
+
+  it('rejects non-strings', () => {
+    expect(isValidFY(undefined)).toBe(false);
+    expect(isValidFY(['2024-25'])).toBe(false);
+  });
+});
+
+describe('validateFY — range', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('falls back to the current FY for an out-of-range year instead of producing an unstorable date', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2025-06-15'));
+    expect(validateFY('9999-99')).toBe('2025-26');
+    expect(validateFY('2025-99')).toBe('2025-26');
+  });
+});
+

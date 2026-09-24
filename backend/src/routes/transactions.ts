@@ -3,22 +3,19 @@ import { z } from 'zod';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendNoContent, sendPaginated } from '../utils/response';
 import { requireAuth } from '../middleware/auth';
-import { validateFY, getCurrentFY } from '../utils/financialYear';
+import { getCurrentFY } from '../utils/financialYear';
 import * as transactionService from '../services/transactionService';
 import { AppError } from '../utils/AppError';
 import { prisma } from '../config/prisma';
 import { recordAuditLog } from '../services/auditService';
 import { resolveTargetUserId, resolveWriteUserId } from '../utils/resolveTargetUserId';
 import { PAYMENT_MODE } from '../constants/paymentModes';
+import {
+  commaList, optionalQuery, optionalQueryCuid, optionalQueryDate, optionalQueryFY, optionalQueryInt,
+  optionalQueryNumber, optionalQueryString,
+} from '../utils/querySchemas';
 
 const CUID_RE = /^[a-z0-9]{20,30}$/i;
-
-function parseMultiParam(param: unknown): string[] | undefined {
-  const s = param as string | undefined;
-  if (!s) return undefined;
-  const vals = s.split(',').filter(Boolean);
-  return vals.length ? vals : undefined;
-}
 
 const router = Router();
 router.use(requireAuth);
@@ -46,6 +43,29 @@ const createTransactionSchema = z.object({
   { message: 'transferToAccountId is required for TRANSFER transactions', path: ['transferToAccountId'] },
 );
 
+const TRANSACTION_TYPE = z.enum(['INCOME', 'EXPENSE', 'TRANSFER']);
+
+/** Filters shared by the list and the CSV export. */
+const transactionFilterQuery = z.object({
+  fy: optionalQueryFY(),
+  bankAccountId: optionalQueryCuid(),
+  categoryId: commaList(z.string().cuid()),
+  type: commaList(TRANSACTION_TYPE),
+  paymentMode: commaList(PAYMENT_MODE),
+  startDate: optionalQueryDate(),
+  endDate: optionalQueryDate(),
+});
+
+const listTransactionsQuery = transactionFilterQuery.extend({
+  search: optionalQueryString(), // free text: the command palette does not bound it
+  minAmount: optionalQueryNumber(),
+  maxAmount: optionalQueryNumber(),
+  cursor: optionalQueryCuid(),
+  // No max: pagination.ts caps at 100 by contract, and the refund pickers send 500.
+  limit: optionalQueryInt(1),
+  sort: optionalQuery(z.string().regex(/^(date|amount):(asc|desc)$/, 'Expected date|amount:asc|desc')),
+});
+
 router.get(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
@@ -64,24 +84,25 @@ router.get(
       effectiveUserId = req.user!.userId;
     }
 
+    const q = listTransactionsQuery.parse(req.query);
     const { items, meta } = await transactionService.getTransactions(
       req.user!.userId,
       req.user!.role,
       {
         userId: effectiveUserId,
-        bankAccountId: req.query.bankAccountId as string,
-        categoryIds: parseMultiParam(req.query.categoryId),
-        types: parseMultiParam(req.query.type),
-        paymentModes: parseMultiParam(req.query.paymentMode),
-        startDate: req.query.startDate as string,
-        endDate: req.query.endDate as string,
-        fy: req.query.fy as string,
-        search: req.query.search as string,
-        minAmount: req.query.minAmount ? Number(req.query.minAmount) : undefined,
-        maxAmount: req.query.maxAmount ? Number(req.query.maxAmount) : undefined,
-        cursor: req.query.cursor as string,
-        limit: req.query.limit ? Number(req.query.limit) : undefined,
-        sort: req.query.sort as string,
+        bankAccountId: q.bankAccountId,
+        categoryIds: q.categoryId,
+        types: q.type,
+        paymentModes: q.paymentMode,
+        startDate: q.startDate,
+        endDate: q.endDate,
+        fy: q.fy,
+        search: q.search,
+        minAmount: q.minAmount,
+        maxAmount: q.maxAmount,
+        cursor: q.cursor,
+        limit: q.limit,
+        sort: q.sort,
       },
     );
     sendPaginated(res, items, meta);
@@ -92,7 +113,8 @@ router.get(
 router.get(
   '/export',
   asyncHandler(async (req: Request, res: Response) => {
-    const fy = validateFY(req.query.fy);
+    const q = transactionFilterQuery.parse(req.query);
+    const fy = q.fy ?? getCurrentFY();
     const targetUserId = await resolveTargetUserId(req);
     const effectiveUserId = req.user!.role === 'ADMIN' ? targetUserId : req.user!.userId;
     const rows = await transactionService.getAllTransactionsForExport(
@@ -100,13 +122,13 @@ router.get(
       req.user!.role,
       {
         userId: effectiveUserId,
-        fy: req.query.fy ? fy : undefined,
-        startDate: req.query.startDate as string | undefined,
-        endDate: req.query.endDate as string | undefined,
-        types: parseMultiParam(req.query.type),
-        categoryIds: parseMultiParam(req.query.categoryId),
-        paymentModes: parseMultiParam(req.query.paymentMode),
-        bankAccountId: req.query.bankAccountId as string | undefined,
+        fy: q.fy,
+        startDate: q.startDate,
+        endDate: q.endDate,
+        types: q.type,
+        categoryIds: q.categoryId,
+        paymentModes: q.paymentMode,
+        bankAccountId: q.bankAccountId,
       },
     );
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');

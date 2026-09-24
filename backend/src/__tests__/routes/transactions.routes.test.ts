@@ -168,7 +168,7 @@ describe('GET /api/transactions', () => {
     );
   });
 
-  it('parses comma-separated type filter into array (parseMultiParam positive path)', async () => {
+  it('parses comma-separated type filter into array', async () => {
     await request(makeApp()).get('/api/transactions?type=INCOME,EXPENSE');
     expect(getTransactionsMock).toHaveBeenCalledWith(
       expect.any(String),
@@ -177,8 +177,8 @@ describe('GET /api/transactions', () => {
     );
   });
 
-  it('parseMultiParam returns undefined for empty string (false branch, line 17)', async () => {
-    // ?type= is an empty string → parseMultiParam('') → !s is true → returns undefined
+  it('treats an empty type filter as no filter', async () => {
+    // ?type= → commaList drops empty items → nothing left → undefined
     await request(makeApp()).get('/api/transactions?type=');
     expect(getTransactionsMock).toHaveBeenCalledWith(
       expect.any(String),
@@ -187,8 +187,8 @@ describe('GET /api/transactions', () => {
     );
   });
 
-  it('parseMultiParam returns undefined when only commas (vals empty after filter)', async () => {
-    // ?type=,,, → split(',') = ['','',''] → filter(Boolean) = [] → vals.length = 0 → undefined
+  it('treats a commas-only type filter as no filter', async () => {
+    // ?type=,,, → split(',') = ['','','',''] → empty items dropped → undefined
     await request(makeApp()).get('/api/transactions?type=,,,');
     expect(getTransactionsMock).toHaveBeenCalledWith(
       expect.any(String),
@@ -204,12 +204,109 @@ describe('GET /api/transactions', () => {
     expect(call.maxAmount).toBeUndefined();
   });
 
-  it('passes minAmount, maxAmount and limit as numbers when provided (lines 73-76 truthy branches)', async () => {
+  it('passes minAmount, maxAmount and limit as numbers when provided', async () => {
     await request(makeApp()).get('/api/transactions?minAmount=500&maxAmount=5000&limit=50');
     const call = getTransactionsMock.mock.calls[0][2];
     expect(call.minAmount).toBe(500);
     expect(call.maxAmount).toBe(5000);
     expect(call.limit).toBe(50);
+  });
+});
+
+describe('GET /api/transactions — query validation (bad values are 422, never 500)', () => {
+  it.each([
+    ['type=BOGUS', 'type'],
+    ['type=EXPENSE,BOGUS', 'type'],
+    ['paymentMode=CHEQUE_BOUNCE', 'paymentMode'],
+    ['categoryId=not-a-cuid', 'categoryId'],
+    ['bankAccountId=not-a-cuid', 'bankAccountId'],
+    ['cursor=not-a-cuid', 'cursor'],
+    ['minAmount=abc', 'minAmount'],
+    ['maxAmount=1e999', 'maxAmount'],
+    ['limit=abc', 'limit'],
+    ['limit=0', 'limit'],
+    ['limit=-1', 'limit'],
+    ['limit=2.5', 'limit'],
+    ['startDate=garbage', 'startDate'],
+    ['endDate=2025-13-45', 'endDate'],
+    ['fy=garbage', 'fy'],
+    ['fy=9999-99', 'fy'], // shape-valid but unstorable: FY end would be year 10000
+    ['fy=2025-99', 'fy'],
+    ['sort=zzz', 'sort'],
+    ['endDate=0001-01-01', 'endDate'], // outside the supported 1900–2200 range
+    ['startDate=9999-12-31', 'startDate'],
+    ['sort=password:asc', 'sort'],
+  ])('?%s → 422 naming %s, service not called', async (qs, field) => {
+    const res = await request(makeApp()).get(`/api/transactions?${qs}`);
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    // List items report by index ("type.1"), scalars by name ("limit").
+    expect(Object.keys(res.body.errors).some((k) => k === field || k.startsWith(`${field}.`))).toBe(true);
+    expect(getTransactionsMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts every value the frontend actually sends (fetchTransactions + refund pickers)', async () => {
+    const qs = [
+      'fy=2025-26', 'limit=50', 'cursor=clm1234567890abcdefghij', 'search=coffee',
+      'type=EXPENSE,INCOME', 'categoryId=clm1234567890abcdefghij,clm0987654321abcdefghij',
+      'paymentMode=UPI', 'startDate=2025-04-01', 'endDate=2025-04-30',
+    ].join('&');
+    const res = await request(makeApp()).get(`/api/transactions?${qs}`);
+    expect(res.status).toBe(200);
+    expect(getTransactionsMock).toHaveBeenCalledWith(expect.any(String), 'ADMIN', expect.objectContaining({
+      fy: '2025-26', limit: 50, search: 'coffee', types: ['EXPENSE', 'INCOME'], paymentModes: ['UPI'],
+      categoryIds: ['clm1234567890abcdefghij', 'clm0987654321abcdefghij'],
+      startDate: '2025-04-01', endDate: '2025-04-30',
+    }));
+  });
+
+  it('keeps the limit contract: limit=500 (refund pickers) is accepted and left to pagination to cap', async () => {
+    const res = await request(makeApp()).get('/api/transactions?type=EXPENSE&limit=500&sort=date:desc');
+    expect(res.status).toBe(200);
+    expect(getTransactionsMock.mock.calls[0][2]).toMatchObject({ limit: 500, sort: 'date:desc' });
+  });
+
+  it('accepts an ISO datetime date bound and amount sort', async () => {
+    const res = await request(makeApp()).get('/api/transactions?startDate=2025-04-01T00:00:00.000Z&sort=amount:asc');
+    expect(res.status).toBe(200);
+  });
+
+  it('treats a whitespace-only number as absent, not as 0', async () => {
+    const res = await request(makeApp()).get('/api/transactions?minAmount=%20%20&limit=%20');
+    expect(res.status).toBe(200);
+    expect(getTransactionsMock.mock.calls[0][2]).toMatchObject({ minAmount: undefined, limit: undefined });
+  });
+
+  it('accepts a long search string (the command palette search box is unbounded)', async () => {
+    const res = await request(makeApp()).get(`/api/transactions?search=${'a'.repeat(1000)}`);
+    expect(res.status).toBe(200);
+  });
+
+  it('treats empty values as absent (?minAmount=&limit=&search=)', async () => {
+    const res = await request(makeApp()).get('/api/transactions?minAmount=&limit=&search=&fy=');
+    expect(res.status).toBe(200);
+    expect(getTransactionsMock.mock.calls[0][2]).toMatchObject({
+      minAmount: undefined, limit: undefined, search: undefined, fy: undefined,
+    });
+  });
+});
+
+describe('GET /api/transactions/export — query validation', () => {
+  it('rejects a bad type filter with 422 instead of reaching Prisma', async () => {
+    const res = await request(makeApp()).get('/api/transactions/export?type=BOGUS');
+    expect(res.status).toBe(422);
+    expect(getAllForExportMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed date with 422', async () => {
+    const res = await request(makeApp()).get('/api/transactions/export?startDate=garbage');
+    expect(res.status).toBe(422);
+  });
+
+  it('rejects an invalid fy with 422 — same contract as the list, not a silent current-FY export', async () => {
+    const res = await request(makeApp()).get('/api/transactions/export?fy=garbage');
+    expect(res.status).toBe(422);
+    expect(getAllForExportMock).not.toHaveBeenCalled();
   });
 });
 

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess, sendCreated } from '../utils/response';
-import { getCurrentFY } from '../utils/financialYear';
+import { validateFY } from '../utils/financialYear';
 import { resolveTargetUserId, resolveWriteUserId } from '../utils/resolveTargetUserId';
 import * as svc from '../services/taxService';
 import * as cgSvc from '../services/capitalGainsService';
@@ -13,10 +13,6 @@ import * as faSvc from '../services/foreignAssetService';
 import { recordAuditLog } from '../services/auditService';
 
 /** Validate and return a safe FY string; falls back to current FY on bad input */
-function parseFY(raw: unknown): string {
-  const s = typeof raw === 'string' ? raw : '';
-  return /^\d{4}-\d{2}$/.test(s) ? s : getCurrentFY();
-}
 
 const router = Router();
 router.use(requireAuth);
@@ -24,7 +20,7 @@ router.use(requireAuth);
 // ─── Tax Profile ──────────────────────────────────────────────────────────────
 
 router.get('/profile', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const { userId, role } = req.user!;
   const targetUserId = await resolveTargetUserId(req);
   const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
@@ -33,7 +29,7 @@ router.get('/profile', asyncHandler(async (req, res) => {
 }));
 
 router.post('/profile', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const ownerUserId = await resolveWriteUserId(req);
   const data = z.object({
     regime: z.enum(['OLD', 'NEW']).optional(),
@@ -71,7 +67,7 @@ router.post('/profile', asyncHandler(async (req, res) => {
 // ─── Tax Summary ──────────────────────────────────────────────────────────────
 
 router.get('/summary', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const { userId, role } = req.user!;
   const targetUserId = await resolveTargetUserId(req);
   const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
@@ -82,7 +78,7 @@ router.get('/summary', asyncHandler(async (req, res) => {
 // ─── 80C Tracker ─────────────────────────────────────────────────────────────
 
 router.get('/80c-tracker', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const { userId, role } = req.user!;
   const targetUserId = await resolveTargetUserId(req);
   const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
@@ -93,7 +89,7 @@ router.get('/80c-tracker', asyncHandler(async (req, res) => {
 // ─── Advance Tax Calendar (not user-scoped — universal data) ─────────────────
 
 router.get('/advance-tax-calendar', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const calendar = await svc.getAdvanceTaxCalendar(fy);
   sendSuccess(res, calendar);
 }));
@@ -133,7 +129,7 @@ const cgEntrySchema = z.object({
 });
 
 router.get('/capital-gains', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const { userId, role } = req.user!;
   const targetUserId = await resolveTargetUserId(req);
   const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
@@ -142,7 +138,7 @@ router.get('/capital-gains', asyncHandler(async (req, res) => {
 }));
 
 router.get('/capital-gains/summary', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const { userId, role } = req.user!;
   const targetUserId = await resolveTargetUserId(req);
   const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
@@ -187,7 +183,7 @@ const osEntrySchema = z.object({
 });
 
 router.get('/other-income', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const { userId, role } = req.user!;
   const targetUserId = await resolveTargetUserId(req);
   const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
@@ -196,7 +192,7 @@ router.get('/other-income', asyncHandler(async (req, res) => {
 }));
 
 router.get('/other-income/summary', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const { userId, role } = req.user!;
   const targetUserId = await resolveTargetUserId(req);
   const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
@@ -247,7 +243,7 @@ const hpEntrySchema = z.object({
 });
 
 router.get('/house-property', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const { userId, role } = req.user!;
   const targetUserId = await resolveTargetUserId(req);
   const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
@@ -256,7 +252,7 @@ router.get('/house-property', asyncHandler(async (req, res) => {
 }));
 
 router.get('/house-property/summary', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const { userId, role } = req.user!;
   const targetUserId = await resolveTargetUserId(req);
   const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
@@ -307,7 +303,7 @@ const faEntrySchema = z.object({
 });
 
 router.get('/foreign-assets', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const { userId, role } = req.user!;
   const targetUserId = await resolveTargetUserId(req);
   const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
@@ -316,7 +312,7 @@ router.get('/foreign-assets', asyncHandler(async (req, res) => {
 }));
 
 router.get('/foreign-assets/summary', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const { userId, role } = req.user!;
   const targetUserId = await resolveTargetUserId(req);
   const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;
@@ -352,7 +348,7 @@ router.delete('/foreign-assets/:id', asyncHandler(async (req, res) => {
 // ─── ITR-2 Summary ────────────────────────────────────────────────────────────
 
 router.get('/itr2-summary', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const { userId, role } = req.user!;
   const targetUserId = await resolveTargetUserId(req);
   const effectiveUserId = role === 'ADMIN' ? (targetUserId ?? userId) : userId;

@@ -172,6 +172,17 @@ describe('GET /api/admin/audit-log', () => {
   it('returns 200 with audit log data', async () => {
     const res = await request(app).get('/api/admin/audit-log');
     expect(res.status).toBe(200);
-    expect(getAuditLogMock).toHaveBeenCalled();
+    expect(getAuditLogMock).toHaveBeenCalledWith(1, 50);
+  });
+
+  it('forwards valid page/limit and caps limit at 100', async () => {
+    await request(app).get('/api/admin/audit-log?page=3&limit=500');
+    expect(getAuditLogMock).toHaveBeenCalledWith(3, 100);
+  });
+
+  it.each(['page=abc', 'page=0', 'page=99999999999', 'limit=-5', 'limit=1.5'])('?%s → 422, service not called', async (qs) => {
+    const res = await request(app).get(`/api/admin/audit-log?${qs}`);
+    expect(res.status).toBe(422);
+    expect(getAuditLogMock).not.toHaveBeenCalled();
   });
 });

@@ -145,3 +145,31 @@ describe('createApp — route mount order (import must precede transactions)', (
     expect(res.status).not.toBe(404);
   });
 });
+
+describe('createApp — query contract', () => {
+  it('rejects a repeated query key with 400 before any route runs', async () => {
+    const res = await request(createApp()).get('/api/health?fy=a&fy=b');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_QUERY');
+  });
+
+  it('still applies security headers to a rejected request (runs after helmet)', async () => {
+    const res = await request(createApp()).get('/api/health?fy=a&fy=b');
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('uses the simple parser: a bracketed key stays literal instead of becoming an object', async () => {
+    // Under the default "extended" (qs) parser, a[b]=1 parses to { a: { b: '1' } } and
+    // the rejection would name "a". Naming "a[b]" proves the simple parser is active —
+    // app.set('query parser') after the router exists silently does nothing.
+    const res = await request(createApp()).get('/api/health?a[b]=1');
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('Query parameter "a[b]" uses unsupported bracket syntax');
+  });
+
+  it('leaves normal requests alone', async () => {
+    const res = await request(createApp()).get('/api/health?probe=1');
+    expect(res.status).not.toBe(400);
+  });
+});
+

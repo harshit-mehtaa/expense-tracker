@@ -137,3 +137,22 @@ describe('GET /api/dashboard/family-overview', () => {
     expect(res.status).toBe(500);
   });
 });
+
+describe('dashboard — fy validation', () => {
+  it.each(['/api/dashboard/summary', '/api/dashboard/cashflow', '/api/dashboard/family-overview'])(
+    '%s rejects an invalid fy with 422 instead of returning an empty year',
+    async (path) => {
+      const res = await request(app).get(`${path}?fy=garbage`);
+      expect(res.status).toBe(422);
+      expect(summarySvc).not.toHaveBeenCalled();
+      expect(cashflowSvc).not.toHaveBeenCalled();
+      expect(familySvc).not.toHaveBeenCalled();
+    },
+  );
+
+  it('passes no fy through as undefined (service defaults to the current FY)', async () => {
+    await request(app).get('/api/dashboard/summary?fy=');
+    expect(summarySvc.mock.calls[0][2]).toBeUndefined();
+  });
+});
+

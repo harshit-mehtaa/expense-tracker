@@ -163,14 +163,14 @@ describe('GET /api/investments/80c-summary', () => {
     expect(m(svc.get80CSummary)).toHaveBeenCalledWith(undefined, '2024-25', 'u1', 'ADMIN');
   });
 
-  it('falls back to current FY when fy param is absent (parseFY non-string path)', async () => {
+  it('falls back to current FY when fy param is absent', async () => {
     // Pin clock to June 2025 → FY 2025-26 so the assertion is deterministic
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2025-06-15'));
     try {
       const res = await request(app).get('/api/investments/80c-summary');
       expect(res.status).toBe(200);
-      // parseFY(undefined) → typeof undefined !== 'string' → s='' → regex fails → getCurrentFY()
+      // validateFY(undefined) → not a valid FY → getCurrentFY()
       expect(m(svc.get80CSummary)).toHaveBeenCalledWith(undefined, '2025-26', 'u1', 'ADMIN');
     } finally {
       vi.useRealTimers();
@@ -915,5 +915,52 @@ describe('POST /api/investments/real-estate/:id/sell', () => {
     const res = await request(app).post('/api/investments/real-estate/re-1/sell').send({ salePrice: 9_500_000, date: '2026-06-01' });
     expect(res.status).toBe(409);
     expect(res.body.message).toMatch(/active loan/i);
+  });
+});
+
+describe('investments — query validation (bad values are 422, never 500)', () => {
+  it.each([
+    ['/api/investments/fd?status=BOGUS', () => svc.getFDs],
+    ['/api/investments/rd?status=BROKEN', () => svc.getRDs], // BROKEN is an FD status, not RD
+    ['/api/investments/sip?status=ACTIVE_ISH', () => svc.getSIPs],
+    ['/api/investments?type=CRYPTO_MOON', () => svc.getInvestments],
+    ['/api/investments/fd/maturing-soon?days=abc', () => svc.getFDsMaturing],
+    ['/api/investments/fd/maturing-soon?days=0', () => svc.getFDsMaturing],
+    ['/api/investments/sip/upcoming?days=-3', () => svc.getSIPsUpcoming],
+  ])('%s → 422, service not called', async (url, fn) => {
+    const res = await request(app).get(url);
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(m(fn())).not.toHaveBeenCalled();
+  });
+
+  it('80c-summary falls back to the current FY for an out-of-range fy instead of a 500', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2025-06-15'));
+    try {
+      const res = await request(app).get('/api/investments/80c-summary?fy=9999-99');
+      expect(res.status).toBe(200);
+      expect(m(svc.get80CSummary)).toHaveBeenCalledWith(undefined, '2025-26', 'u1', 'ADMIN');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('forwards a valid status and type to the service', async () => {
+    await request(app).get('/api/investments/fd?status=MATURED');
+    expect(m(svc.getFDs).mock.calls[0][3]).toBe('MATURED');
+    await request(app).get('/api/investments?type=MUTUAL_FUND');
+    expect(m(svc.getInvestments).mock.calls[0][1]).toBe('MUTUAL_FUND');
+  });
+
+  it('keeps the tolerant page/pageSize fallback on the list (bad paging is not an error)', async () => {
+    const res = await request(app).get('/api/investments?page=abc&pageSize=9999');
+    expect(res.status).toBe(200);
+    expect(m(svc.getInvestments).mock.calls[0].slice(2, 4)).toEqual([1, 100]);
+  });
+
+  it('uses the default days when the param is empty', async () => {
+    await request(app).get('/api/investments/sip/upcoming?days=');
+    expect(m(svc.getSIPsUpcoming)).toHaveBeenCalledWith('u1', 7);
   });
 });

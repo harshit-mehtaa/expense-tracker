@@ -7,6 +7,7 @@ import rateLimit from 'express-rate-limit';
 
 import { env, isDev } from './config/env';
 import { errorHandler } from './middleware/errorHandler';
+import { rejectAmbiguousQuery, useSimpleQueryParser } from './middleware/queryContract';
 
 import healthRouter from './routes/health';
 import authRouter from './routes/auth';
@@ -43,6 +44,9 @@ export function createApp() {
   // only trusted once this is set. Without it every client behind nginx shares a bucket.
   app.set('trust proxy', 1);
 
+  // Before any app.use(): Express fixes the query parser when its router is created.
+  useSimpleQueryParser(app);
+
   // ── Security ────────────────────────────────────────────────────────────────
   app.use(helmet());
   app.use(cors({
@@ -67,6 +71,10 @@ export function createApp() {
 
   // ── Logging ─────────────────────────────────────────────────────────────────
   app.use(morgan(isDev ? 'dev' : 'combined'));
+
+  // ── Query contract ──────────────────────────────────────────────────────────
+  // After morgan so rejected requests are still access-logged; before every route.
+  app.use(rejectAmbiguousQuery);
 
   // ── Routes ──────────────────────────────────────────────────────────────────
   app.use('/api/health', healthRouter);

@@ -3,15 +3,23 @@ import { z } from 'zod';
 import { requireAuth, requireAdmin } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendNoContent, sendPaginated } from '../utils/response';
-import { getCurrentFY } from '../utils/financialYear';
+import { validateFY } from '../utils/financialYear';
 import { resolveTargetUserId, resolveWriteUserId } from '../utils/resolveTargetUserId';
 import * as svc from '../services/investmentService';
 import { recordAuditLog } from '../services/auditService';
+import { FDStatus, InvestmentType, RDStatus, SIPStatus } from '@prisma/client';
+import { optionalQuery, optionalQueryInt } from '../utils/querySchemas';
 
-function parseFY(raw: unknown): string {
-  const s = typeof raw === 'string' ? raw : '';
-  return /^\d{4}-\d{2}$/.test(s) ? s : getCurrentFY();
-}
+// Query schemas: enum filters are checked against the Prisma enums so an unknown value
+// is a 422 here rather than a PrismaClientValidationError (500) in the service.
+const optionalEnumQuery = <T extends Record<string, string>>(e: T) => optionalQuery(z.nativeEnum(e));
+const fdListQuery = z.object({ status: optionalEnumQuery(FDStatus) });
+const rdListQuery = z.object({ status: optionalEnumQuery(RDStatus) });
+const sipListQuery = z.object({ status: optionalEnumQuery(SIPStatus) });
+const investmentListQuery = z.object({ type: optionalEnumQuery(InvestmentType) });
+const daysQuery = (fallback: number) =>
+  z.object({ days: optionalQueryInt(1, 3650).transform((d) => d ?? fallback) });
+
 
 const router = Router();
 router.use(requireAuth);
@@ -31,7 +39,7 @@ router.get('/portfolio-summary', asyncHandler(async (req, res) => {
 }));
 
 router.get('/80c-summary', asyncHandler(async (req, res) => {
-  const fy = parseFY(req.query.fy);
+  const fy = validateFY(req.query.fy);
   const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
   const summary = await svc.get80CSummary(targetUserId, fy, req.user!.userId, req.user!.role);
   sendSuccess(res, summary);
@@ -78,14 +86,14 @@ const fdSchema = z.object({
 });
 
 router.get('/fd', asyncHandler(async (req, res) => {
-  const status = req.query.status as any;
+  const { status } = fdListQuery.parse(req.query);
   const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
   const fds = await svc.getFDs(targetUserId, req.user!.userId, req.user!.role, status);
   sendSuccess(res, fds);
 }));
 
 router.get('/fd/maturing-soon', asyncHandler(async (req, res) => {
-  const days = Number(req.query.days ?? 30);
+  const { days } = daysQuery(30).parse(req.query);
   const fds = await svc.getFDsMaturing(req.user!.userId, days);
   sendSuccess(res, fds);
 }));
@@ -128,7 +136,7 @@ const rdSchema = z.object({
 });
 
 router.get('/rd', asyncHandler(async (req, res) => {
-  const status = req.query.status as any;
+  const { status } = rdListQuery.parse(req.query);
   const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
   const rds = await svc.getRDs(targetUserId, req.user!.userId, req.user!.role, status);
   sendSuccess(res, rds);
@@ -175,7 +183,7 @@ const sipSchema = z.object({
 });
 
 router.get('/sip', asyncHandler(async (req, res) => {
-  const status = req.query.status as any;
+  const { status } = sipListQuery.parse(req.query);
   const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
   const effectiveUserId = req.user!.role === 'ADMIN' ? (targetUserId ?? req.user!.userId) : req.user!.userId;
   const sips = await svc.getSIPs(effectiveUserId, status, req.user!.role);
@@ -183,7 +191,7 @@ router.get('/sip', asyncHandler(async (req, res) => {
 }));
 
 router.get('/sip/upcoming', asyncHandler(async (req, res) => {
-  const days = Number(req.query.days ?? 7);
+  const { days } = daysQuery(7).parse(req.query);
   const sips = await svc.getSIPsUpcoming(req.user!.userId, days);
   sendSuccess(res, sips);
 }));
@@ -249,7 +257,7 @@ const investmentSchema = z.object({
 });
 
 router.get('/', asyncHandler(async (req, res) => {
-  const type = req.query.type as any;
+  const { type } = investmentListQuery.parse(req.query);
   const targetUserId = await resolveTargetUserId(req, { paramName: 'userId' });
   const effectiveUserId = req.user!.role === 'ADMIN' ? (targetUserId ?? req.user!.userId) : req.user!.userId;
   const rawPage = Number(req.query.page);

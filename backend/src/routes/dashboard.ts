@@ -3,11 +3,15 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { sendSuccess } from '../utils/response';
 import { requireAuth, requireAdmin } from '../middleware/auth';
 import * as dashboardService from '../services/dashboardService';
+import { z } from 'zod';
 import { getCurrentFY } from '../utils/financialYear';
+import { optionalQueryFY } from '../utils/querySchemas';
 import { resolveTargetUserId } from '../utils/resolveTargetUserId';
 
 const router = Router();
 router.use(requireAuth);
+
+const fyQuery = z.object({ fy: optionalQueryFY() });
 
 router.get(
   '/summary',
@@ -16,7 +20,7 @@ router.get(
     const summary = await dashboardService.getDashboardSummary(
       req.user!.userId,
       req.user!.role,
-      req.query.fy as string,
+      fyQuery.parse(req.query).fy,
       targetUserId,
     );
     sendSuccess(res, summary);
@@ -30,7 +34,7 @@ router.get(
     const cashflow = await dashboardService.getCashflow(
       req.user!.userId,
       req.user!.role,
-      req.query.fy as string,
+      fyQuery.parse(req.query).fy,
       targetUserId,
     );
     sendSuccess(res, cashflow);
@@ -54,7 +58,7 @@ router.get(
   '/family-overview',
   requireAdmin,
   asyncHandler(async (req: Request, res: Response) => {
-    const fy = (req.query.fy as string) || getCurrentFY();
+    const fy = fyQuery.parse(req.query).fy ?? getCurrentFY();
     const result = await dashboardService.getFamilyOverview(fy);
     sendSuccess(res, result);
   }),
