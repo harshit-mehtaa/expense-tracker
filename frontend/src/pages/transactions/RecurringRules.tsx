@@ -353,10 +353,12 @@ export default function RecurringRulesPage({ viewUserId }: { viewUserId: string 
               <div className="flex items-center gap-1 shrink-0">
                 {/* A subscription owns this rule, so pause/edit/delete would 409. The row
                     still belongs here — it is real recurring money — but it is managed
-                    on its own page. */}
+                    on the Subscriptions tab. A Link (not a tab setter) keeps this page
+                    free of its parent: same pathname, so the Transactions page stays
+                    mounted with its member selection — and Back returns to Recurring. */}
                 {rule.subscriptionId ? (
                   <Link
-                    to="/subscriptions"
+                    to="/transactions?tab=subscriptions"
                     className="text-xs text-primary underline px-2 py-1 whitespace-nowrap"
                     title="Managed as a subscription"
                   >

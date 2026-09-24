@@ -115,6 +115,13 @@ images, then flips GHCR package visibility to public.
 - KNOWN GAP: `statementImportService.persistParsedStatement` (bank-statement import)
   doesn't route CASH the way `recurringService.ts` does — see vision.md tech debt.
 
+## Navigation & URL tabs (since 2026-09-25)
+- Sidebar (`Sidebar.tsx` NAV_GROUPS): Dashboard | Money | Wealth | Protection & Debt | Planning; Settings pinned.
+- URL tabs (`?tab=`, TABS/isTab pattern): Transactions (transactions/recurring/subscriptions — parent owns the
+  member selector, children take required `viewUserId`), Settings (general/categories/family — family ADMIN-only,
+  gated in Settings; no AdminRoute), Assets (assets/gold/real-estate). Redirects in App.tsx: /recurring
+  /subscriptions /family /categories /gold /real-estate. /reminders is a page (bell "View all" + Dashboard).
+
 ## Investments/Assets Pages (frontend/src/pages/investments/)
 - `/assets` hosts THREE URL-backed tabs (`TABS`/`TAB_META`/`isTab` in `Assets.tsx`,
   membership guard via `.includes` not object-lookup): default "Vehicles & Other",
@@ -134,17 +141,6 @@ images, then flips GHCR package visibility to public.
   viewUserId]`, same key `Gold.tsx` uses.
 
 ## Tax Centre (frontend/src/pages/tax/TaxCentre.tsx, backend/src/routes/tax.ts)
-- `TaxProfile` (schema.prisma:961-994, unique per user+fyYear) drives regime/HRA/
-  deductions/tax-paid. Editable form on the default "Tax Summary" tab upserts via
-  `POST /tax/profile` -> `taxService.upsertTaxProfile`. RHF hydrates through
-  `toProfileFormValues()`, which null-coalesces every field — never feed a raw server
-  row into `values` directly; a `Decimal?`/`String?` column returning `null` breaks
-  zod's all-or-nothing object parsing (fixed 2026-09-06 for `cityType`, the one field
-  with an enum-only, non-nullable zod type). `formState.errors` renders both inline and
-  as a form-level banner (the banner is mandatory: a conditionally-unmounted field, e.g.
-  `cityType` under NEW regime, has nowhere to show a per-field error). Do NOT add
-  `resetOptions:{keepDirtyValues:true}` to this form's `useForm` — tried once, reverted:
-  it preserves dirty state by field NAME across an identity change (switching
-  selectedFY/viewUserId), so an unsaved edit for one member can be silently shown as and
-  saved onto a DIFFERENT member's profile once both are cached. `values`'s default full
-  reset on every change is what's actually correct here.
+- `TaxProfile` (unique per user+fyYear) upserts via `POST /tax/profile`. RHF hydrates through
+  `toProfileFormValues()` (null-coalesces every field — never feed a raw row into `values`); keep the
+  form-level error banner; do NOT add `resetOptions:{keepDirtyValues:true}` (leaks edits across members/FYs).

@@ -6,7 +6,7 @@
  * backend coverage and 694 green frontend tests could not see that the form sent `""`
  * for cleared fields. These tests exist so that cannot happen twice.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -73,7 +73,7 @@ const handlers = (subscriptions: unknown[] = [NETFLIX]) => [
 
 describe('Subscriptions page — smoke', () => {
   it('shows loading, then the subscription', async () => {
-    renderPage(<SubscriptionsPage />, { route: '/subscriptions', handlers: handlers() });
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, { route: '/subscriptions', handlers: handlers() });
 
     expect(screen.getByText(/Loading subscriptions/i)).toBeInTheDocument();
     expect(await screen.findByText('Netflix')).toBeInTheDocument();
@@ -81,13 +81,13 @@ describe('Subscriptions page — smoke', () => {
   });
 
   it('shows a distinct empty state, not a loading state', async () => {
-    renderPage(<SubscriptionsPage />, { route: '/subscriptions', handlers: handlers([]) });
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, { route: '/subscriptions', handlers: handlers([]) });
 
     expect(await screen.findByText(/No subscriptions yet/i)).toBeInTheDocument();
   });
 
   it('surfaces price, annual cost and next renewal', async () => {
-    renderPage(<SubscriptionsPage />, { route: '/subscriptions', handlers: handlers() });
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, { route: '/subscriptions', handlers: handlers() });
     await screen.findByText('Netflix');
 
     // Annualised: 649 x 12 = 7,788 — the number that decides whether it is worth
@@ -98,14 +98,14 @@ describe('Subscriptions page — smoke', () => {
   });
 
   it('renders dates as dd/mm/yyyy', async () => {
-    renderPage(<SubscriptionsPage />, { route: '/subscriptions', handlers: handlers() });
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, { route: '/subscriptions', handlers: handlers() });
     await screen.findByText('Netflix');
 
     expect(screen.getByText('01/09/2026')).toBeInTheDocument();
   });
 
   it('links to the cancellation page', async () => {
-    renderPage(<SubscriptionsPage />, { route: '/subscriptions', handlers: handlers() });
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, { route: '/subscriptions', handlers: handlers() });
     await screen.findByText('Netflix');
 
     const link = screen.getByRole('link', { name: /how to cancel/i });
@@ -115,7 +115,7 @@ describe('Subscriptions page — smoke', () => {
   });
 
   it('shows the trial end date instead of a renewal while trialing', async () => {
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions',
       handlers: handlers([{
         ...NETFLIX,
@@ -130,7 +130,7 @@ describe('Subscriptions page — smoke', () => {
   });
 
   it('warns when a real charge exceeds the recorded price', async () => {
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions',
       handlers: handlers([{
         ...NETFLIX,
@@ -146,7 +146,7 @@ describe('Subscriptions page — smoke', () => {
   });
 
   it('offers Resume rather than Cancel once cancelled', async () => {
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions',
       handlers: handlers([{ ...NETFLIX, status: 'CANCELLED' }]),
     });
@@ -163,7 +163,7 @@ describe('Subscriptions page — submitted payload', () => {
     const user = userEvent.setup();
     let body: any = null;
 
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions',
       user: MEMBER_USER,
       handlers: [
@@ -199,7 +199,7 @@ describe('Subscriptions page — submitted payload', () => {
     let priceBody: any = null;
     let putCalled = false;
 
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions',
       user: MEMBER_USER,
       handlers: [
@@ -235,7 +235,7 @@ describe('Subscriptions page — submitted payload', () => {
     const user = userEvent.setup();
     let body: any = null;
 
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions',
       user: MEMBER_USER,
       handlers: [
@@ -264,7 +264,7 @@ describe('Subscriptions page — submitted payload', () => {
     const user = userEvent.setup();
     let cancelled = false;
 
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions',
       user: MEMBER_USER,
       handlers: [
@@ -290,7 +290,7 @@ describe('Subscriptions page — destructive and misleading actions', () => {
     const user = userEvent.setup();
     let deleted = false;
 
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions',
       user: MEMBER_USER,
       handlers: [
@@ -315,7 +315,7 @@ describe('Subscriptions page — destructive and misleading actions', () => {
     // case — it is metadata, now genuinely editable; see "editing the start date" below.
     const user = userEvent.setup();
 
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
     });
 
@@ -332,7 +332,7 @@ describe('Subscriptions page — destructive and misleading actions', () => {
     const user = userEvent.setup();
     let body: any = null;
 
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions',
       user: MEMBER_USER,
       handlers: [
@@ -359,7 +359,7 @@ describe('Subscriptions page — destructive and misleading actions', () => {
     // The service writes user-facing 409s that nothing was showing.
     const user = userEvent.setup();
 
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions',
       user: MEMBER_USER,
       handlers: [
@@ -391,18 +391,12 @@ describe('Subscriptions page — destructive and misleading actions', () => {
  * that shipped.
  */
 describe('Subscriptions page — as an ADMIN', () => {
-  it('offers a member selector, so the family-wide view is escapable', async () => {
-    renderPage(<SubscriptionsPage />, {
-      route: '/subscriptions', user: ADMIN_USER, handlers: handlers(),
-    });
-
-    await screen.findByText('Netflix');
-    expect(await screen.findByLabelText(/view:/i)).toBeInTheDocument();
-  });
-
+  // The member selector itself now lives on the Transactions page (this page is its
+  // Subscriptions tab) — see Transactions.test.tsx. Here: what the page does with the
+  // scope it's given.
   it('explains why there is no Add button while viewing the whole family', async () => {
     // Silently omitting the button left the page with no way to act and no reason given.
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions', user: ADMIN_USER, handlers: handlers(),
     });
 
@@ -411,25 +405,29 @@ describe('Subscriptions page — as an ADMIN', () => {
     expect(screen.queryByRole('button', { name: /add subscription/i })).not.toBeInTheDocument();
   });
 
-  it('shows the Add button once a member is chosen', async () => {
-    const user = userEvent.setup();
-    renderPage(<SubscriptionsPage />, {
+  it('shows the Add button when scoped to one member', async () => {
+    renderPage(<SubscriptionsPage viewUserId="u-member" />, {
       route: '/subscriptions', user: ADMIN_USER, handlers: handlers(),
     });
 
     await screen.findByText('Netflix');
-    await user.selectOptions(await screen.findByLabelText(/view:/i), 'u-member');
-
     expect(await screen.findByRole('button', { name: /add subscription/i })).toBeInTheDocument();
   });
 
-  it('a MEMBER gets the Add button immediately, with no selector to worry about', async () => {
-    renderPage(<SubscriptionsPage />, {
+  it('a MEMBER gets the Add button immediately', async () => {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
     });
 
     await screen.findByText('Netflix');
     expect(screen.getByRole('button', { name: /add subscription/i })).toBeInTheDocument();
+  });
+
+  it('has no member selector of its own (the parent page owns it)', async () => {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
+      route: '/subscriptions', user: ADMIN_USER, handlers: handlers(),
+    });
+    await screen.findByText('Netflix');
     expect(screen.queryByLabelText(/view:/i)).not.toBeInTheDocument();
   });
 });
@@ -450,7 +448,7 @@ describe('Subscriptions page — payment method', () => {
 
   it('offers a payment type, including netbanking', async () => {
     const user = userEvent.setup();
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
     });
     await openForm(user);
@@ -464,7 +462,7 @@ describe('Subscriptions page — payment method', () => {
 
   it('offers the accounts to pay from, named as they are elsewhere', async () => {
     const user = userEvent.setup();
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
     });
     await openForm(user);
@@ -478,7 +476,7 @@ describe('Subscriptions page — payment method', () => {
   it('sends the payment method when creating', async () => {
     const user = userEvent.setup();
     let body: any;
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions',
       user: MEMBER_USER,
       handlers: [
@@ -505,7 +503,7 @@ describe('Subscriptions page — payment method', () => {
   });
 
   it('shows how an existing subscription is paid', async () => {
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
     });
 
@@ -514,7 +512,7 @@ describe('Subscriptions page — payment method', () => {
   });
 
   it('says so plainly when the payment method is not set', async () => {
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions',
       user: MEMBER_USER,
       handlers: handlers([{
@@ -534,7 +532,7 @@ describe('Subscriptions page — payment method', () => {
     // The three fields live on the rule, not the subscription. Reading them from the
     // wrong place would blank the card on every unrelated edit.
     const user = userEvent.setup();
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
     });
 
@@ -548,7 +546,7 @@ describe('Subscriptions page — payment method', () => {
 
   it('only offers expense categories — a subscription only ever generates expenses', async () => {
     const user = userEvent.setup();
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
     });
     await screen.findByText('Netflix');
@@ -570,7 +568,7 @@ describe('Subscriptions page — payment method', () => {
         category: { id: 'cat-sal', name: 'Salary', icon: null, color: null },
       },
     };
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions', user: MEMBER_USER, handlers: handlers([legacy]),
     });
     await screen.findByText('Netflix');
@@ -593,7 +591,7 @@ describe('Subscriptions page — payment method', () => {
 describe('Subscriptions page — editing the start date', () => {
   it('is editable when editing an existing subscription', async () => {
     const user = userEvent.setup();
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
     });
 
@@ -607,7 +605,7 @@ describe('Subscriptions page — editing the start date', () => {
 
   it('amount stays locked, unlike start date', async () => {
     const user = userEvent.setup();
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions', user: MEMBER_USER, handlers: handlers(),
     });
 
@@ -623,7 +621,7 @@ describe('Subscriptions page — editing the start date', () => {
   it('sends the edited start date on save', async () => {
     const user = userEvent.setup();
     let body: any;
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions',
       user: MEMBER_USER,
       handlers: [
@@ -649,7 +647,7 @@ describe('Subscriptions page — editing the start date', () => {
 
   it('surfaces the backend\'s "before the next price change" rejection as a toast', async () => {
     const user = userEvent.setup();
-    renderPage(<SubscriptionsPage />, {
+    renderPage(<SubscriptionsPage viewUserId={undefined} />, {
       route: '/subscriptions',
       user: MEMBER_USER,
       handlers: [
@@ -671,5 +669,23 @@ describe('Subscriptions page — editing the start date', () => {
     await waitFor(() => {
       expect(screen.getAllByText(/before the next recorded price change/i).length).toBeGreaterThan(0);
     });
+  });
+});
+
+describe('Subscriptions page — keeps the Recurring tab in sync', () => {
+  it('a change to a subscription also refreshes recurring rules (a subscription owns its rule)', async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderPage(<SubscriptionsPage viewUserId={undefined} />, {
+      route: '/transactions?tab=subscriptions', user: MEMBER_USER,
+      handlers: [...handlers(), http.delete(url('/subscriptions/sub-1'), () => new HttpResponse(null, { status: 204 }))],
+    });
+    await screen.findByText('Netflix');
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(screen.getByRole('button', { name: /delete/i }));
+    await user.click(await screen.findByRole('button', { name: /^(delete|confirm)/i }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ['recurring-rules'] }));
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['subscriptions'] });
   });
 });

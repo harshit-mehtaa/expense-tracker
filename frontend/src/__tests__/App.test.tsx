@@ -12,7 +12,7 @@
  * unrelated bug — that mistake has cost this project a day before.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import React from 'react';
 import { Route, Routes, useLocation } from 'react-router-dom';
 import { AppShell } from '@/components/layout/AppShell';
@@ -155,28 +155,66 @@ describe('App routing — legacy /real-estate redirect', () => {
   });
 });
 
-describe('App routing — AdminRoute', () => {
-  it('renders a loader while auth resolves on an admin route', () => {
-    authState.isLoading = true;
-    renderPage(<App />, { route: '/family', handlers: shellHandlers() });
-    expect(screen.getByRole('status')).toBeInTheDocument();
+describe('App routing — legacy /family redirect (Family Members is now a Settings tab)', () => {
+  it('takes an ADMIN from /family to the Settings page\'s Family Members tab', async () => {
+    authState.user = ADMIN_USER;
+    authState.isAuthenticated = true;
+    renderPage(<><App /><LocationProbe /></>, { route: '/family', handlers: shellHandlers() });
+
+    expect(await screen.findByRole('heading', { level: 1, name: /^family members$/i })).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('/settings?tab=family');
   });
 
-  it('sends an unauthenticated visitor on an admin route to /login', async () => {
+  it('lands a MEMBER on Settings → General, with no admin page and no admin request', async () => {
+    authState.user = MEMBER_USER;
+    authState.isAuthenticated = true;
+    const adminRequests: string[] = [];
+    renderPage(<App />, {
+      route: '/family',
+      handlers: [
+        http.get(url('/admin/users'), ({ request }) => { adminRequests.push(request.url); return HttpResponse.json({ data: [] }); }),
+        http.get(url('/investments/exchange-rates'), () => HttpResponse.json({ data: [] })), // General tab's own data
+        ...shellHandlers(),
+      ],
+    });
+
+    expect(await screen.findByRole('heading', { name: /profile/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^family members$/i })).toBeNull();
+    expect(screen.queryByRole('tab', { name: /family/i })).toBeNull();
+    expect(adminRequests).toEqual([]);
+  });
+
+  it('still sends an unauthenticated visitor to /login', async () => {
     renderPage(<App />, { route: '/family', handlers: shellHandlers() });
     expect(await screen.findByText(/Welcome back/i)).toBeInTheDocument();
   });
+});
 
-  it('bounces a MEMBER away from an admin-only route', async () => {
-    authState.user = MEMBER_USER;
+describe('App routing — legacy /subscriptions redirect (Subscriptions is now a Transactions tab)', () => {
+  it('takes /subscriptions to the Transactions page\'s Subscriptions tab', async () => {
+    authState.user = ADMIN_USER;
     authState.isAuthenticated = true;
-    renderPage(<App />, { route: '/family', handlers: shellHandlers() });
-
-    // Redirected to "/" — the assertion that matters is that the admin page is NOT
-    // reachable, rather than what the landing page happens to render.
-    await waitFor(() => {
-      expect(screen.queryByRole('heading', { name: /Family Members/i })).toBeNull();
+    renderPage(<><App /><LocationProbe /></>, {
+      route: '/subscriptions',
+      handlers: [
+        http.get(url('/subscriptions'), () => HttpResponse.json({ data: [] })),
+        http.get(url('/transactions'), () => HttpResponse.json({ data: [], pagination: { total: 0, hasMore: false, nextCursor: null } })),
+        ...shellHandlers(),
+      ],
     });
+
+    expect(await screen.findByRole('heading', { level: 1, name: /subscriptions/i })).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('/transactions?tab=subscriptions');
+  });
+});
+
+describe('App routing — /reminders is still a page (reached from the bell and the Dashboard)', () => {
+  it('renders the Reminders page', async () => {
+    authState.user = ADMIN_USER;
+    authState.isAuthenticated = true;
+    renderPage(<><App /><LocationProbe /></>, { route: '/reminders', handlers: shellHandlers() });
+    expect(await screen.findByRole('heading', { level: 1, name: /reminders/i })).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('/reminders');
   });
 });
 

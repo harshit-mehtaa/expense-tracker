@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Repeat, Plus, Trash2, Edit2, X, ExternalLink, AlertTriangle, TrendingUp } from 'lucide-react';
+import { CalendarClock, Plus, Trash2, Edit2, X, ExternalLink, AlertTriangle, TrendingUp } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -225,10 +225,18 @@ function SubscriptionCard({
   );
 }
 
-export default function SubscriptionsPage() {
+/**
+ * Rendered as the Subscriptions tab of the Transactions page (/subscriptions redirects
+ * there). Whose data it shows comes from that page's member selector — `viewUserId` is a
+ * required prop, same reasoning as RecurringRulesPage: nothing can mount this without
+ * deciding the scope, and there is never a second, disagreeing selector on screen.
+ */
+export default function SubscriptionsPage({ viewUserId }: { viewUserId: string | undefined }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const { isAdmin, viewUserId, setViewUserId, members, isMembersLoading, isMembersError } = useMemberSelector();
+  // Role and member list (for the subtitle's name) only — never the hook's own selection
+  // state, which this page must not read in place of the `viewUserId` prop.
+  const { isAdmin, members } = useMemberSelector();
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Subscription | null>(null);
   const [pricingFor, setPricingFor] = useState<Subscription | null>(null);
@@ -273,7 +281,12 @@ export default function SubscriptionsPage() {
 
   const priceForm = useForm<PriceForm>({ resolver: zodResolver(priceSchema) });
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['subscriptions'] });
+  // A subscription owns a recurring rule (created/updated/cancelled with it), and the
+  // Recurring tab sits right next to this one — refresh both.
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['subscriptions'] });
+    qc.invalidateQueries({ queryKey: ['recurring-rules'] });
+  };
 
   /**
    * Without this, every failure is silent. The backend deliberately writes user-facing
@@ -372,14 +385,15 @@ export default function SubscriptionsPage() {
   const active = subscriptions.filter((s) => s.status !== 'CANCELLED');
   const totalPerYear = active.reduce((sum, s) => sum + (s.annualisedCost ?? 0), 0);
 
-  if (isLoading) return <div className="p-6 text-muted-foreground">Loading subscriptions…</div>;
+  // No p-6: this renders inside the Transactions page, which the app shell already pads.
+  if (isLoading) return <div className="text-muted-foreground">Loading subscriptions…</div>;
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Repeat className="h-6 w-6" /> Subscriptions
+            <CalendarClock className="h-6 w-6" /> Subscriptions
           </h1>
           <p className="text-sm text-muted-foreground">
             {active.length} active — <INRDisplay amount={totalPerYear} /> a year
@@ -387,31 +401,10 @@ export default function SubscriptionsPage() {
               ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
               : isAdmin ? ' · All Family' : ''}
           </p>
-          {/* Without this an ADMIN is stuck in the family-wide view, which is read-only —
-              a new subscription needs exactly one owner — and so had no way to add one. */}
-          {isAdmin && !isMembersLoading && (
-            <div className="flex items-center gap-2 mt-2">
-              <label htmlFor="subs-member-select" className="text-sm font-medium text-muted-foreground">View:</label>
-              {isMembersError ? (
-                <span className="text-xs text-destructive">Could not load members</span>
-              ) : (
-                <select
-                  id="subs-member-select"
-                  value={viewUserId ?? ''}
-                  onChange={(e) => setViewUserId(e.target.value || undefined)}
-                  className="rounded-md border bg-background px-3 py-1.5 text-sm"
-                >
-                  <option value="">All Family</option>
-                  {members.map((m) => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </select>
-              )}
-            </div>
-          )}
         </div>
         {/* A new subscription needs exactly one owner, so the family-wide view cannot
-            create one. Say so rather than simply omitting the button. */}
+            create one. Say so rather than simply omitting the button. ("Above" is the
+            Transactions page's member selector, which scopes this tab.) */}
         {isAdmin && !viewUserId ? (
           <p className="text-xs text-muted-foreground max-w-[16rem] text-right">
             Choose a member above to add a subscription.
@@ -425,7 +418,7 @@ export default function SubscriptionsPage() {
 
       {subscriptions.length === 0 ? (
         <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
-          <Repeat className="h-8 w-8 mx-auto mb-2 opacity-50" />
+          <CalendarClock className="h-8 w-8 mx-auto mb-2 opacity-50" />
           <p>No subscriptions yet.</p>
           <p className="text-sm">Add Netflix, Spotify, iCloud — anything that bills you on a schedule.</p>
         </div>

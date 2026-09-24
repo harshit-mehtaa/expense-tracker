@@ -8,35 +8,54 @@ import {
   Shield,
   Target,
   CreditCard,
-  Repeat,
   FileText,
-  Users,
   Settings,
   IndianRupee,
   Gem,
-  Bell,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useAuth } from '@/contexts/AuthContext';
 
-const NAV_ITEMS = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard', exact: true },
-  { to: '/reminders', icon: Bell, label: 'Reminders' },
-  { to: '/transactions', icon: Receipt, label: 'Transactions' },
-  { to: '/accounts', icon: Building2, label: 'Accounts & Deposits' },
-  { to: '/investments', icon: TrendingUp, label: 'Investments' },
-  { to: '/assets', icon: Gem, label: 'Assets' },
-  { to: '/insurance', icon: Shield, label: 'Insurance' },
-  { to: '/budgets', icon: Target, label: 'Budgets' },
-  { to: '/loans', icon: CreditCard, label: 'Loans & EMIs' },
-  { to: '/subscriptions', icon: Repeat, label: 'Subscriptions' },
-  { to: '/tax', icon: IndianRupee, label: 'Tax Centre' },
-  { to: '/reports', icon: FileText, label: 'Reports' },
+interface NavEntry { to: string; icon: ElementType; label: string; exact?: boolean }
+
+// Grouped under section labels. Moved out of the sidebar (old URLs redirect, App.tsx):
+// Reminders → the header bell's "View all"; Subscriptions → a Transactions tab;
+// Categories and Family Members (admin-only) → Settings tabs.
+const NAV_GROUPS: Array<{ label: string | null; items: NavEntry[] }> = [
+  { label: null, items: [{ to: '/', icon: LayoutDashboard, label: 'Dashboard', exact: true }] },
+  {
+    label: 'Money',
+    items: [
+      { to: '/transactions', icon: Receipt, label: 'Transactions' },
+      { to: '/budgets', icon: Target, label: 'Budgets' },
+    ],
+  },
+  {
+    label: 'Wealth',
+    items: [
+      { to: '/accounts', icon: Building2, label: 'Accounts & Deposits' },
+      { to: '/investments', icon: TrendingUp, label: 'Investments' },
+      { to: '/assets', icon: Gem, label: 'Assets' },
+    ],
+  },
+  {
+    // Not "Liabilities": elsewhere in the app that means loans only (net worth), and
+    // insurance never counts toward net worth.
+    label: 'Protection & Debt',
+    items: [
+      { to: '/loans', icon: CreditCard, label: 'Loans & EMIs' },
+      { to: '/insurance', icon: Shield, label: 'Insurance' },
+    ],
+  },
+  {
+    label: 'Planning',
+    items: [
+      { to: '/tax', icon: IndianRupee, label: 'Tax Centre' },
+      { to: '/reports', icon: FileText, label: 'Reports' },
+    ],
+  },
 ];
 
-const ADMIN_NAV_ITEMS = [
-  { to: '/family', icon: Users, label: 'Family Members' },
-];
+const groupId = (label: string) => `nav-group-${label.toLowerCase().replace(/[^a-z]+/g, '-')}`;
 
 // Renders an <li>; must be used inside a <ul>/<ol> or the browser default list
 // marker (disc) shows up, since Tailwind preflight only resets list-style on ul/ol.
@@ -70,8 +89,6 @@ function NavItem({ to, icon: Icon, label, exact }: { to: string; icon: ElementTy
 }
 
 export function Sidebar() {
-  const { user } = useAuth();
-
   return (
     <aside className="flex h-full w-60 flex-col bg-background border-r border-border/60">
       {/* Logo */}
@@ -82,25 +99,24 @@ export function Sidebar() {
         <span className="text-sm font-semibold tracking-tight text-foreground">Family Finance</span>
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto py-3 px-3">
-        <ul className="space-y-0.5">
-          {NAV_ITEMS.map((item) => (
-            <NavItem key={item.to} {...item} />
-          ))}
-
-          {user?.role === 'ADMIN' && (
-            <>
-              <li className="mt-5 mb-1.5 px-3">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
-                  Admin
+      {/* Navigation — each labelled group is a nested list named by its (non-heading) label */}
+      <nav aria-label="Main" className="flex-1 overflow-y-auto py-3 px-3">
+        <ul className="space-y-4">
+          {NAV_GROUPS.map(({ label, items }) => (
+            <li key={label ?? 'top'}>
+              {label && (
+                <p
+                  id={groupId(label)}
+                  className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60"
+                >
+                  {label}
                 </p>
-              </li>
-              {ADMIN_NAV_ITEMS.map((item) => (
-                <NavItem key={item.to} {...item} />
-              ))}
-            </>
-          )}
+              )}
+              <ul className="space-y-0.5" aria-labelledby={label ? groupId(label) : undefined}>
+                {items.map((item) => <NavItem key={item.to} {...item} />)}
+              </ul>
+            </li>
+          ))}
         </ul>
       </nav>
 

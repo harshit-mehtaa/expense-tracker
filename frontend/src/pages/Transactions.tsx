@@ -10,7 +10,7 @@ import { INRDisplay } from '@/components/shared/INRDisplay';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { PageLoader } from '@/components/shared/LoadingSpinner';
 import { BankLogo } from '@/components/shared/BankLogo';
-import { Receipt, Upload, X, CheckCircle, AlertCircle, Download, Pencil, Trash2, SlidersHorizontal, ChevronDown, Repeat, Paperclip, TrendingUp, Shield, Undo2, CreditCard, MoreHorizontal } from 'lucide-react';
+import { CalendarClock, Receipt, Upload, X, CheckCircle, AlertCircle, Download, Pencil, Trash2, SlidersHorizontal, ChevronDown, Repeat, Paperclip, TrendingUp, Shield, Undo2, CreditCard, MoreHorizontal } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,6 +28,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { useBudgetsVsActuals } from '@/hooks/useBudgetsVsActuals';
 import { useMemberSelector } from '@/hooks/useMemberSelector';
 import RecurringRulesPage from '@/pages/transactions/RecurringRules';
+import SubscriptionsPage from '@/pages/subscriptions/Subscriptions';
 import { formatINR } from '@/lib/indianFormat';
 import { avatarInitial, buildMemberColorMap, resolveAvatarColor } from '@/lib/memberAvatar';
 import { PAYMENT_MODES, PAYMENT_MODE_LABELS } from '@/lib/paymentModes';
@@ -2031,12 +2032,22 @@ async function downloadTransactionsCsv(fy: string, targetUserId?: string) {
 
 // Tab ids are the frozen URL contract (`?tab=<id>`) — mirrors the pattern in
 // Assets.tsx. Labels are free to change; ids are not.
-const TABS = ['transactions', 'recurring'] as const;
+const TABS = ['transactions', 'recurring', 'subscriptions'] as const;
 type TxTab = (typeof TABS)[number];
 const DEFAULT_TAB: TxTab = 'transactions';
 const TAB_META: Record<TxTab, { label: string; icon: LucideIcon }> = {
   transactions: { label: 'Transactions', icon: Receipt },
   recurring: { label: 'Recurring', icon: Repeat },
+  subscriptions: { label: 'Subscriptions', icon: CalendarClock },
+};
+// What the member selector's empty option means on each tab. Recurring can't express true
+// family-wide scope (recurring.ts's `targetUserId ?? userId` fallback means "no selection"
+// = the admin's own rules only), so "All Family" would misrepresent it there. A Record, so
+// a new tab can't compile without deciding.
+const EMPTY_SCOPE_LABEL: Record<TxTab, string> = {
+  transactions: 'All Family',
+  recurring: 'My Data',
+  subscriptions: 'All Family',
 };
 // Array membership, NOT an object-key lookup (`TAB_META[raw]`): a plain object's
 // inherited keys ('constructor', 'toString', '__proto__', ...) are truthy lookups too,
@@ -2301,9 +2312,9 @@ export default function TransactionsPage() {
     getNextPageParam: (lastPage) => lastPage.pagination.hasMore ? lastPage.pagination.nextCursor : undefined,
     // The actual cursor fix: on a query-key change, keep showing the previous page's
     // data instead of going straight to `pending`. Without this, EVERY keystroke changed
-    // the key, isLoading flipped true, and `if (isLoading) return <PageLoader />` threw
-    // away the entire page — search input included — so the input lost focus after one
-    // letter and a fresh, unfocused one mounted when the new results landed.
+    // the key, isLoading flipped true, and the (since removed) page-level
+    // `if (isLoading) return <PageLoader />` threw away the entire page — search input
+    // included — so the input lost focus after one letter.
     placeholderData: keepPreviousData,
   });
 
@@ -2311,12 +2322,13 @@ export default function TransactionsPage() {
   // list. Positional assignment means two members can never share a fallback colour —
   // which a name hash could not guarantee, and matters because the compact avatar drops
   // the name. An explicit colorTag still wins; this only fills the gap.
-  // Must stay above the `isLoading` early return: a hook called conditionally changes the
-  // hook count between renders and React throws once loading completes.
+  // Hooks stay unconditional: this component has no early return — the loader is scoped
+  // to the transactions list below. Don't reintroduce one; it would blank the other tabs.
   const memberFallbackColors = useMemo(() => buildMemberColorMap(members), [members]);
 
-  if (isLoading) return <PageLoader />;
-
+  // The loader stands in for the transactions tab's list only — never the whole page, or
+  // the Recurring/Subscriptions tabs (and deep links to them) would sit blank until a list
+  // they don't show had loaded.
   const transactions = data?.pages.flatMap((p) => p.data) ?? [];
   const total = data?.pages[0]?.pagination.total ?? 0;
   const showMemberIndicator = isAdmin && !viewUserId;
@@ -2340,7 +2352,8 @@ export default function TransactionsPage() {
           <h1 className="text-2xl font-bold">Transactions</h1>
           {activeTab === 'transactions' && (
             <p className="text-muted-foreground">
-              FY {selectedFY} · {total} transactions
+              {/* Not "0" while the first page is still loading. */}
+              FY {selectedFY} · {isLoading ? '…' : total} transactions
               {isAdmin && viewUserId
                 ? ` · ${members.find((m) => m.id === viewUserId)?.name ?? 'Member'}`
                 : isAdmin ? ' · All Family' : ''}
@@ -2363,11 +2376,7 @@ export default function TransactionsPage() {
                   onChange={(e) => setViewUserId(e.target.value || undefined)}
                   className="rounded-md border bg-background px-3 py-1.5 text-sm"
                 >
-                  {/* Recurring can't express true family-wide scope (recurring.ts's
-                      `targetUserId ?? userId` fallback means "no selection" = the
-                      admin's own rules only), so the empty option's label must be
-                      tab-aware — "All Family" would misrepresent what that tab shows. */}
-                  <option value="">{activeTab === 'recurring' ? 'My Data' : 'All Family'}</option>
+                  <option value="">{EMPTY_SCOPE_LABEL[activeTab]}</option>
                   {members.map((m) => (
                     <option key={m.id} value={m.id}>{m.name}</option>
                   ))}
@@ -2420,6 +2429,7 @@ export default function TransactionsPage() {
       </div>
 
       {activeTab === 'recurring' && <RecurringRulesPage viewUserId={viewUserId} />}
+      {activeTab === 'subscriptions' && <SubscriptionsPage viewUserId={viewUserId} />}
 
       {/* Filter bar */}
       {activeTab === 'transactions' && showFilters && (
@@ -2608,7 +2618,8 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      {activeTab === 'transactions' && (transactions.length === 0 ? (
+      {activeTab === 'transactions' && isLoading && <PageLoader />}
+      {activeTab === 'transactions' && !isLoading && (transactions.length === 0 ? (
         <EmptyState
           icon={Receipt}
           title="No transactions yet"

@@ -11,9 +11,7 @@ import InvestmentsPage from '@/pages/investments/Investments';
 import InsurancePage from '@/pages/insurance/Insurance';
 import BudgetsPage from '@/pages/budgets/Budgets';
 import LoansPage from '@/pages/loans/Loans';
-import SubscriptionsPage from '@/pages/subscriptions/Subscriptions';
 import TaxCentrePage from '@/pages/tax/TaxCentre';
-import FamilyMembersPage from '@/pages/admin/FamilyMembers';
 import ReportsPage from '@/pages/admin/Reports';
 import SettingsPage from '@/pages/Settings';
 import AssetsPage from '@/pages/investments/Assets';
@@ -27,14 +25,6 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (user?.mustChangePassword && location.pathname !== '/change-password') {
     return <Navigate to="/change-password" replace />;
   }
-  return <>{children}</>;
-}
-
-function AdminRoute({ children }: { children: React.ReactNode }) {
-  const { user, isLoading } = useAuth();
-  if (isLoading) return <PageLoader />;
-  if (!user) return <Navigate to="/login" replace />;
-  if (user.role !== 'ADMIN') return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -64,22 +54,16 @@ export default function App() {
         <Route path="insurance" element={<InsurancePage />} />
         <Route path="budgets" element={<BudgetsPage />} />
         <Route path="loans/*" element={<LoansPage />} />
-        <Route path="subscriptions" element={<SubscriptionsPage />} />
+        {/* Subscriptions moved under Transactions; keep old links and bookmarks working. */}
+        <Route path="subscriptions" element={<Navigate to="/transactions?tab=subscriptions" replace />} />
         <Route path="tax/*" element={<TaxCentrePage />} />
         <Route path="profit-loss" element={<Navigate to="/reports" replace />} />
         <Route path="settings" element={<SettingsPage />} />
         {/* Categories moved under Settings; keep old links and bookmarks working. */}
         <Route path="categories" element={<Navigate to="/settings?tab=categories" replace />} />
 
-        {/* Admin-only routes */}
-        <Route
-          path="family"
-          element={
-            <AdminRoute>
-              <FamilyMembersPage />
-            </AdminRoute>
-          }
-        />
+        {/* Family Members moved under Settings as an admin-only tab (gated there). */}
+        <Route path="family" element={<Navigate to="/settings?tab=family" replace />} />
         <Route path="reports" element={<ReportsPage />} />
       </Route>
 

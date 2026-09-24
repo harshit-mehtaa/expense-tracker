@@ -16,7 +16,7 @@ import { http, HttpResponse } from 'msw';
 import SettingsPage from '@/pages/Settings';
 import { renderPage, failOnConsoleError, SearchParamsProbe } from '../support/renderPage';
 import { url } from '../support/handlers';
-import { ADMIN_USER } from '../support/fixtures';
+import { ADMIN_USER, MEMBER_USER } from '../support/fixtures';
 
 failOnConsoleError();
 
@@ -194,5 +194,32 @@ describe('Settings page — tabs (Categories lives here)', () => {
   it('falls back to General for an unknown tab', async () => {
     renderPage(<SettingsPage />, { route: '/settings?tab=constructor', handlers: rateHandlers() });
     expect(await screen.findByRole('heading', { name: /profile/i })).toBeInTheDocument();
+  });
+});
+
+describe('Settings page — admin-only Family Members tab', () => {
+  const adminUsers = (seen: string[]) => http.get(url('/admin/users'), ({ request }) => {
+    seen.push(request.url);
+    return HttpResponse.json({ data: [{ id: 'u1', name: 'Asha', email: 'asha@example.com', role: 'ADMIN', isActive: true }] });
+  });
+
+  it('an ADMIN sees the Family Members tab, and ?tab=family shows the roster', async () => {
+    const seen: string[] = [];
+    renderPage(<SettingsPage />, { route: '/settings?tab=family', handlers: [adminUsers(seen), ...rateHandlers()], user: ADMIN_USER });
+
+    expect(await screen.findByRole('tab', { name: /family members/i })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByRole('heading', { level: 1, name: /^family members$/i })).toBeInTheDocument();
+    expect(await screen.findByText('asha@example.com')).toBeInTheDocument();
+  });
+
+  it('a MEMBER has no Family Members tab, and ?tab=family shows General without any admin request', async () => {
+    const seen: string[] = [];
+    renderPage(<SettingsPage />, { route: '/settings?tab=family', handlers: [adminUsers(seen), ...rateHandlers()], user: MEMBER_USER });
+
+    expect(await screen.findByRole('heading', { name: /profile/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /general/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('tab', { name: /family members/i })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /^family members$/i })).toBeNull();
+    expect(seen).toEqual([]);
   });
 });

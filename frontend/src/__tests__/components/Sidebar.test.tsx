@@ -5,7 +5,7 @@
  * have a ul/ol ancestor, or the marker silently reappears.
  */
 import { describe, it, expect } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { renderPage } from '../support/renderPage';
 import { ADMIN_USER, MEMBER_USER } from '../support/fixtures';
@@ -37,6 +37,46 @@ describe('Sidebar', () => {
 
       unmount();
     }
+  });
+
+  it('groups the navigation under section labels, each naming its own list of links', async () => {
+    for (const user of [ADMIN_USER, MEMBER_USER]) {
+      const { unmount } = renderPage(<Sidebar />, { user });
+      await waitFor(() => expect(screen.getByText('Settings')).toBeInTheDocument());
+
+      const nav = screen.getByRole('navigation', { name: 'Main' });
+      const group = (name: string) => within(within(nav).getByRole('list', { name }))
+        .getAllByRole('link').map((l) => l.textContent);
+      expect(group('Money')).toEqual(['Transactions', 'Budgets']);
+      expect(group('Wealth')).toEqual(['Accounts & Deposits', 'Investments', 'Assets']);
+      expect(group('Protection & Debt')).toEqual(['Loans & EMIs', 'Insurance']);
+      expect(group('Planning')).toEqual(['Tax Centre', 'Reports']);
+      expect(within(nav).getByRole('link', { name: /^dashboard$/i })).toHaveAttribute('href', '/');
+
+      unmount();
+    }
+  });
+
+  it('has no Reminders, Subscriptions or Family Members items, and no Admin block', async () => {
+    for (const user of [ADMIN_USER, MEMBER_USER]) {
+      const { unmount } = renderPage(<Sidebar />, { user });
+      await waitFor(() => expect(screen.getByText('Settings')).toBeInTheDocument());
+
+      const hrefs = screen.queryAllByRole('link').map((l) => l.getAttribute('href'));
+      for (const moved of ['/reminders', '/subscriptions', '/family']) expect(hrefs).not.toContain(moved);
+      expect(screen.queryByText(/^admin$/i)).toBeNull();
+      expect(screen.getByRole('link', { name: /^settings$/i })).toHaveAttribute('href', '/settings');
+
+      unmount();
+    }
+  });
+
+  it('keeps Transactions and Settings highlighted on their tab URLs', async () => {
+    const { unmount } = renderPage(<Sidebar />, { route: '/transactions?tab=subscriptions' });
+    expect(await screen.findByRole('link', { name: /^transactions$/i })).toHaveAttribute('aria-current', 'page');
+    unmount();
+    renderPage(<Sidebar />, { route: '/settings?tab=family' });
+    expect(await screen.findByRole('link', { name: /^settings$/i })).toHaveAttribute('aria-current', 'page');
   });
 
   it('has no dedicated Categories nav item — Categories moved under Settings', async () => {

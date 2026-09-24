@@ -349,6 +349,80 @@ describe('Recurring tab — category picker follows the rule type', () => {
   });
 });
 
+describe('Subscriptions tab', () => {
+  const SUB = {
+    id: 'sub-1', userId: 'u-member', name: 'Netflix', status: 'ACTIVE', category: null, cancelledAt: null,
+    trialEndDate: null, startDate: '2025-01-01T00:00:00.000Z', cancelReason: null, notes: null,
+    prices: [{ id: 'p-1', amount: 649, effectiveFrom: '2025-01-01T00:00:00.000Z', note: null }],
+    currentPrice: 649, annualisedCost: 7788, nextRenewalDate: '2026-09-01T00:00:00.000Z',
+    recurringRule: { id: 'rule-1', frequency: 'MONTHLY', nextRunDate: '2026-09-01T00:00:00.000Z', isActive: true, paymentMode: null, bankAccountId: null, categoryId: null, bankAccount: null, category: null },
+    usage: { chargeCount: 0, totalPaid: 0, averageCharge: 0, firstChargeDate: null, lastChargeDate: null, priceMismatch: null },
+  };
+  const subsHandler = (seen: (string | null)[] = []) => http.get(url('/subscriptions'), ({ request }) => {
+    seen.push(new URL(request.url).searchParams.get('targetUserId'));
+    return HttpResponse.json({ data: [SUB] });
+  });
+
+  it('mounts Subscriptions under Transactions with ONE member selector, whose empty option means the whole family', async () => {
+    renderPage(<TransactionsPage />, { route: '/transactions?tab=subscriptions', handlers: [subsHandler(), ...txHandlers()] });
+
+    expect(await screen.findByRole('heading', { level: 1, name: /subscriptions/i })).toBeInTheDocument();
+    expect(await screen.findByText('Netflix')).toBeInTheDocument();
+    expect(screen.getAllByLabelText(/view:/i)).toHaveLength(1);
+    expect(within(screen.getByLabelText(/view:/i)).getByRole('option', { name: 'All Family' })).toHaveValue('');
+    expect(screen.getByText(/choose a member above/i)).toBeInTheDocument();
+  });
+
+  it('scopes the list to the member chosen on Transactions, and then allows adding', async () => {
+    const user = userEvent.setup();
+    const seen: (string | null)[] = [];
+    renderPage(<TransactionsPage />, { route: '/transactions?tab=subscriptions', handlers: [subsHandler(seen), ...txHandlers()] });
+    await screen.findByText('Netflix');
+
+    await user.selectOptions(screen.getByLabelText(/view:/i), 'u-member');
+
+    await waitFor(() => expect(seen).toContain('u-member'));
+    expect(await screen.findByRole('button', { name: /add subscription/i })).toBeInTheDocument();
+  });
+
+  it('is not blanked while the (unrelated) transactions list is still loading', async () => {
+    renderPage(<TransactionsPage />, {
+      route: '/transactions?tab=subscriptions',
+      handlers: [
+        subsHandler(),
+        http.get(url('/transactions'), () => new Promise<never>(() => {})), // never resolves
+        ...txHandlers(),
+      ],
+    });
+    expect(await screen.findByText('Netflix')).toBeInTheDocument();
+  });
+
+  it('does not claim "0 transactions" while the list is still loading', async () => {
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [http.get(url('/transactions'), () => new Promise<never>(() => {})), ...txHandlers()],
+    });
+    expect(await screen.findByText(/… transactions/)).toBeInTheDocument();
+    expect(screen.queryByText(/\b0 transactions/)).toBeNull();
+  });
+
+  it('"Manage subscription" on a subscription-owned recurring rule switches to this tab in place', async () => {
+    const user = userEvent.setup();
+    renderPage(<><TransactionsPage /><SearchParamsProbe /></>, {
+      route: '/transactions?tab=recurring',
+      handlers: [
+        http.get(url('/recurring'), () => HttpResponse.json({ data: [SUBSCRIPTION_RULE] })),
+        subsHandler(),
+        ...txHandlers(),
+      ],
+    });
+    await user.click(await screen.findByRole('link', { name: /manage subscription/i }));
+
+    expect(await screen.findByRole('heading', { level: 1, name: /subscriptions/i })).toBeInTheDocument();
+    expect(screen.getByTestId('search-params')).toHaveTextContent('tab=subscriptions');
+  });
+});
+
 describe('Recurring tab — subscription-owned rules', () => {
   it('offers a link to the subscription instead of edit/delete controls', async () => {
     renderPage(<TransactionsPage />, {
@@ -362,7 +436,7 @@ describe('Recurring tab — subscription-owned rules', () => {
     expect(await screen.findByText('Netflix')).toBeInTheDocument();
 
     const link = screen.getByRole('link', { name: /manage subscription/i });
-    expect(link).toHaveAttribute('href', '/subscriptions');
+    expect(link).toHaveAttribute('href', '/transactions?tab=subscriptions');
 
     expect(screen.queryByTitle('Edit')).not.toBeInTheDocument();
     expect(screen.queryByTitle('Delete')).not.toBeInTheDocument();

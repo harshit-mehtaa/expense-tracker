@@ -21,8 +21,8 @@ export const ALERT_TYPE_ROUTE: Record<UpcomingAlert['type'], string> = {
   FD_MATURITY: '/investments',
   RD_MATURITY: '/investments',
   INSURANCE_PREMIUM: '/insurance',
-  SUBSCRIPTION_TRIAL: '/subscriptions',
-  SUBSCRIPTION_RENEWAL: '/subscriptions',
+  SUBSCRIPTION_TRIAL: '/transactions?tab=subscriptions',
+  SUBSCRIPTION_RENEWAL: '/transactions?tab=subscriptions',
   ADVANCE_TAX: '/tax',
   BUDGET_ALERT: '/budgets',
 };

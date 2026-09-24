@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useSearchParams } from 'react-router-dom';
-import { User, Globe, RefreshCw, LogOut, SlidersHorizontal, Tag } from 'lucide-react';
+import { User, Globe, RefreshCw, LogOut, SlidersHorizontal, Tag, Users } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,6 +14,7 @@ import api from '@/lib/api';
 import { formatDate } from '@/lib/dateFormat';
 import { cn } from '@/lib/utils';
 import CategoriesPage from '@/pages/admin/Categories';
+import FamilyMembersPage from '@/pages/admin/FamilyMembers';
 
 const profileSchema = z.object({
   name: z.string().min(1, 'Required'),
@@ -76,15 +77,20 @@ function ExchangeRateSettings() {
   );
 }
 
-// URL-backed tabs (?tab=categories), same pattern as Assets.tsx. Categories moved here from
-// its own sidebar item; /categories redirects to this tab (App.tsx).
-const TABS = ['general', 'categories'] as const;
+// URL-backed tabs (?tab=…), same pattern as Assets.tsx. Categories and Family Members moved
+// here from their own sidebar items; /categories and /family redirect to them (App.tsx).
+const TABS = ['general', 'categories', 'family'] as const;
 type SettingsTab = (typeof TABS)[number];
 const DEFAULT_TAB: SettingsTab = 'general';
 const TAB_META: Record<SettingsTab, { label: string; icon: LucideIcon }> = {
   general: { label: 'General', icon: SlidersHorizontal },
   categories: { label: 'Categories', icon: Tag },
+  family: { label: 'Family Members', icon: Users },
 };
+// The only gate on these tabs (the /family route no longer has its own): for anyone else
+// the tab isn't listed and its URL shows General, so the page never mounts. The API
+// behind it is admin-only regardless.
+const ADMIN_ONLY_TABS: ReadonlySet<SettingsTab> = new Set(['family']);
 
 // Array membership, not an object-key lookup, so `?tab=constructor` isn't accepted.
 function isTab(v: string): v is SettingsTab {
@@ -92,9 +98,13 @@ function isTab(v: string): v is SettingsTab {
 }
 
 export default function SettingsPage() {
+  const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
+  const visibleTabs = TABS.filter((tab) => !ADMIN_ONLY_TABS.has(tab) || user?.role === 'ADMIN');
   const rawTab = searchParams.get('tab');
-  const activeTab: SettingsTab = rawTab && isTab(rawTab) ? rawTab : DEFAULT_TAB;
+  // Not rewritten in the URL when hidden: if auth resolves after the first render, an
+  // admin's ?tab=family then shows the right tab without a redirect dance.
+  const activeTab: SettingsTab = rawTab && isTab(rawTab) && visibleTabs.includes(rawTab) ? rawTab : DEFAULT_TAB;
   function setActiveTab(tab: SettingsTab) {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -109,7 +119,7 @@ export default function SettingsPage() {
       <h1 className="text-2xl font-bold">Settings</h1>
 
       <div role="tablist" aria-label="Settings sections" className="flex border-b border-border">
-        {TABS.map((tab) => {
+        {visibleTabs.map((tab) => {
           const Icon = TAB_META[tab].icon;
           return (
             <button
@@ -132,10 +142,17 @@ export default function SettingsPage() {
         })}
       </div>
 
-      {activeTab === 'categories' ? <CategoriesPage /> : <GeneralSettings />}
+      {TAB_CONTENT[activeTab]()}
     </div>
   );
 }
+
+// A map, not a ternary: a new tab id can't silently fall through to General.
+const TAB_CONTENT: Record<SettingsTab, () => JSX.Element> = {
+  general: () => <GeneralSettings />,
+  categories: () => <CategoriesPage />,
+  family: () => <FamilyMembersPage />,
+};
 
 function GeneralSettings() {
   const { user, logout } = useAuth();

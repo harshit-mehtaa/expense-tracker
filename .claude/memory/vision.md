@@ -56,26 +56,26 @@
   `categories.ts` 11, `budgets.ts` 8, one each in 5 others) — push into services when
   touched. `resolveTargetUserId` is hand-duplicated in 3 route files instead of using
   the shared util; only checks `deletedAt`.
-- [low] No backend lint AND no `typecheck:tests` (unlike frontend). Dashboard snapshot
-  month key uses UTC not IST; `netWorth` (Reports.tsx) ignores `selectedFY` AND
-  conflates loading/error into a permanent "Loading net worth data..." — no banner.
-  Dashboard's `cashflow`/`alerts`/`budgetActuals`/`netWorthHistory` are eager+ungated
-  with no `isError` (same defect class as the just-fixed `spendingByCat`); `summary`
-  is the largest instance — a failed fetch paints ₹0 across every StatCard.
+- [low] No backend lint/`typecheck:tests`. Dashboard snapshot month key is UTC not IST; Reports
+  `netWorth` ignores `selectedFY` and shows loading forever on error; Dashboard `summary`/`cashflow`/
+  `alerts`/`budgetActuals`/`netWorthHistory` have no `isError` (a failed fetch paints ₹0).
 - [low] Residual cache-invalidation gaps: `trial-balance` invalidated by nothing; Loans/
   Accounts reconciliation don't invalidate dashboard/reports (see `queryInvalidation.ts`).
 - [medium] Pre-existing schema drift (`migrate diff`, 2026-09-24): CategoryType enum, Category
   idx/FK, Asset.updatedAt default, RecurringRule FK. No CI drift check. Separate task.
 - [low] Category rules: timed-out regex rules tracked in-process only, not shown in UI;
   recurring catch-up loads rules per due template (N+1, only when due).
+- [low] Nav cleanup (2026-09-25): FamilyMembers mutations invalidate ['admin-users'] only, not
+  ['family-members'] → new member missing from selectors ≤5 min; ErrorBoundary keyed on pathname only
+  (a crash in one ?tab= persists across tabs); embedded tab pages keep their own <h1> (→ PageHeader).
 - [low] Category↔type invariant (2026-09-24) is app-level only: retype-vs-create race (check and
   write not atomic; no DB trigger); other deployments may hold legacy categorized TRANSFER
   rules/legs (local DB: 0). Any MEMBER can retype/merge/delete shared categories (pre-existing).
 - [low] `CashflowMonth`/`UpcomingAlert`/`useAccounts`/`useCategories`/`selectedMemberName`
   each duplicated instead of shared; `computeTotalLiabilities` has an undocumented endDate
   filter excluding overdue loans; `!isViewingFamilyWide` gates create buttons across 10
-  pages. No modal has role="dialog"/focus-trap/Escape/aria-live on errors; `Sidebar.tsx`
-  `<nav>` lacks aria-label; BUDGET_ALERT shows LIMIT as "due".
+  pages. No modal has role="dialog"/focus-trap/Escape/aria-live on errors; BUDGET_ALERT
+  shows LIMIT as "due".
 - [medium] Opening-balance anchor (2026-09-18): `currentBalance` is a cached aggregate
   with NO verifier — 14 write sites keep it correct by convention, nothing cross-checks.
   `NetWorthSnapshot` deliberately left stale after a past-dated anchor (no per-account
