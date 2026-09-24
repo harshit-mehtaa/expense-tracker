@@ -1,0 +1,39 @@
+# Dependabot — security updates only, grouped so a runtime fix never ships bundled with
+# a dev-tooling major. PR #7 bundled multer/morgan fixes with vitest 5 / vite 8 in one
+# group; the majors failed `npm ci` (ERESOLVE) and blocked every fix in the PR.
+#
+# open-pull-requests-limit: 0 disables scheduled VERSION updates; security update PRs
+# are not subject to that limit, so they still arrive. `schedule` is required anyway.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      backend-runtime-security:
+        applies-to: security-updates
+        dependency-type: production
+      backend-dev-security:
+        applies-to: security-updates
+        dependency-type: development
+        # Test/build toolchain fixes often need a MAJOR (vitest, vite); keep them out of
+        # the group so one breaking major arrives as its own PR instead of blocking the rest.
+        exclude-patterns: ["vite", "vitest", "@vitest/*", "@vitejs/*"]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      frontend-runtime-security:
+        applies-to: security-updates
+        dependency-type: production
+      frontend-dev-security:
+        applies-to: security-updates
+        dependency-type: development
+        # Test/build toolchain fixes often need a MAJOR (vitest, vite); keep them out of
+        # the group so one breaking major arrives as its own PR instead of blocking the rest.
+        exclude-patterns: ["vite", "vitest", "@vitest/*", "@vitejs/*"]
