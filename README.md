@@ -32,7 +32,7 @@ images. Everything runs in containers — no Node, npm, or PostgreSQL needed on 
 - 2 GB RAM available for containers, ~3 GB disk for images
 - An internet connection for the first build
 
-No registry login is required. The base images (`ghcr.io/harshit-mehtaa/node:20-alpine`,
+No registry login is required. The base images (`ghcr.io/harshit-mehtaa/node:24-alpine`,
 `ghcr.io/harshit-mehtaa/nginx:alpine`) are public, as are `postgres:16-alpine` and
 `nginx:alpine` from Docker Hub.
 
@@ -41,7 +41,7 @@ No registry login is required. The base images (`ghcr.io/harshit-mehtaa/node:20-
 > are public and no login is needed. Pull the bases once, then build again:
 >
 > ```bash
-> docker pull ghcr.io/harshit-mehtaa/node:20-alpine
+> docker pull ghcr.io/harshit-mehtaa/node:24-alpine
 > docker pull ghcr.io/harshit-mehtaa/nginx:alpine
 > docker compose build
 > ```
@@ -73,7 +73,7 @@ node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"   # JWT
 ```
 
 No Node on the host? Use `openssl rand -hex 64`, or
-`docker run --rm ghcr.io/harshit-mehtaa/node:20-alpine node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"`.
+`docker run --rm ghcr.io/harshit-mehtaa/node:24-alpine node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"`.
 
 Then fill in `.env`. A complete working local configuration:
 

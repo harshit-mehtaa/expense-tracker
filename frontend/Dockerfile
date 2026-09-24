@@ -1,5 +1,5 @@
 # ── Stage 1: builder (used for dev) ──────────────────────────────────────
-FROM ghcr.io/harshit-mehtaa/node:20-alpine AS builder
+FROM ghcr.io/harshit-mehtaa/node:24-alpine AS builder
 
 WORKDIR /app
 

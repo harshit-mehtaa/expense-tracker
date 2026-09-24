@@ -28,7 +28,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: |
             backend/package-lock.json
@@ -106,8 +106,8 @@ jobs:
             --tag ${{ env.REGISTRY }}/${{ env.OWNER }}/postgres:16-alpine \
             postgres:16-alpine
           docker buildx imagetools create \
-            --tag ${{ env.REGISTRY }}/${{ env.OWNER }}/node:20-alpine \
-            node:20-alpine
+            --tag ${{ env.REGISTRY }}/${{ env.OWNER }}/node:24-alpine \
+            node:24-alpine
           docker buildx imagetools create \
             --tag ${{ env.REGISTRY }}/${{ env.OWNER }}/nginx:alpine \
             nginx:alpine
