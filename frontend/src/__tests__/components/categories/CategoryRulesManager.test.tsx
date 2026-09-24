@@ -11,7 +11,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { http, HttpResponse } from 'msw';
+import { http, HttpResponse, type RequestHandler } from 'msw';
+import type { CategoryLike } from '@/lib/categoryUtils';
 import { useState } from 'react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -44,7 +45,7 @@ const rulesHandler = (data: CategoryRule[] = RULES) =>
   http.get(url('/category-rules'), () => HttpResponse.json({ data }));
 
 function renderManager(
-  opts: { handlers?: Parameters<typeof renderPage>[1]['handlers']; categories?: typeof CATEGORIES; targetUserId?: string } = {},
+  opts: { handlers?: RequestHandler[]; categories?: CategoryLike[]; targetUserId?: string } = {},
 ) {
   return renderPage(
     <CategoryRulesManager categories={opts.categories ?? CATEGORIES} targetUserId={opts.targetUserId} />,
@@ -92,7 +93,7 @@ describe('CategoryRulesManager — list', () => {
 
   it('only offers INCOME/EXPENSE categories as rule targets', async () => {
     renderManager({
-      categories: [...CATEGORIES, { id: 'cat-asset', name: 'Gold', type: 'ASSET', parentId: null, colorHex: null, iconKey: null }],
+      categories: [...CATEGORIES, { id: 'cat-asset', name: 'Gold', type: 'ASSET', parentId: null }],
     });
     const select = await screen.findByLabelText('Category');
     expect(within(select).getByRole('option', { name: 'Food' })).toBeInTheDocument();

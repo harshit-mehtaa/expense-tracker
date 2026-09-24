@@ -49,3 +49,13 @@ from `node_modules` (what's installed) never `package.json` (what's requested), 
 the dependency has multiple internal code paths gated on environment (browser vs Node,
 adapter-specific), verify against the actual runtime target the bug report is about, not
 whichever path is easiest to execute a repro against.
+
+### 2026-09-24 | tooling | Frequency: 1
+Pushed 7 commits whose local "full gate" was backend tsc + test:coverage and frontend lint +
+`npx tsc --noEmit` + test:coverage — but CI's quality job ALSO runs `npm run typecheck:tests`
+(frontend, `tsconfig.test.json`), which the app tsconfig excludes. Two type-only errors in a
+new test file (an index into an optional param type; a fixture literal with extra props)
+passed every local run and failed CI, so no images were built. Fix: the local gate is
+exactly the CI step list — read `.github/workflows/docker-publish.yml` "Tests, types & lint"
+and run every `run:` in it (backend: tsc, test:coverage; frontend: lint, tsc,
+typecheck:tests, test:coverage) before any push.
