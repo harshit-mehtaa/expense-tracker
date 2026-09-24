@@ -9,7 +9,7 @@ const envSchema = z.object({
   FRONTEND_URL: z.string().default('http://localhost'),
   COOKIE_DOMAIN: z.string().default('localhost'),
   // Injectable so tests can point at a writable temp dir. multer({ dest }) calls
-  // mkdirp.sync at CONSTRUCTION time, and multer is externalized CJS so vi.mock('fs')
+  // fs.mkdirSync at CONSTRUCTION time, and multer is externalized CJS so vi.mock('fs')
   // cannot intercept it — a hardcoded '/app/uploads' makes any module that constructs
   // multer unimportable in tests (EROFS/ENOENT). Docker creates /app/uploads (Dockerfile).
   // .min(1) matters: .default() only fires on undefined, so a bare `UPLOADS_DIR=` in

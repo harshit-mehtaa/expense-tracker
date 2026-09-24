@@ -249,6 +249,42 @@ describe('POST /api/transactions/import — fileFilter', () => {
 
 // ═══ Validation ═══════════════════════════════════════════════════════════════
 
+describe('POST /api/transactions/import — multer limits (real multer)', () => {
+  const LIMIT = 15 * 1024 * 1024;
+
+  it('rejects a statement one byte over 15MB with 413 JSON and leaves no temp file', async () => {
+    const before = uploadsDirFiles();
+
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.alloc(LIMIT + 1), { filename: 'big.csv', contentType: 'text/csv' });
+
+    expect(res.status).toBe(413);
+    expect(res.body).toEqual({ success: false, message: 'File too large', code: 'FILE_TOO_LARGE' });
+    expect(parseCSV).not.toHaveBeenCalled();
+    expect(uploadsDirFiles()).toEqual(before);
+  });
+
+  it('accepts a statement of exactly 15MB (multer 2 treats the limit as inclusive)', async () => {
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.alloc(LIMIT), { filename: 'edge.csv', contentType: 'text/csv' });
+
+    expect(res.status).toBe(201);
+    expect(parseCSV).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a file sent under an unexpected field name with 400 UPLOAD_REJECTED', async () => {
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('other', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('UPLOAD_REJECTED');
+    expect(parseCSV).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/transactions/import — validation', () => {
   it('returns 400 when no file is attached', async () => {
     const res = await request(mountImportRouter()).post('/api/transactions/import');

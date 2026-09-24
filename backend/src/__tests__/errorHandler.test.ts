@@ -7,9 +7,10 @@
  * No mocking needed — errorHandler has no external dependencies beyond AppError and Zod.
  * NODE_ENV=test in the Vitest env, so isProd=false → stack traces are included.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import express, { Request, Response, NextFunction } from 'express';
 import request from 'supertest';
+import multer from 'multer';
 import { z } from 'zod';
 import { AppError } from '../utils/AppError';
 import { errorHandler } from '../middleware/errorHandler';
@@ -168,5 +169,50 @@ describe('errorHandler — unknown Error', () => {
     expect(res.body.code).toBe('INTERNAL_ERROR');
     // No stack for non-Error throws
     expect(res.body.stack).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MulterError → 413 / 400 (client upload errors, not server faults)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('errorHandler — MulterError', () => {
+  it('maps LIMIT_FILE_SIZE to 413 FILE_TOO_LARGE with multer\'s own message', async () => {
+    const app = makeErrorApp(() => { throw new multer.MulterError('LIMIT_FILE_SIZE', 'file'); });
+
+    const res = await request(app).get('/test');
+    expect(res.status).toBe(413);
+    expect(res.body).toEqual({ success: false, message: 'File too large', code: 'FILE_TOO_LARGE' });
+  });
+
+  it('maps every other multer code to 400 UPLOAD_REJECTED', async () => {
+    const app = makeErrorApp(() => { throw new multer.MulterError('LIMIT_UNEXPECTED_FILE', 'other'); });
+
+    const res = await request(app).get('/test');
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ success: false, message: 'Unexpected file field', code: 'UPLOAD_REJECTED' });
+  });
+
+  it('does not log multer rejections as server errors', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const app = makeErrorApp(() => { throw new multer.MulterError('LIMIT_FILE_SIZE', 'file'); });
+      await request(app).get('/test');
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('matches by name AND a string code — an Error merely named MulterError without one is still a 500', async () => {
+    const app = makeErrorApp(() => {
+      const err = new Error('impostor');
+      err.name = 'MulterError';
+      throw err;
+    });
+
+    const res = await request(app).get('/test');
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('INTERNAL_ERROR');
   });
 });

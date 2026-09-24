@@ -3,6 +3,18 @@ import { ZodError } from 'zod';
 import { AppError } from '../utils/AppError';
 import { isProd } from '../config/env';
 
+/**
+ * multer rejections (oversize file, unexpected field, too many parts, …) are client
+ * errors. Matched by shape rather than `instanceof multer.MulterError`: route tests
+ * vi.mock('multer') with a default-only factory, and under Vitest's ESM mock reading
+ * a missing export throws — this handler is mounted in every one of those apps.
+ */
+function isMulterError(err: unknown): err is Error & { code: string } {
+  return err instanceof Error
+    && err.name === 'MulterError'
+    && typeof (err as { code?: unknown }).code === 'string';
+}
+
 export function errorHandler(
   err: unknown,
   req: Request,
@@ -34,6 +46,18 @@ export function errorHandler(
       success: false,
       message: err.message,
       code: err.code,
+    });
+    return;
+  }
+
+  // Upload rejected by multer — 413 for size so the client can tell it apart, 400 for
+  // the rest. multer's messages are fixed strings ("File too large"), safe to expose.
+  if (isMulterError(err)) {
+    const tooLarge = err.code === 'LIMIT_FILE_SIZE';
+    res.status(tooLarge ? 413 : 400).json({
+      success: false,
+      message: err.message,
+      code: tooLarge ? 'FILE_TOO_LARGE' : 'UPLOAD_REJECTED',
     });
     return;
   }
