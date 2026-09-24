@@ -41,32 +41,35 @@ export default defineConfig({
       // mask near-zero pages — which is exactly what the old 3/50/28/3 floor did: it was
       // measured against 183 branch points in a 15,914-statement app.
       //
-      // NOTE the '**/' prefix on every glob. Vitest matches these against ABSOLUTE paths,
-      // so 'src/pages/**' silently matches NOTHING, enforces nothing, and still exits 0.
-      // Also: files matched by a glob are REMOVED from the global bucket, so the trailing
-      // global numbers below apply only to whatever no glob claimed.
+      // NOTE the '**/' prefix on every glob. Vitest 1 matched these against ABSOLUTE paths,
+      // where 'src/pages/**' silently matched NOTHING, enforced nothing, and still exited 0.
+      // Vitest 3 matches root-relative paths, which '**/src/...' also matches — keep it.
+      // Also (vitest 3): the trailing global numbers apply to EVERY file, globbed or not.
       thresholds: {
         '**/src/api/**': { statements: 95, branches: 90, functions: 95, lines: 95 },
         '**/src/lib/**': { statements: 95, branches: 90, functions: 95, lines: 95 },
         '**/src/hooks/**': { statements: 95, branches: 90, functions: 95, lines: 95 },
         '**/src/contexts/**': { statements: 95, branches: 85, functions: 95, lines: 95 },
         '**/src/components/**': { statements: 88, branches: 88, functions: 72, lines: 88 },
-        // perFile so deleting one page's test file fails the gate. An aggregate floor
-        // over 26 pages cannot express "don't delete a test" — 19 of 26 could be dropped
-        // to zero with the aggregate still passing (verified by deleting two and watching
-        // CI stay green, which would have silently removed the only regression guard for
-        // the ChangePassword fix). The floor is low because Transactions legitimately
-        // sits at ~37% with its modals unopened by design.
-        '**/src/pages/**': {
-          statements: 30, branches: 30, functions: 15, lines: 30, perFile: true,
-        },
-        // Residual bucket: currently ONLY src/App.tsx (every other file is claimed by a
-        // glob above, and globbed files are removed from this bucket). Measured 97.65 /
-        // 76.92 / 100. These are not a project-wide floor — the globs are.
-        statements: 90,
-        branches: 72,
-        functions: 90,
-        lines: 90,
+        // AGGREGATE over all pages, not per file. A `perFile: true` here was silently
+        // ignored — Vitest (1.x and 3.x alike) reads perFile only at the top level of
+        // `thresholds`, where it would switch EVERY glob to per-file. So deleting one
+        // page's test file can still pass this gate. A real per-file page floor needs one
+        // entry per page file and currently fails on admin/FamilyMembers.tsx (functions
+        // 12.1% < 15) — tracked as a follow-up rather than silently claimed here.
+        '**/src/pages/**': { statements: 30, branches: 30, functions: 15, lines: 30 },
+        // App.tsx is the one file no directory glob claims. Under vitest 1 the global
+        // numbers below were its residual bucket; vitest 3 applies them project-wide,
+        // so it gets its own entry with the floor it always had.
+        '**/src/App.tsx': { statements: 90, branches: 72, functions: 90, lines: 90 },
+        // Project-wide floor across all files, set just under the measured 81.78 / 81.03
+        // / 66.25 / 81.78 at the vitest 3 upgrade. The per-directory globs are the real
+        // gates; this one catches a broad regression none of them would flag alone. It is
+        // deliberately tight, so a new untested file can trip it with a "global" error.
+        statements: 81,
+        branches: 80,
+        functions: 65,
+        lines: 81,
       },
     },
   },

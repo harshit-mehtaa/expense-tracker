@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom';
-import { server } from './mswServer';
+import { server, waitForNetworkIdle, clearInFlight } from './mswServer';
 import { setAccessToken } from '@/lib/api';
 // VITE_API_URL is set via vite.config.ts test.env so it's available at module
 // transform time — more reliable than Object.defineProperty on import.meta.env.
@@ -92,7 +92,10 @@ if (typeof window !== 'undefined') {
 // success — so the test passes green while asserting nothing. 'error' is what makes
 // every page test mean something.
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
-afterEach(() => {
+afterEach(async () => {
+  // Drain first: a request chain the test left running must still find its handlers.
+  await waitForNetworkIdle();
+  clearInFlight();
   server.resetHandlers();
   // lib/api.ts keeps the access token in module-level state; without this it leaks
   // into the next test file and a later test can pass for the wrong reason.

@@ -75,8 +75,9 @@ jobs:
         run: npm run typecheck:tests
 
       # Gates on coverage. vite.config.ts sets per-directory thresholds (high for
-      # lib/hooks/api/contexts, lower for pages) rather than one global number, so
-      # strong coverage in the logic layers can't mask a near-zero page.
+      # lib/hooks/api/contexts, lower for pages) plus a project-wide floor, so strong
+      # coverage in the logic layers can't mask weak pages in aggregate. Pages are gated
+      # as a group, not per file — see the comment on the pages glob.
       - name: Test frontend
         working-directory: ./frontend
         run: npm run test:coverage

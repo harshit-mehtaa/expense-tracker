@@ -66,9 +66,12 @@
   Vitest's ESM mock a namespace object is a Proxy that THROWS on undefined exports, so a
   guard that looks dead against the real package can be load-bearing in tests.
 - Frontend coverage is a REAL, CI-enforced, per-directory gate in `vite.config.ts` (not
-  a near-zero floor — that was the old config). `**/src/pages/**` is `perFile: true`
-  at 30/30/15/30 specifically so one page's test file can't be silently deleted/gutted
-  without failing CI, even though the aggregate would still pass.
+  a near-zero floor — that was the old config). `**/src/pages/**` is an AGGREGATE
+  30/30/15/30 floor: glob-level `perFile` is silently ignored by Vitest (1.x and 3.x read
+  only top-level perFile), so one page's tests CAN be deleted without failing CI. A true
+  per-file page gate is an open follow-up (blocked on FamilyMembers.tsx functions 12.1%).
+- Backend `"vite": "^6.4.3"` devDependency is NOT unused: it pins the vite that vitest
+  resolves (unpinned, npm floats it to 7.x). Don't remove it in a cleanup.
 
 ## Domain Rules (non-negotiable)
 - Money is always `Decimal`, never a JS `number` — `Decimal(15,2)` for INR amounts,
