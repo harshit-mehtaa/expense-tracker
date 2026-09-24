@@ -9,7 +9,7 @@
  *
  * Handler count: 1 page-specific (/categories, already in base) + 5 base.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -19,6 +19,10 @@ import { url } from '../support/handlers';
 import { CATEGORIES } from '../support/fixtures';
 
 failOnConsoleError();
+
+// Category names also appear as <option>s in the auto-categorization rules form, so
+// assertions about the category LIST must skip those.
+const NOT_OPTION = { ignore: 'option, script, style' };
 
 const categoryHandlers = (data: unknown = CATEGORIES) => [
   http.get(url('/categories'), () => HttpResponse.json({ data })),
@@ -30,7 +34,7 @@ describe('Categories page — smoke', () => {
 
     expect(screen.getByText(/Loading categories/i)).toBeInTheDocument();
 
-    expect(await screen.findByText('Food')).toBeInTheDocument();
+    expect(await screen.findByText('Food', NOT_OPTION)).toBeInTheDocument();
     expect(screen.queryByText(/Loading categories/i)).toBeNull();
   });
 
@@ -43,9 +47,27 @@ describe('Categories page — smoke', () => {
 
   it('renders every category from the API', async () => {
     renderPage(<CategoriesPage />, { route: '/categories', handlers: categoryHandlers() });
-    expect(await screen.findByText('Food')).toBeInTheDocument();
-    expect(screen.getByText('Rent')).toBeInTheDocument();
-    expect(screen.getByText('Salary')).toBeInTheDocument();
+    expect(await screen.findByText('Food', NOT_OPTION)).toBeInTheDocument();
+    expect(screen.getByText('Rent', NOT_OPTION)).toBeInTheDocument();
+    expect(screen.getByText('Salary', NOT_OPTION)).toBeInTheDocument();
+  });
+
+  it('hosts the signed-in user\'s auto-categorization rules', async () => {
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [
+        ...categoryHandlers(),
+        http.get(url('/category-rules'), () => HttpResponse.json({
+          data: [{
+            id: 'r-1', matchType: 'REGEX', pattern: '^upi/.*swiggy', categoryId: 'cat-food',
+            category: { id: 'cat-food', name: 'Food', type: 'EXPENSE', parentId: null },
+          }],
+        })),
+      ],
+    });
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'Auto-categorization rules' })).toBeInTheDocument();
+    expect(await screen.findByText('/^upi/.*swiggy/')).toBeInTheDocument();
   });
 
   it('renders the real error branch when the request fails', async () => {
@@ -67,7 +89,7 @@ describe('Categories page — smoke', () => {
   it('opens the add-category form when the primary action is clicked', async () => {
     const user = userEvent.setup();
     renderPage(<CategoriesPage />, { route: '/categories', handlers: categoryHandlers() });
-    await screen.findByText('Food');
+    await screen.findByText('Food', NOT_OPTION);
 
     await user.click(screen.getByRole('button', { name: /add category/i }));
 
@@ -212,6 +234,26 @@ describe('Categories page — merge', () => {
     await user.click(screen.getByRole('button', { name: /^merge$/i }));
 
     await waitFor(() => expect(body).toEqual({ targetId: 'fuel' }));
+  });
+
+  it('refreshes the rules list after a merge — the merge re-points rules at the target', async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [
+        http.post(url('/categories/groceries/merge'), () => HttpResponse.json({ data: TREE[2] })),
+        ...categoryHandlers(TREE),
+      ],
+    });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await screen.findByText('Groceries');
+    await user.click(screen.getByRole('button', { name: /actions for groceries/i }));
+    await user.click(screen.getByRole('button', { name: /merge into/i }));
+    await user.selectOptions(await screen.findByLabelText(/merge into/i), 'fuel');
+    await user.click(screen.getByRole('button', { name: /^merge$/i }));
+
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['category-rules'] }));
   });
 
   it('cannot merge until a target is chosen', async () => {

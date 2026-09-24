@@ -101,7 +101,7 @@ router.post(
       // ($transaction is atomic) and a total failure throws before reaching here.
       errors: [],
       parseErrors: result.errors.slice(0, 10),
-      warnings: [...result.warnings, ...persistWarnings],
+      warnings: [...result.warnings, ...categorized.warnings, ...persistWarnings],
     });
   }),
 );

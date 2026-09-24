@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 import { CategoryIcon } from '@/components/shared/CategoryIcon';
 import { formatDate } from '@/lib/dateFormat';
 import { INRDisplay } from '@/components/shared/INRDisplay';
+import { CategoryRulesManager } from '@/components/categories/CategoryRulesManager';
 import {
   getCategoryLabel,
   getCategoryPath,
@@ -203,9 +204,9 @@ export default function CategoriesPage() {
     mutationFn: ({ id, targetId }: { id: string; targetId: string }) =>
       api.post(`/categories/${id}/merge`, { targetId }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['categories'] });
-      // Transactions moved category, so anything showing them is stale too.
-      qc.invalidateQueries({ queryKey: ['transactions'] });
+      // Transactions, budgets and auto-categorization rules all move to the target, so
+      // everything delete invalidates is stale here too.
+      invalidateCategoryData();
       setMergeCat(null); setMergeTargetId(''); setMergeError(null);
     },
     onError: (err: any) => setMergeError(err?.response?.data?.message ?? 'Merge failed'),
@@ -344,6 +345,19 @@ export default function CategoriesPage() {
             onDelete={openDelete}
             onMerge={openMerge}
           />
+          {/* Rules are per-user (unlike the family-shared categories above), so this
+              always manages the signed-in user's own rules. */}
+          <section className="space-y-3">
+            <div>
+              <h2 className="text-lg font-semibold">Auto-categorization rules</h2>
+              <p className="text-muted-foreground text-sm">
+                Your personal rules for assigning a category to new transactions from their description.
+              </p>
+            </div>
+            <div className="rounded-lg border p-4">
+              <CategoryRulesManager categories={categories} />
+            </div>
+          </section>
         </div>
       )}
 

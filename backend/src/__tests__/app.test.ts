@@ -66,7 +66,7 @@ beforeEach(() => {
   m(parseCSV).mockReturnValue({
     transactions: [PARSED_TX], errors: [], warnings: [], bank: 'HDFC',
   });
-  m(applyCategoryRules).mockResolvedValue({ transactions: [PARSED_TX], appliedCount: 0 });
+  m(applyCategoryRules).mockResolvedValue({ transactions: [PARSED_TX], appliedCount: 0, warnings: [] });
   m(persistParsedStatement).mockResolvedValue({
     imported: 1, duplicatesSkipped: 0, importRecord: { id: 'imp-1' },
     warnings: [],

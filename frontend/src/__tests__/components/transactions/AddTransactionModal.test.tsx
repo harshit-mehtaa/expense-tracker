@@ -20,6 +20,7 @@ import { AddTransactionModal } from '@/components/transactions/AddTransactionMod
 import { renderPage, failOnConsoleError } from '../../support/renderPage';
 import { url } from '../../support/handlers';
 import { CATEGORIES, ACCOUNTS } from '../../support/fixtures';
+import type { BudgetActualItem } from '@/hooks/useBudgetsVsActuals';
 
 failOnConsoleError();
 
@@ -153,6 +154,84 @@ describe('AddTransactionModal', () => {
     expect(seenBody!.bankAccountId).toBeUndefined();
     expect(seenBody!.paymentMode).toBeUndefined();
     expect(seenBody!.transferToAccountId).toBeUndefined();
+  });
+
+  describe('rule-based auto-categorization (category left blank)', () => {
+    const FOOD_BUDGET: BudgetActualItem = {
+      id: 'b-1', categoryId: 'cat-food', amount: 1000, period: 'MONTHLY', fyYear: null,
+      category: { id: 'cat-food', name: 'Food', color: null, icon: null },
+      actual: 900, remaining: 100, pctUsed: 90,
+    };
+
+    function renderWithServerCategory(created: Record<string, unknown>, budgetActuals: BudgetActualItem[] = []) {
+      return renderPage(<AddTransactionModal onClose={vi.fn()} budgetActuals={budgetActuals} />, {
+        route: '/',
+        handlers: [...formHandlers(), http.post(url('/transactions'), () => HttpResponse.json({ data: created }))],
+      });
+    }
+
+    it('shows a hint that a blank category may be auto-assigned', async () => {
+      renderWithServerCategory({});
+      expect(await screen.findByText('Leave blank to auto-assign using matching rules.')).toBeInTheDocument();
+    });
+
+    it('hides that hint for a TRANSFER, which is never categorized', async () => {
+      const user = userEvent.setup();
+      const { container } = renderWithServerCategory({});
+      await screen.findByText('Leave blank to auto-assign using matching rules.');
+      await user.selectOptions(container.querySelector('select[name="type"]') as HTMLSelectElement, 'TRANSFER');
+      expect(screen.queryByText('Leave blank to auto-assign using matching rules.')).toBeNull();
+    });
+
+    it('names the category the server auto-assigned in the success toast', async () => {
+      const user = userEvent.setup();
+      const { container } = renderWithServerCategory({ categoryId: 'cat-food', category: { name: 'Food' } });
+      await screen.findByPlaceholderText(/swiggy order/i);
+
+      await fillMinimalForm(user, container);
+      await user.click(screen.getByRole('button', { name: 'Add Transaction' }));
+
+      expect(await screen.findByText('Auto-categorized as Food')).toBeInTheDocument();
+    });
+
+    it('runs the budget check against the auto-assigned category (the server response, not the empty form value)', async () => {
+      const user = userEvent.setup();
+      const { container } = renderWithServerCategory(
+        { categoryId: 'cat-food', category: { name: 'Food' } },
+        [FOOD_BUDGET],
+      );
+      await screen.findByPlaceholderText(/swiggy order/i);
+
+      await fillMinimalForm(user, container); // ₹500 on top of ₹900 of a ₹1000 budget
+      await user.click(screen.getByRole('button', { name: 'Add Transaction' }));
+
+      expect(await screen.findByText('Budget exceeded: Food')).toBeInTheDocument();
+    });
+
+    it('says nothing about auto-categorization when no rule matched', async () => {
+      const user = userEvent.setup();
+      const { container } = renderWithServerCategory({ categoryId: null, category: null });
+      await screen.findByPlaceholderText(/swiggy order/i);
+
+      await fillMinimalForm(user, container);
+      await user.click(screen.getByRole('button', { name: 'Add Transaction' }));
+
+      expect(await screen.findByText('Transaction added')).toBeInTheDocument();
+      expect(screen.queryByText(/Auto-categorized as/)).toBeNull();
+    });
+
+    it('does not claim auto-categorization when the user picked the category themselves', async () => {
+      const user = userEvent.setup();
+      const { container } = renderWithServerCategory({ categoryId: 'cat-rent', category: { name: 'Rent' } });
+      await screen.findByRole('option', { name: 'Rent' });
+
+      await fillMinimalForm(user, container);
+      await user.selectOptions(screen.getByLabelText('Category (optional)'), 'cat-rent');
+      await user.click(screen.getByRole('button', { name: 'Add Transaction' }));
+
+      expect(await screen.findByText('Transaction added')).toBeInTheDocument();
+      expect(screen.queryByText(/Auto-categorized as/)).toBeNull();
+    });
   });
 
   it('omits targetUserId entirely when none is provided (not even as an empty string)', async () => {

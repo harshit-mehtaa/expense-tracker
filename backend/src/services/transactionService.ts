@@ -3,6 +3,7 @@ import { PaymentMode, Prisma, TransactionType } from '@prisma/client';
 import prisma from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import { ensureCashAccount, lockAccountsForBalanceWrite } from './accountService';
+import { resolveCategoryForTransaction } from './categoryRuleService';
 import { anchorCutoff, formatISTDate, getFYRange, getISTDateBoundary } from '../utils/financialYear';
 import { buildPaginationArgs, processPaginationResult } from '../utils/pagination';
 
@@ -381,6 +382,16 @@ export async function createTransaction(
     throw AppError.badRequest('transferToAccountId is required for TRANSFER transactions');
   }
 
+  // A category the user chose always wins; otherwise the owner's auto-categorization
+  // rules may supply one. Resolved OUTSIDE the $transaction: regex rules can take up to
+  // SINGLE_TRANSACTION_BUDGET_MS, which must not be spent holding account row locks.
+  // TRANSFER legs are never categorized (see the TRANSFER branch below).
+  const categoryId = data.categoryId
+    ?? (data.type === 'TRANSFER' ? undefined : await resolveCategoryForTransaction(userId, {
+      type: data.type,
+      description: data.description,
+    }));
+
   return prisma.$transaction(async (tx) => {
     const txDate = new Date(data.date);
 
@@ -534,7 +545,7 @@ export async function createTransaction(
       data: {
         userId,
         bankAccountId: cashResolvedBankAccountId,
-        categoryId: data.categoryId,
+        categoryId,
         amount: data.amount,
         type: data.type as TransactionType,
         paymentMode: data.paymentMode as PaymentMode | undefined,

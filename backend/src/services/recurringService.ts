@@ -3,6 +3,7 @@ import { PaymentMode, Prisma, RecurringFrequency, TransactionType } from '@prism
 import prisma from '../config/prisma';
 import { AppError } from '../utils/AppError';
 import { ensureCashAccount } from './accountService';
+import { resolveCategoryForTransaction } from './categoryRuleService';
 import { ownerScopedWhere } from '../utils/resolveTargetUserId';
 import { priceAsOf } from '../utils/subscriptionPricing';
 import { anchorCutoff } from '../utils/financialYear';
@@ -137,6 +138,10 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
   // Cached across iterations — the resolved account (and its anchor, if any) doesn't
   // change mid-run. `undefined` = not yet resolved, `null` = resolved and has no anchor.
   let cachedAnchorCutoff: Date | null | undefined;
+  // Same caching convention. Description and type are fixed per template, so the owner's
+  // auto-categorization rules are consulted at most once per catch-up — and only when
+  // something is actually due.
+  let resolvedCategoryId: string | null | undefined;
 
   while (runDate <= now && generated < MAX_CATCH_UP_PER_RULE) {
     const dueDate = runDate;
@@ -211,6 +216,29 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
       break;
     }
 
+    // A template without a category gets one from the owner's rules, matching what the
+    // RecurringRules "apply" button does (it goes through createTransaction). Resolved
+    // outside the $transaction like the lookups above. A failed lookup degrades to
+    // uncategorized rather than breaking: the charge itself is still correct, and
+    // throwing would abort every OTHER rule this user has.
+    if (resolvedCategoryId === undefined) {
+      resolvedCategoryId = rule.categoryId;
+      if (!resolvedCategoryId) {
+        try {
+          resolvedCategoryId = (await resolveCategoryForTransaction(rule.userId, {
+            type: rule.type,
+            description: rule.description,
+          })) ?? null;
+        } catch (err) {
+          console.error(
+            '[recurring] failed to auto-categorize a recurring rule; generating uncategorized',
+            { ruleId: rule.id, userId: rule.userId, error: err instanceof Error ? err.message : err },
+          );
+          resolvedCategoryId = null;
+        }
+      }
+    }
+
     const created = await prisma.$transaction(async (tx) => {
       const { count } = await tx.recurringRule.updateMany({
         where: {
@@ -226,7 +254,7 @@ async function generateRuleCatchUp(rule: DueRecurringRule, now: Date): Promise<n
         data: {
           userId: rule.userId,
           bankAccountId: resolvedBankAccountId,
-          categoryId: rule.categoryId,
+          categoryId: resolvedCategoryId,
           amount,
           type: rule.type,
           paymentMode: rule.paymentMode,

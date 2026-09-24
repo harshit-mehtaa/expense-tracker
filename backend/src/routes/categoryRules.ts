@@ -11,7 +11,9 @@ const router = Router();
 router.use(requireAuth);
 
 const ruleSchema = z.object({
-  keyword: z.string().min(1).max(80),
+  matchType: z.enum(['KEYWORD', 'REGEX']).default('KEYWORD'),
+  // The length cap is part of the ReDoS bound — see utils/safeRegex.ts.
+  pattern: z.string().trim().min(1).max(200),
   categoryId: z.string().cuid(),
 });
 

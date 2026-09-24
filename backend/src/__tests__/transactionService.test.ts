@@ -55,7 +55,14 @@ vi.mock('../config/prisma', () => {
   return { default: prisma, prisma };
 });
 
+// Auto-categorization is unit-tested in categoryRuleService.test.ts; here we only
+// assert when createTransaction consults it and what it does with the answer.
+vi.mock('../services/categoryRuleService', () => ({
+  resolveCategoryForTransaction: vi.fn(),
+}));
+
 import prisma from '../config/prisma';
+import { resolveCategoryForTransaction } from '../services/categoryRuleService';
 import {
   getTransactions,
   getTransactionById,
@@ -132,6 +139,7 @@ beforeEach(() => {
   sipTxMock.create.mockResolvedValue({ id: 'sip-tx-1', investmentId: 'inv-1' });
   sipTxMock.delete.mockResolvedValue({ id: 'sip-tx-1' });
   (prisma as any).$transaction.mockImplementation(async (fn: any) => fn(prisma));
+  (resolveCategoryForTransaction as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 });
 
 // ─── Helper: capture WHERE from getTransactions ────────────────────────────────
@@ -840,6 +848,56 @@ describe('createTransaction — CASH auto-resolve', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // createTransaction — TRANSFER (double-entry)
 // ─────────────────────────────────────────────────────────────────────────────
+
+describe('createTransaction — rule-based auto-categorization', () => {
+  const resolveMock = resolveCategoryForTransaction as ReturnType<typeof vi.fn>;
+  const DATA = {
+    amount: 250,
+    type: 'EXPENSE',
+    description: 'UPI/P2M/99/SWIGGY',
+    date: '2025-04-01',
+    bankAccountId: 'acct-1',
+  };
+
+  it('assigns the category resolved from the owner\'s rules when none is given', async () => {
+    resolveMock.mockResolvedValue('cat-food');
+    await createTransaction('u1', DATA);
+    expect(resolveMock).toHaveBeenCalledWith('u1', { type: 'EXPENSE', description: 'UPI/P2M/99/SWIGGY' });
+    expect(txMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ categoryId: 'cat-food' }) }),
+    );
+  });
+
+  it('resolves before opening the DB transaction, so regex evaluation never holds row locks', async () => {
+    const order: string[] = [];
+    resolveMock.mockImplementation(async () => { order.push('resolve'); return 'cat-food'; });
+    (prisma as any).$transaction.mockImplementation(async (fn: any) => { order.push('$transaction'); return fn(prisma); });
+    await createTransaction('u1', DATA);
+    expect(order).toEqual(['resolve', '$transaction']);
+  });
+
+  it('leaves categoryId unset when no rule matches', async () => {
+    await createTransaction('u1', DATA);
+    expect(txMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ categoryId: undefined }) }),
+    );
+  });
+
+  it('never overrides an explicitly chosen category (and does not consult rules)', async () => {
+    await createTransaction('u1', { ...DATA, categoryId: 'cat-explicit' });
+    expect(resolveMock).not.toHaveBeenCalled();
+    expect(txMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ categoryId: 'cat-explicit' }) }),
+    );
+  });
+
+  it('does not consult rules for a TRANSFER', async () => {
+    acctMock.findFirst.mockResolvedValue({ ...MOCK_ACCOUNT, id: 'acct-2' });
+    txMock.create.mockResolvedValue({ ...MOCK_TX, id: 'debit-1' });
+    await createTransaction('u1', { ...DATA, type: 'TRANSFER', transferToAccountId: 'acct-2' });
+    expect(resolveMock).not.toHaveBeenCalled();
+  });
+});
 
 describe('createTransaction — TRANSFER', () => {
   const TRANSFER_DATA = {

@@ -29,6 +29,8 @@ export function baseHandlers(user: TestUser = ADMIN_USER) {
     http.get(url('/users/members'), () => HttpResponse.json({ data: MEMBERS })),
     http.get(url('/categories'), () => HttpResponse.json({ data: CATEGORIES })),
     http.get(url('/accounts'), () => HttpResponse.json({ data: ACCOUNTS })),
+    // CategoryRulesManager (Categories page, import dialog) — no rules by default.
+    http.get(url('/category-rules'), () => HttpResponse.json({ data: [] })),
   ];
 }
 

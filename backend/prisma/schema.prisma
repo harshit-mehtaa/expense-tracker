@@ -218,6 +218,13 @@ enum CategoryType {
   LIABILITY
 }
 
+// Evaluation order (REGEX first, then KEYWORD) is decided in categoryRuleService,
+// not by this enum's declaration order.
+enum CategoryRuleMatchType {
+  KEYWORD
+  REGEX
+}
+
 enum CapitalGainAssetType {
   EQUITY_LISTED
   EQUITY_MUTUAL_FUND
@@ -800,15 +807,17 @@ model Budget {
 model CategoryRule {
   id         String   @id @default(cuid())
   userId     String
-  keyword    String
+  matchType  CategoryRuleMatchType @default(KEYWORD)
+  // KEYWORD: lowercase substring. REGEX: stored as typed, compiled with the `i` flag.
+  pattern    String
   categoryId String
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
 
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, keyword])
+  @@unique([userId, matchType, pattern])
   @@index([userId])
   @@index([categoryId])
 }

@@ -67,18 +67,18 @@ additionally mirrors base images to GHCR, builds+pushes backend/frontend multi-a
 images, then flips GHCR package visibility to public.
 
 ## Coding Patterns
-- **Error handling**: `AppError` (`backend/src/utils/AppError.ts`) with static factories
-  (badRequest/unauthorized/forbidden/notFound/conflict/validationError/internal);
-  `isOperational = statusCode < 500`. Central `errorHandler` middleware: ZodError → 422
-  per-field, AppError → its own status, else generic 500 (stack hidden in prod). Async
-  routes wrapped in `asyncHandler()`.
-- **API envelope**: `{ success, data, message?, pagination? }` via `utils/response.ts`
-  helpers (sendSuccess, sendPaginated, sendCreated, sendNoContent). **Validation**: Zod
-  schemas inline per route file, reusable preprocess helpers for empty-string coercion.
-- **Auth**: JWT + HttpOnly cookies, `requireAuth` middleware sets `req.user`, ADMIN role
-  check where needed. Routes mount `router.use(requireAuth)`.
-- **Naming**: route/service files share resource names (accounts.ts ↔ accountService.ts);
-  route-level tests in `__tests__/routes/*.routes.test.ts`, separate from unit tests.
+- Error handling, API envelope, Zod validation, auth, naming: see `patterns.md` (canonical).
+  Note: the API accepts `Authorization: Bearer <accessToken>` (from `POST /auth/login`).
+
+## Auto-Categorization Rules (since 2026-09-24)
+- `CategoryRule` (per-user): `matchType` KEYWORD (lowercase substring) | REGEX (stored as
+  typed, `i` flag), `pattern`, `categoryId`. ONE matcher: `categoryRuleService.matchRules`,
+  used by `createTransaction` (single-leg, blank category, resolved BEFORE `$transaction`),
+  recurring catch-up, and statement import (`applyCategoryRules`). Explicit category wins;
+  order = REGEX oldest-first, then KEYWORD A–Z; first match wins; type-filtered.
+- User regex runs only via `utils/safeRegex.ts` (node:vm timeout — V8 has none). Budgets:
+  250ms/chunk of 2000 rows, 500ms single create, 2000ms import; timed-out rule ids cached
+  in-process (never re-run until deleted/restart). UI: `components/categories/CategoryRulesManager`.
 
 ## Domain Rules
 - Money is always `Decimal`, never float — `Decimal(15,2)` INR, `Decimal(15,4)`

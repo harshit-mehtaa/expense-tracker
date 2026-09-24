@@ -55,8 +55,8 @@ const createMock = svc.createCategoryRule as ReturnType<typeof vi.fn>;
 const deleteMock = svc.deleteCategoryRule as ReturnType<typeof vi.fn>;
 const auditMock = recordAuditLog as ReturnType<typeof vi.fn>;
 
-const MOCK_RULE = { id: 'rule-1', userId: 'u1', keyword: 'swiggy', categoryId: 'cat-1' };
-const VALID_BODY = { keyword: 'swiggy', categoryId: 'clm1234567890abcdefghij' };
+const MOCK_RULE = { id: 'rule-1', userId: 'u1', matchType: 'KEYWORD', pattern: 'swiggy', categoryId: 'cat-1' };
+const VALID_BODY = { matchType: 'KEYWORD', pattern: 'swiggy', categoryId: 'clm1234567890abcdefghij' };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -117,19 +117,44 @@ describe('POST /api/category-rules', () => {
     );
   });
 
-  it('returns 422 when the keyword is missing', async () => {
+  it('accepts a REGEX rule and passes the pattern through untouched', async () => {
+    const body = { matchType: 'REGEX', pattern: '^UPI/.*\\bSWIGGY\\b', categoryId: 'clm1234567890abcdefghij' };
+    const res = await request(app).post('/api/category-rules').send(body);
+    expect(res.status).toBe(201);
+    expect(createMock).toHaveBeenCalledWith('u1', body);
+  });
+
+  it('defaults matchType to KEYWORD when omitted', async () => {
+    const res = await request(app).post('/api/category-rules').send({ pattern: 'swiggy', categoryId: 'clm1234567890abcdefghij' });
+    expect(res.status).toBe(201);
+    expect(createMock).toHaveBeenCalledWith('u1', VALID_BODY);
+  });
+
+  it('returns 422 for an unknown matchType', async () => {
+    const res = await request(app).post('/api/category-rules').send({ ...VALID_BODY, matchType: 'GLOB' });
+    expect(res.status).toBe(422);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 when the pattern is missing', async () => {
     const res = await request(app).post('/api/category-rules').send({ categoryId: 'clm1234567890abcdefghij' });
     expect(res.status).toBe(422);
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  it('returns 422 when the keyword exceeds 80 characters', async () => {
-    const res = await request(app).post('/api/category-rules').send({ keyword: 'x'.repeat(81), categoryId: 'clm1234567890abcdefghij' });
+  it('returns 422 when the pattern exceeds 200 characters', async () => {
+    const res = await request(app).post('/api/category-rules').send({ ...VALID_BODY, pattern: 'x'.repeat(201) });
     expect(res.status).toBe(422);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a pattern of exactly 200 characters', async () => {
+    const res = await request(app).post('/api/category-rules').send({ ...VALID_BODY, pattern: 'x'.repeat(200) });
+    expect(res.status).toBe(201);
   });
 
   it('returns 422 when categoryId is not a valid CUID', async () => {
-    const res = await request(app).post('/api/category-rules').send({ keyword: 'swiggy', categoryId: 'not-a-cuid' });
+    const res = await request(app).post('/api/category-rules').send({ ...VALID_BODY, categoryId: 'not-a-cuid' });
     expect(res.status).toBe(422);
   });
 

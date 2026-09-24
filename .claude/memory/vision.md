@@ -65,12 +65,12 @@
   Dashboard's `cashflow`/`alerts`/`budgetActuals`/`netWorthHistory` are eager+ungated
   with no `isError` (same defect class as the just-fixed `spendingByCat`); `summary`
   is the largest instance — a failed fetch paints ₹0 across every StatCard.
-- [low] Transaction CRUD cache invalidation gaps fixed 2026-09-08 via a shared
-  `invalidateTransactionMutationCaches` helper (`queryInvalidation.ts`) covering all 8
-  mutation sites + `['budgets-actuals']` (a key distinct from `['budgets','vs-actuals']`,
-  missed on first pass, caught by review). Residual, same bug class: `trial-balance`
-  (Reports.tsx) is invalidated by nothing; Loans/Categories/Accounts reconciliation
-  mutations don't invalidate dashboard/reports either — neither fixed here.
+- [low] Residual cache-invalidation gaps: `trial-balance` invalidated by nothing; Loans/
+  Accounts reconciliation don't invalidate dashboard/reports (see `queryInvalidation.ts`).
+- [medium] Pre-existing schema drift (`migrate diff`, 2026-09-24): CategoryType enum, Category
+  idx/FK, Asset.updatedAt default, RecurringRule FK. No CI drift check. Separate task.
+- [low] Category rules: timed-out regex rules tracked in-process only, not shown in UI;
+  recurring catch-up loads rules per due template (N+1); README/AGENTS coverage notes stale.
 - [low] `CashflowMonth`/`UpcomingAlert`/`useAccounts`/`useCategories`/`selectedMemberName`
   each duplicated instead of shared; `computeTotalLiabilities` has an undocumented endDate
   filter excluding overdue loans; `!isViewingFamilyWide` gates create buttons across 10

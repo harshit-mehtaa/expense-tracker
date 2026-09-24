@@ -79,7 +79,9 @@ export function AddTransactionModal({
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: TxForm) => api.post('/transactions', {
+    mutationFn: (data: TxForm) => api.post<{
+      data: { categoryId?: string | null; category?: { name: string } | null };
+    }>('/transactions', {
       ...data,
       remark: data.remark?.trim() || undefined,
       tags: data.tags ? data.tags.split(',').map((t) => t.trim()) : [],
@@ -97,16 +99,26 @@ export function AddTransactionModal({
     }, {
       params: targetUserId ? { targetUserId } : {},
     }),
-    onSuccess: (_, submittedData) => {
+    onSuccess: (res, submittedData) => {
       // Shared with every other transaction-mutating call site (Transactions.tsx,
       // RecurringRules.tsx) — see queryInvalidation.ts for why this can't be a
       // ['budgets']-only invalidation (Budgets.tsx's own page reads ['budgets-actuals'],
       // a disjoint key from useBudgetsVsActuals.ts's Dashboard-widget key).
       invalidateTransactionMutationCaches(qc);
-      toast({ title: 'Transaction added', variant: 'success' });
+      // Left blank, the category may have been assigned server-side by the user's
+      // auto-categorization rules — the response is the source of truth for both the
+      // toast and the budget check below.
+      const created = res.data?.data;
+      const categoryId = submittedData.categoryId || created?.categoryId || undefined;
+      const autoCategoryName = !submittedData.categoryId && created?.categoryId ? created.category?.name : undefined;
+      toast({
+        title: 'Transaction added',
+        description: autoCategoryName ? `Auto-categorized as ${autoCategoryName}` : undefined,
+        variant: 'success',
+      });
       // Check if this EXPENSE pushes a budget over 80% or 100%
-      if (submittedData.type === 'EXPENSE' && submittedData.categoryId) {
-        const budget = budgetActuals.find((b) => b.categoryId === submittedData.categoryId);
+      if (submittedData.type === 'EXPENSE' && categoryId) {
+        const budget = budgetActuals.find((b) => b.categoryId === categoryId);
         if (budget) {
           const projectedActual = budget.actual + Number(submittedData.amount);
           const projectedPct = (projectedActual / Number(budget.amount)) * 100;
@@ -182,6 +194,9 @@ export function AddTransactionModal({
                   <option key={c.id} value={c.id}>{getCategoryTreeOptionLabel(c, depth)}</option>
                 ))}
               </select>
+              {selectedType !== 'TRANSFER' && (
+                <p className="text-xs text-muted-foreground">Leave blank to auto-assign using matching rules.</p>
+              )}
             </div>
             <div className="col-span-2 space-y-1">
               <Label>{selectedType === 'TRANSFER' ? 'From Account (optional)' : 'Bank Account (optional)'}</Label>

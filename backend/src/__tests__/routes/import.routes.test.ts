@@ -119,7 +119,7 @@ beforeEach(() => {
   userFindFirstMock.mockResolvedValue({ id: VALID_TARGET_ID });
   m(parseCSV).mockReturnValue(PARSE_RESULT);
   m(parsePDF).mockResolvedValue(PARSE_RESULT);
-  m(applyCategoryRules).mockResolvedValue({ transactions: [PARSED_TX], appliedCount: 0 });
+  m(applyCategoryRules).mockResolvedValue({ transactions: [PARSED_TX], appliedCount: 0, warnings: [] });
   m(persistParsedStatement).mockResolvedValue({
     imported: 1,
     duplicatesSkipped: 0,
@@ -381,7 +381,7 @@ describe('POST /api/transactions/import — persistence and audit', () => {
 
 describe('POST /api/transactions/import — response shape', () => {
   it('reports counts from the service and categorized count from the rules pass', async () => {
-    m(applyCategoryRules).mockResolvedValue({ transactions: [PARSED_TX], appliedCount: 3 });
+    m(applyCategoryRules).mockResolvedValue({ transactions: [PARSED_TX], appliedCount: 3, warnings: [] });
     m(persistParsedStatement).mockResolvedValue({
       imported: 7, duplicatesSkipped: 4, importRecord: { id: 'imp-1' },
       warnings: [],
@@ -418,6 +418,18 @@ describe('POST /api/transactions/import — response shape', () => {
     expect(res.body.data.warnings).toContain(
       '1 row matched an existing transaction … and was skipped as a likely duplicate.',
     );
+  });
+
+  it('merges skipped-rule warnings from the auto-categorization pass into the response', async () => {
+    const skipped = 'Auto-categorization rule /^(a|aa)+$/ was skipped: it took too long to evaluate.';
+    m(parseCSV).mockReturnValue({ ...PARSE_RESULT, warnings: ['parser note'] });
+    m(applyCategoryRules).mockResolvedValue({ transactions: [PARSED_TX], appliedCount: 0, warnings: [skipped] });
+
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
+
+    expect(res.body.data.warnings).toEqual(['parser note', skipped]);
   });
 
   it('always returns an empty errors array (a partial batch failure is impossible)', async () => {

@@ -22,7 +22,7 @@ import { investmentsApi } from '@/api/investments';
 import { insuranceApi, type InsurancePolicy } from '@/api/insurance';
 import { cn } from '@/lib/utils';
 import { CategoryIcon } from '@/components/shared/CategoryIcon';
-import { getCategoryLabel, getCategoryPath, type CategoryLike, toCategoryTreeOptions, getCategoryTreeOptionLabel } from '@/lib/categoryUtils';
+import { getCategoryPath, type CategoryLike, toCategoryTreeOptions, getCategoryTreeOptionLabel } from '@/lib/categoryUtils';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useBudgetsVsActuals } from '@/hooks/useBudgetsVsActuals';
@@ -35,6 +35,7 @@ import { formatAccountOption } from '@/lib/accountFormat';
 import { invalidateFinancialReports, invalidateTransactionMutationCaches } from '@/lib/queryInvalidation';
 import { useCategories, useAccounts } from '@/hooks/useTransactionFormOptions';
 import { AddTransactionModal } from '@/components/transactions/AddTransactionModal';
+import { CategoryRulesManager, useCategoryRules } from '@/components/categories/CategoryRulesManager';
 
 interface Transaction {
   id: string;
@@ -810,22 +811,6 @@ function EditTransactionModal({ tx, onClose }: { tx: Transaction; onClose: () =>
   );
 }
 
-interface CategoryRule {
-  id: string;
-  keyword: string;
-  categoryId: string;
-  category: CategoryLike & { type: 'INCOME' | 'EXPENSE'; icon?: string | null };
-}
-
-function useCategoryRules(targetUserId?: string) {
-  return useQuery({
-    queryKey: ['category-rules', targetUserId],
-    queryFn: () => api.get<{ data: CategoryRule[] }>('/category-rules', {
-      params: targetUserId ? { targetUserId } : {},
-    }).then((r) => r.data.data),
-  });
-}
-
 // ─── Import auto-detect helpers ───────────────────────────────────────────────
 
 const AUTO_DETECT = '__auto__';
@@ -884,8 +869,6 @@ function ImportModal({ onClose, targetUserId }: { onClose: () => void; targetUse
   const { data: accounts = [] } = useAccounts(targetUserId);
   const { data: categories = [] } = useCategories();
   const { data: rules = [] } = useCategoryRules(targetUserId);
-  // Bank imports produce INCOME/EXPENSE transactions — filter out ASSET/LIABILITY categories
-  const importCategories = categories.filter((c: any) => c.type === 'INCOME' || c.type === 'EXPENSE');
   const [file, setFile] = useState<File | null>(null);
   const [bankAccountId, setBankAccountId] = useState(AUTO_DETECT);
   const [autoDetectResult, setAutoDetectResult] = useState<AutoDetectResult>({ account: null, ambiguous: false });
@@ -893,8 +876,6 @@ function ImportModal({ onClose, targetUserId }: { onClose: () => void; targetUse
   const [pdfPassword, setPdfPassword] = useState('');
   const [result, setResult] = useState<any>(null);
   const [showRules, setShowRules] = useState(false);
-  const [newKeyword, setNewKeyword] = useState('');
-  const [newCategoryId, setNewCategoryId] = useState('');
   const [newBalance, setNewBalance] = useState('');
   const [savingBalance, setSavingBalance] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -967,27 +948,6 @@ function ImportModal({ onClose, targetUserId }: { onClose: () => void; targetUse
       invalidateTransactionMutationCaches(qc);
     },
   });
-
-  const addRuleMutation = useMutation({
-    mutationFn: (data: { keyword: string; categoryId: string }) => api.post('/category-rules', data, {
-      params: targetUserId ? { targetUserId } : {},
-    }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['category-rules'] });
-      setNewKeyword('');
-      setNewCategoryId('');
-    },
-  });
-
-  const removeRuleMutation = useMutation({
-    mutationFn: (id: string) => api.delete(`/category-rules/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['category-rules'] }),
-  });
-
-  function addRule() {
-    if (!newKeyword.trim() || !newCategoryId) return;
-    addRuleMutation.mutate({ keyword: newKeyword.trim().toLowerCase(), categoryId: newCategoryId });
-  }
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -1116,51 +1076,8 @@ function ImportModal({ onClose, targetUserId }: { onClose: () => void; targetUse
                 <span className="text-muted-foreground">{showRules ? '▲' : '▼'}</span>
               </button>
               {showRules && (
-                <div className="p-3 space-y-2">
-                  <p className="text-xs text-muted-foreground">Keyword → category mappings are saved to your account and applied during import</p>
-                  {importCategories.length === 0 && (
-                    <p className="text-xs text-amber-600">
-                      Create at least one income or expense category before adding auto-categorization rules.
-                    </p>
-                  )}
-                  {importCategories.length > 0 && rules.length === 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      No rules saved yet. Add a keyword rule before importing if you want transactions categorized automatically.
-                    </p>
-                  )}
-                  {rules.map((r) => (
-                    <div key={r.id} className="flex items-center justify-between text-sm bg-muted/30 rounded px-2 py-1">
-                      <span><span className="font-mono text-xs">{r.keyword}</span> → {getCategoryLabel(r.category, categories)}</span>
-                      <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => removeRuleMutation.mutate(r.id)}>
-                        <X className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  ))}
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="keyword (e.g. swiggy)"
-                      value={newKeyword}
-                      onChange={(e) => setNewKeyword(e.target.value)}
-                      className="text-sm h-8"
-                      disabled={importCategories.length === 0}
-                      onKeyDown={(e) => e.key === 'Enter' && addRule()}
-                    />
-                    <select
-                      value={newCategoryId}
-                      onChange={(e) => setNewCategoryId(e.target.value)}
-                      className="rounded-md border bg-background px-2 py-1 text-sm flex-1"
-                      disabled={importCategories.length === 0}
-                    >
-                      <option value="">{importCategories.length === 0 ? 'No categories available' : 'Category'}</option>
-                      {toCategoryTreeOptions(importCategories).map(({ category: c, depth }) => (
-                  <option key={c.id} value={c.id}>{getCategoryTreeOptionLabel(c, depth)}</option>
-                ))}
-                    </select>
-                    <Button size="sm" onClick={addRule} disabled={addRuleMutation.isPending || importCategories.length === 0} className="h-8">Add</Button>
-                  </div>
-                  {addRuleMutation.isError && (
-                    <p className="text-xs text-destructive">{(addRuleMutation.error as any)?.response?.data?.message ?? 'Could not save rule'}</p>
-                  )}
+                <div className="p-3">
+                  <CategoryRulesManager categories={categories} targetUserId={targetUserId} />
                 </div>
               )}
             </div>

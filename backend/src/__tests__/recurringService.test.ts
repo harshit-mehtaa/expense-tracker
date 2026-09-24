@@ -43,7 +43,12 @@ vi.mock('../config/prisma', () => {
   return { default: mockPrisma, prisma: mockPrisma };
 });
 
+vi.mock('../services/categoryRuleService', () => ({
+  resolveCategoryForTransaction: vi.fn(),
+}));
+
 import prisma from '../config/prisma';
+import { resolveCategoryForTransaction } from '../services/categoryRuleService';
 import {
   createRecurringRule,
   listRecurringRules,
@@ -762,5 +767,90 @@ describe('generateDueRecurringTransactions — opening-balance anchor', () => {
     const result = await generateDueRecurringTransactions('u1');
     expect(result).toEqual({ generated: 0 });
     expect(acctMock.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('generateDueRecurringTransactions — rule-based auto-categorization', () => {
+  const resolveMock = resolveCategoryForTransaction as ReturnType<typeof vi.fn>;
+  const UNCATEGORIZED = { ...MOCK_RULE, categoryId: null, description: 'UPI/SWIGGY' };
+
+  beforeEach(() => {
+    ruleMock.updateMany.mockResolvedValue({ count: 1 });
+    txMock.create.mockResolvedValue({});
+    acctMock.update.mockResolvedValue({});
+  });
+
+  it('assigns the owner\'s rule-matched category to a template with no category, resolving once per catch-up', async () => {
+    // Three occurrences due (Mar, Apr, May) — the lookup must not repeat per occurrence.
+    vi.setSystemTime(new Date('2024-05-01T12:00:00Z'));
+    ruleMock.findMany.mockResolvedValue([UNCATEGORIZED]);
+    resolveMock.mockResolvedValue('cat-food');
+
+    const result = await generateDueRecurringTransactions('u1');
+
+    expect(result).toEqual({ generated: 3 });
+    expect(resolveMock).toHaveBeenCalledTimes(1);
+    expect(resolveMock).toHaveBeenCalledWith('u1', { type: 'EXPENSE', description: 'UPI/SWIGGY' });
+    for (const [call] of txMock.create.mock.calls) {
+      expect(call.data.categoryId).toBe('cat-food');
+    }
+  });
+
+  it('keeps the template\'s own category and never consults rules', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    ruleMock.findMany.mockResolvedValue([MOCK_RULE]);
+
+    await generateDueRecurringTransactions('u1');
+
+    expect(resolveMock).not.toHaveBeenCalled();
+    expect(txMock.create.mock.calls[0][0].data.categoryId).toBe('cat-1');
+  });
+
+  it('does not consult rules when nothing is due', async () => {
+    vi.setSystemTime(new Date('2024-01-01'));
+    ruleMock.findMany.mockResolvedValue([UNCATEGORIZED]);
+
+    await generateDueRecurringTransactions('u1');
+
+    expect(resolveMock).not.toHaveBeenCalled();
+  });
+
+  it('generates uncategorized (null, not undefined) when no rule matches', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    ruleMock.findMany.mockResolvedValue([UNCATEGORIZED]);
+    resolveMock.mockResolvedValue(undefined);
+
+    await generateDueRecurringTransactions('u1');
+
+    expect(txMock.create.mock.calls[0][0].data.categoryId).toBeNull();
+  });
+
+  it('logs a non-Error rejection value as-is', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    ruleMock.findMany.mockResolvedValue([UNCATEGORIZED]);
+    resolveMock.mockRejectedValue('boom');
+
+    await generateDueRecurringTransactions('u1');
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ error: 'boom' }));
+    errorSpy.mockRestore();
+  });
+
+  it('a failed lookup logs and generates uncategorized rather than aborting the run', async () => {
+    vi.setSystemTime(new Date('2024-03-01T12:00:00Z'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    ruleMock.findMany.mockResolvedValue([UNCATEGORIZED]);
+    resolveMock.mockRejectedValue(new Error('db down'));
+
+    const result = await generateDueRecurringTransactions('u1');
+
+    expect(result).toEqual({ generated: 1 });
+    expect(txMock.create.mock.calls[0][0].data.categoryId).toBeNull();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[recurring]'),
+      expect.objectContaining({ ruleId: MOCK_RULE.id, userId: 'u1', error: 'db down' }),
+    );
+    errorSpy.mockRestore();
   });
 });
