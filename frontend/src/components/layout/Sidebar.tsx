@@ -13,7 +13,6 @@ import {
   Users,
   Settings,
   IndianRupee,
-  Tag,
   Gem,
   Bell,
 } from 'lucide-react';
@@ -33,7 +32,6 @@ const NAV_ITEMS = [
   { to: '/subscriptions', icon: Repeat, label: 'Subscriptions' },
   { to: '/tax', icon: IndianRupee, label: 'Tax Centre' },
   { to: '/reports', icon: FileText, label: 'Reports' },
-  { to: '/categories', icon: Tag, label: 'Categories' },
 ];
 
 const ADMIN_NAV_ITEMS = [

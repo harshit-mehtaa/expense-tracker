@@ -14,7 +14,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import SettingsPage from '@/pages/Settings';
-import { renderPage, failOnConsoleError } from '../support/renderPage';
+import { renderPage, failOnConsoleError, SearchParamsProbe } from '../support/renderPage';
 import { url } from '../support/handlers';
 import { ADMIN_USER } from '../support/fixtures';
 
@@ -157,5 +157,42 @@ describe('Settings page — smoke', () => {
       expect(screen.getByText(/Server exploded/i)).toBeInTheDocument();
     });
     expect(screen.queryByText('USD/INR')).toBeNull();
+  });
+});
+
+describe('Settings page — tabs (Categories lives here)', () => {
+  it('opens on General: profile, rates and session, no categories', async () => {
+    renderPage(<SettingsPage />, { route: '/settings', handlers: rateHandlers() });
+    expect(await screen.findByRole('tab', { name: /general/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('heading', { name: /profile/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add category/i })).toBeNull();
+  });
+
+  it('switches to the Categories tab and records it in the URL', async () => {
+    const user = userEvent.setup();
+    renderPage(<><SettingsPage /><SearchParamsProbe /></>, { route: '/settings', handlers: rateHandlers() });
+
+    await user.click(await screen.findByRole('tab', { name: /categories/i }));
+
+    expect(screen.getByRole('tab', { name: /categories/i })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByRole('button', { name: /add category/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Auto-categorization rules' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /profile/i })).toBeNull();
+    expect(screen.getByTestId('search-params')).toHaveTextContent('tab=categories');
+  });
+
+  it('opens straight on Categories from ?tab=categories, and back to General drops the param', async () => {
+    const user = userEvent.setup();
+    renderPage(<><SettingsPage /><SearchParamsProbe /></>, { route: '/settings?tab=categories', handlers: rateHandlers() });
+
+    expect(await screen.findByRole('button', { name: /add category/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: /general/i }));
+    expect(await screen.findByRole('heading', { name: /profile/i })).toBeInTheDocument();
+    expect(screen.getByTestId('search-params')).toHaveTextContent(/^$/);
+  });
+
+  it('falls back to General for an unknown tab', async () => {
+    renderPage(<SettingsPage />, { route: '/settings?tab=constructor', handlers: rateHandlers() });
+    expect(await screen.findByRole('heading', { name: /profile/i })).toBeInTheDocument();
   });
 });

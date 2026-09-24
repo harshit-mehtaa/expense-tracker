@@ -39,6 +39,19 @@ describe('Sidebar', () => {
     }
   });
 
+  it('has no dedicated Categories nav item — Categories moved under Settings', async () => {
+    for (const user of [ADMIN_USER, MEMBER_USER]) {
+      const { unmount } = renderPage(<Sidebar />, { user });
+      await waitFor(() => expect(screen.getByText('Settings')).toBeInTheDocument());
+
+      expect(screen.queryByRole('link', { name: /^categories$/i })).not.toBeInTheDocument();
+      expect(screen.queryAllByRole('link').map((l) => l.getAttribute('href'))).not.toContain('/categories');
+      expect(screen.getByRole('link', { name: /^settings$/i })).toHaveAttribute('href', '/settings');
+
+      unmount();
+    }
+  });
+
   it('has no dedicated Real Estate nav item — Real Estate moved under the Assets tab', async () => {
     for (const user of [ADMIN_USER, MEMBER_USER]) {
       const { unmount } = renderPage(<Sidebar />, { user });

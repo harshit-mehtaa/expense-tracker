@@ -15,7 +15,6 @@ import SubscriptionsPage from '@/pages/subscriptions/Subscriptions';
 import TaxCentrePage from '@/pages/tax/TaxCentre';
 import FamilyMembersPage from '@/pages/admin/FamilyMembers';
 import ReportsPage from '@/pages/admin/Reports';
-import CategoriesPage from '@/pages/admin/Categories';
 import SettingsPage from '@/pages/Settings';
 import AssetsPage from '@/pages/investments/Assets';
 import ChangePasswordPage from '@/pages/ChangePassword';
@@ -69,7 +68,8 @@ export default function App() {
         <Route path="tax/*" element={<TaxCentrePage />} />
         <Route path="profit-loss" element={<Navigate to="/reports" replace />} />
         <Route path="settings" element={<SettingsPage />} />
-        <Route path="categories" element={<CategoriesPage />} />
+        {/* Categories moved under Settings; keep old links and bookmarks working. */}
+        <Route path="categories" element={<Navigate to="/settings?tab=categories" replace />} />
 
         {/* Admin-only routes */}
         <Route

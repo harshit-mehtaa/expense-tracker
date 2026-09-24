@@ -119,6 +119,21 @@ describe('App routing — legacy /gold redirect', () => {
   });
 });
 
+describe('App routing — legacy /categories redirect', () => {
+  it('redirects an authenticated visitor from /categories to the Settings page\'s Categories tab', async () => {
+    authState.user = ADMIN_USER;
+    authState.isAuthenticated = true;
+    renderPage(<><App /><LocationProbe /></>, {
+      route: '/categories',
+      handlers: shellHandlers(),
+    });
+
+    expect(await screen.findByRole('heading', { level: 1, name: /^settings$/i })).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('/settings?tab=categories');
+    expect(await screen.findByRole('button', { name: /add category/i })).toBeInTheDocument();
+  });
+});
+
 describe('App routing — legacy /real-estate redirect', () => {
   it('redirects an authenticated visitor from /real-estate to the Assets page\'s Real Estate tab', async () => {
     authState.user = ADMIN_USER;

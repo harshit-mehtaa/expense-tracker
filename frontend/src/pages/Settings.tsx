@@ -3,13 +3,17 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { User, Globe, RefreshCw, LogOut } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { User, Globe, RefreshCw, LogOut, SlidersHorizontal, Tag } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/contexts/AuthContext';
 import api from '@/lib/api';
 import { formatDate } from '@/lib/dateFormat';
+import { cn } from '@/lib/utils';
+import CategoriesPage from '@/pages/admin/Categories';
 
 const profileSchema = z.object({
   name: z.string().min(1, 'Required'),
@@ -72,7 +76,68 @@ function ExchangeRateSettings() {
   );
 }
 
+// URL-backed tabs (?tab=categories), same pattern as Assets.tsx. Categories moved here from
+// its own sidebar item; /categories redirects to this tab (App.tsx).
+const TABS = ['general', 'categories'] as const;
+type SettingsTab = (typeof TABS)[number];
+const DEFAULT_TAB: SettingsTab = 'general';
+const TAB_META: Record<SettingsTab, { label: string; icon: LucideIcon }> = {
+  general: { label: 'General', icon: SlidersHorizontal },
+  categories: { label: 'Categories', icon: Tag },
+};
+
+// Array membership, not an object-key lookup, so `?tab=constructor` isn't accepted.
+function isTab(v: string): v is SettingsTab {
+  return (TABS as readonly string[]).includes(v);
+}
+
 export default function SettingsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawTab = searchParams.get('tab');
+  const activeTab: SettingsTab = rawTab && isTab(rawTab) ? rawTab : DEFAULT_TAB;
+  function setActiveTab(tab: SettingsTab) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (tab === DEFAULT_TAB) next.delete('tab');
+      else next.set('tab', tab);
+      return next;
+    }, { replace: true });
+  }
+
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold">Settings</h1>
+
+      <div role="tablist" aria-label="Settings sections" className="flex border-b border-border">
+        {TABS.map((tab) => {
+          const Icon = TAB_META[tab].icon;
+          return (
+            <button
+              key={tab}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab}
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+                activeTab === tab
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30',
+              )}
+            >
+              <Icon className="h-4 w-4" />
+              {TAB_META[tab].label}
+            </button>
+          );
+        })}
+      </div>
+
+      {activeTab === 'categories' ? <CategoriesPage /> : <GeneralSettings />}
+    </div>
+  );
+}
+
+function GeneralSettings() {
   const { user, logout } = useAuth();
   const [pwdSuccess, setPwdSuccess] = useState(false);
 
@@ -94,8 +159,6 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6 max-w-2xl">
-      <h1 className="text-2xl font-bold">Settings</h1>
-
       {/* Profile */}
       <div className="rounded-lg border bg-card p-6 space-y-4">
         <h2 className="font-semibold flex items-center gap-2"><User className="h-4 w-4" /> Profile</h2>
