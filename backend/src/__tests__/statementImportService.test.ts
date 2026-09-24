@@ -1289,6 +1289,17 @@ describe('persistParsedStatement — opening-balance anchor supersession', () =>
     expect(result.warnings.some((w) => /1 row.*opening-balance date/.test(w))).toBe(true);
   });
 
+  it('pluralizes the superseded-count warning for more than one row', async () => {
+    mockLinkedAccountAnchor(new Date('2026-01-01'));
+    const rows = [
+      makeTx({ date: new Date('2025-12-14T00:00:00.000Z'), amount: 500, type: 'EXPENSE', description: 'first pre-anchor row' }),
+      makeTx({ date: new Date('2025-12-15T00:00:00.000Z'), amount: 700, type: 'EXPENSE', description: 'second pre-anchor row' }),
+    ];
+    const result = await persistParsedStatement({ ...BASE, accountId: 'acc1', transactions: rows });
+    expect(result.supersededByAnchorCount).toBe(2);
+    expect(result.warnings.some((w) => /^2 rows dated on or before an account's opening-balance date were imported/.test(w))).toBe(true);
+  });
+
   it('checks the cash account\'s anchor INDEPENDENTLY of the linked account\'s, for a linked-CASH row\'s synthetic leg', async () => {
     // Linked account has NO anchor, but the cash account does — the synthetic
     // counterpart leg on the cash account must still be excluded from cashDeltas.

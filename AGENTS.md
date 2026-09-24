@@ -75,6 +75,5 @@ Two lessons this project learned the hard way:
 - **Unit tests do not render React components.** A conditional hook shipped past `tsc` and
   a green suite and would have crashed a page. `react-hooks/rules-of-hooks` caught it —
   frontend lint is load-bearing, not cosmetic.
-- **Backend coverage is ~93%, not the 100% `vitest.config.ts` asks for.**
-  `routes/documents.ts`, `routes/categoryRules.ts` and `services/categoryRuleService.ts`
-  are at 0%. CI gates on `npm run test`, not `test:coverage`, until that is backfilled.
+- **Backend coverage is 100% and CI enforces it** (`npm run test:coverage`), so any
+  uncovered line fails the build — new backend code must ship with tests.

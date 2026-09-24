@@ -343,9 +343,9 @@ Frontend lint is not cosmetic here — `react-hooks/rules-of-hooks` has already 
 conditional hook that `tsc` and a green test suite both missed, and which would have
 crashed a page at runtime. Unit tests in this repo do not render components.
 
-> Backend coverage is ~93%, below the 100% `vitest.config.ts` asks for:
-> `routes/documents.ts`, `routes/categoryRules.ts` and `services/categoryRuleService.ts`
-> are at 0%. CI therefore gates on `npm run test`, not `test:coverage`.
+> Backend coverage is 100% (statements, branches, functions, lines) and CI enforces it:
+> the backend test step runs `npm run test:coverage`, so any uncovered line fails the build.
+> New backend code must ship with tests.
 
 ---
 

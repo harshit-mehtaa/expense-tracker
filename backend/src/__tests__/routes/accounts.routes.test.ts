@@ -234,6 +234,17 @@ describe('PUT /api/accounts/:id', () => {
     expect(updateMock).toHaveBeenCalledWith('acc-1', 'u1', 'ADMIN', expect.objectContaining({ [field]: null }));
   });
 
+  it.each([
+    'creditLimit',
+    'billingCycleStartDay',
+    'billingCycleEndDay',
+    'paymentDueDay',
+  ])('treats an empty-string %s (a cleared form input) as omitted, not as 0 or null', async (field) => {
+    const res = await request(app).put('/api/accounts/acc-1').send({ [field]: '' });
+    expect(res.status).toBe(200);
+    expect(updateMock.mock.calls[0][3][field]).toBeUndefined();
+  });
+
   it('sends ifscPrefix:null to the service when ifscCode is null too (no ?? fallback masking it)', async () => {
     const res = await request(app).put('/api/accounts/acc-1').send({ ifscCode: null, ifscPrefix: null });
     expect(res.status).toBe(200);

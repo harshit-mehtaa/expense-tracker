@@ -70,7 +70,7 @@
 - [medium] Pre-existing schema drift (`migrate diff`, 2026-09-24): CategoryType enum, Category
   idx/FK, Asset.updatedAt default, RecurringRule FK. No CI drift check. Separate task.
 - [low] Category rules: timed-out regex rules tracked in-process only, not shown in UI;
-  recurring catch-up loads rules per due template (N+1); README/AGENTS coverage notes stale.
+  recurring catch-up loads rules per due template (N+1, only when due).
 - [low] `CashflowMonth`/`UpcomingAlert`/`useAccounts`/`useCategories`/`selectedMemberName`
   each duplicated instead of shared; `computeTotalLiabilities` has an undocumented endDate
   filter excluding overdue loans; `!isViewingFamilyWide` gates create buttons across 10
