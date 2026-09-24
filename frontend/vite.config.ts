@@ -1,6 +1,30 @@
+import fs from 'fs';
 import path from 'path';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
+
+type Thresholds = { statements: number; branches: number; functions: number; lines: number };
+
+/**
+ * One coverage-threshold entry PER page file. Vitest reads `perFile` only at the top
+ * level of `thresholds` (where it would turn every glob per-file), so a glob like
+ * '**\/src/pages/**' can only ever gate the pages in aggregate — and an aggregate lets
+ * one page's tests be deleted with the gate still green. A key that names a single
+ * file is its own group, so it gates exactly that file, and a failure names it.
+ * Generated, so a new page is gated the moment it exists.
+ */
+function perFileThresholds(dir: string, floor: Thresholds): Record<string, Thresholds> {
+  const root = path.resolve(__dirname, dir);
+  const files = (fs.readdirSync(root, { recursive: true }) as string[])
+    .filter((f) => /\.tsx?$/.test(f) && !f.endsWith('.d.ts'))
+    .map((f) => f.split(path.sep).join('/'));
+  // A key that matches nothing passes silently — an empty list must be loud instead,
+  // and so must a file name that would be read as a glob pattern (e.g. "[id].tsx").
+  if (files.length === 0) throw new Error(`perFileThresholds: no source files found under ${dir}`);
+  const globby = files.find((f) => /[[\]{}*?!()]/.test(f));
+  if (globby) throw new Error(`perFileThresholds: "${globby}" contains glob characters and would match nothing`);
+  return Object.fromEntries(files.map((f) => [`**/${dir}/${f}`, floor]));
+}
 
 export default defineConfig({
   plugins: [react()],
@@ -51,13 +75,10 @@ export default defineConfig({
         '**/src/hooks/**': { statements: 95, branches: 90, functions: 95, lines: 95 },
         '**/src/contexts/**': { statements: 95, branches: 85, functions: 95, lines: 95 },
         '**/src/components/**': { statements: 88, branches: 88, functions: 72, lines: 88 },
-        // AGGREGATE over all pages, not per file. A `perFile: true` here was silently
-        // ignored — Vitest (1.x and 3.x alike) reads perFile only at the top level of
-        // `thresholds`, where it would switch EVERY glob to per-file. So deleting one
-        // page's test file can still pass this gate. A real per-file page floor needs one
-        // entry per page file and currently fails on admin/FamilyMembers.tsx (functions
-        // 12.1% < 15) — tracked as a follow-up rather than silently claimed here.
-        '**/src/pages/**': { statements: 30, branches: 30, functions: 15, lines: 30 },
+        // Pages: a floor on EACH page file, not the aggregate — see perFileThresholds.
+        // Low because Transactions legitimately sits well below the other pages with its
+        // modals unopened by design; the point is that no page can drop to zero unseen.
+        ...perFileThresholds('src/pages', { statements: 30, branches: 30, functions: 15, lines: 30 }),
         // App.tsx is the one file no directory glob claims. Under vitest 1 the global
         // numbers below were its residual bucket; vitest 3 applies them project-wide,
         // so it gets its own entry with the floor it always had.

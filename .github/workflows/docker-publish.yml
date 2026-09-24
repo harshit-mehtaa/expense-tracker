@@ -76,8 +76,8 @@ jobs:
 
       # Gates on coverage. vite.config.ts sets per-directory thresholds (high for
       # lib/hooks/api/contexts, lower for pages) plus a project-wide floor, so strong
-      # coverage in the logic layers can't mask weak pages in aggregate. Pages are gated
-      # as a group, not per file — see the comment on the pages glob.
+      # coverage in the logic layers can't mask weak pages. Each page file has its own
+      # floor (generated per file), so deleting one page's tests fails CI by name.
       - name: Test frontend
         working-directory: ./frontend
         run: npm run test:coverage

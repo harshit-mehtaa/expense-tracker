@@ -171,7 +171,13 @@ export default function FamilyMembersPage() {
                 </div>
                 {isAdmin && (
                   <div className="relative">
-                    <Button variant="ghost" size="icon" onClick={() => setActiveMenu(activeMenu === user.id ? null : user.id)}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Actions for ${user.name}`}
+                      aria-expanded={activeMenu === user.id}
+                      onClick={() => setActiveMenu(activeMenu === user.id ? null : user.id)}
+                    >
                       <MoreVertical className="h-4 w-4" />
                     </Button>
                     {activeMenu === user.id && (

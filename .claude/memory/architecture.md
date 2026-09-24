@@ -47,8 +47,8 @@ backend, React + Vite frontend, TypeScript throughout, run via Docker Compose.
   New backend code must ship with tests; there is no slack in the threshold.
 - Frontend: Vitest, `environment: jsdom`, RTL + MSW (`mswServer.ts`). Coverage is a
   REAL, CI-enforced gate — per-directory thresholds in `vite.config.ts` (api/lib/hooks
-  ~95%, contexts ~95%, components 88%, pages 30% AGGREGATE — glob-level `perFile` is a
-  no-op in Vitest, so deleting one page's tests can still pass) plus App.tsx's own entry
+  ~95%, contexts ~95%, components 88%, pages 30% PER FILE via one generated key per page
+  — glob-level `perFile` is a no-op in Vitest) plus App.tsx's own entry
   and a project-wide floor (Vitest 3 applies the global numbers to ALL files). Keep the
   `'**/src/x/**'` glob form (Vitest 1 matched absolute paths; 3 matches root-relative).
 

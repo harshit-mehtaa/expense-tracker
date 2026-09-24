@@ -95,6 +95,6 @@
   `src/config/prisma.ts` (third-party singleton, no branches).
 - Frontend: `npm run lint` clean (0 warnings), `tsc --noEmit` clean, `npm run
   test:coverage` green — **enforced in CI** at PER-DIRECTORY thresholds plus a
-  project-wide floor (Vitest 3 applies global numbers to every file); pages gated in
-  aggregate, not per file. Keep globs as `'**/src/x/**'` (never bare `'src/x/**'`).
+  project-wide floor (Vitest 3 applies global numbers to every file); each page file
+  gated individually. Keep globs as `'**/src/x/**'` (never bare `'src/x/**'`).
 - CI (`quality` job) gates every other job on every PR/push to `main`.
