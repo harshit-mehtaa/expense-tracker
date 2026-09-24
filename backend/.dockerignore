@@ -1,0 +1,12 @@
+# The Dockerfile runs `npm ci` and `prisma generate` / `tsc` INSIDE the image; nothing
+# below may come from the host. Without this file `COPY . .` laid the host tree over the
+# image's: macOS binaries (@esbuild/darwin-*, @rollup/rollup-darwin-*, the darwin Prisma
+# engine, which the production stage then copied), stale dist/ output and local uploads.
+node_modules
+dist
+coverage
+uploads
+.env
+.env.*
+*.log
+.DS_Store

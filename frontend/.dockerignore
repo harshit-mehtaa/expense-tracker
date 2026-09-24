@@ -1,0 +1,13 @@
+# The Dockerfile runs `npm ci` and `vite build` INSIDE the image; nothing below may come
+# from the host. Without this file `COPY . .` laid the host tree over the image's: macOS
+# binaries (@esbuild/darwin-*, @rollup/rollup-darwin-*), local dist/, coverage/ and the
+# orchestrator's .claude/ directory.
+node_modules
+dist
+coverage
+.claude
+*.tsbuildinfo
+.env
+.env.*
+*.log
+.DS_Store

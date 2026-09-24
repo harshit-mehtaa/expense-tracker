@@ -12,9 +12,8 @@ services:
       # Mount prisma/ and src/ so migrate sees migrations, seed.ts, and the helpers seed.ts
       # imports (e.g. src/utils/categoryStyle) as written since the image was built.
       # node_modules is NOT mounted, so the container uses its own copy rather than the macOS
-      # host's. Note the image's node_modules is not guaranteed pure-Linux either — there is no
-      # .dockerignore, so `COPY . .` copies the host tree in; it works because the Dockerfile
-      # re-runs `prisma generate` inside Linux afterwards.
+      # host's — and backend/.dockerignore keeps the host tree out of the image, so that copy
+      # is the pure-Linux `npm ci` result.
       # `prisma generate` must run first here: the mounted schema/seed may reference fields the
       # image's generated client does not know about.
       - ./backend/prisma:/app/prisma
