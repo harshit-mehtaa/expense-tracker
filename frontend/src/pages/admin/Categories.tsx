@@ -13,7 +13,14 @@ import { cn } from '@/lib/utils';
 import { CategoryIcon } from '@/components/shared/CategoryIcon';
 import { formatDate } from '@/lib/dateFormat';
 import { INRDisplay } from '@/components/shared/INRDisplay';
-import { CategoryRulesManager } from '@/components/categories/CategoryRulesManager';
+import {
+  CategoryRulesManager,
+  StagedCategoryRules,
+  errorMessage,
+  postCategoryRule,
+  useCategoryRules,
+  type RuleDraft,
+} from '@/components/categories/CategoryRulesManager';
 import {
   getCategoryLabel,
   getCategoryPath,
@@ -126,6 +133,11 @@ export default function CategoriesPage() {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
 
   const { data: categories = [], isLoading, isError } = useCategories();
+  // The signed-in user's rules — the same ['category-rules'] cache the dedicated section
+  // and the Edit dialog read, so a staged rule is checked against exactly what they show.
+  const { data: myRules = [], isLoading: myRulesLoading, isError: myRulesError } = useCategoryRules();
+  // Rules for a category that doesn't exist yet (Add dialog) — saved once it's created.
+  const [stagedRules, setStagedRules] = useState<RuleDraft[]>([]);
 
   // Close menu on Escape
   useEffect(() => {
@@ -173,13 +185,45 @@ export default function CategoriesPage() {
     qc.invalidateQueries({ queryKey: ['budgets-actuals'] });
   };
 
+  // Creates the category, then its staged rules. One mutation, so the dialog stays busy (and
+  // the staged list locked) until the last rule is saved. Staged rules were checked against
+  // the server's rules, so a rule failing here is rare — a race, a network error, a duplicate
+  // staged before the saved rules loaded, or regex syntax the browser accepts but the
+  // backend's older Node rejects. The category then already exists, so the user is taken to
+  // its Edit dialog, told which rules didn't save.
   const addMutation = useMutation({
-    mutationFn: (data: CategoryForm) => api.post('/categories', buildCategoryPayload(data)),
-    onSuccess: () => {
+    mutationFn: async (data: CategoryForm) => {
+      const res = await api.post<{ data: Category }>('/categories', buildCategoryPayload(data));
+      const category = res.data.data;
+      const failures: Array<{ pattern: string; message: string }> = [];
+      // Gated on the submitted type — the same condition that shows or hides the rules
+      // section (and its "won't be saved" note) in the dialog.
+      if (isRuleCategoryType(data.type)) {
+        // One at a time, in order: regex rules are evaluated oldest-first.
+        for (const rule of stagedRules) {
+          try {
+            await postCategoryRule({ ...rule, categoryId: category.id });
+          } catch (err) {
+            failures.push({ pattern: rule.pattern, message: errorMessage(err, 'Could not save rule') });
+          }
+        }
+      }
+      return { category, failures };
+    },
+    onSuccess: ({ category, failures }) => {
       invalidateCategoryData();
       setShowAdd(false);
       reset();
       setAddError(null);
+      setStagedRules([]);
+      if (failures.length > 0) {
+        openEdit(category);
+        // After openEdit, which clears editError.
+        setEditError(
+          `Category created, but ${failures.length} rule${failures.length === 1 ? '' : 's'} could not be saved: `
+          + failures.map((f) => `"${f.pattern}" (${f.message})`).join('; '),
+        );
+      }
     },
     onError: (err: any) => {
       setAddError(err?.response?.data?.message ?? 'Failed to create category');
@@ -285,7 +329,7 @@ export default function CategoriesPage() {
             Manage categories shared across your family.
           </p>
         </div>
-        <Button onClick={() => { setAddError(null); reset(); setShowAdd(true); }} className="flex items-center gap-2">
+        <Button onClick={() => { setAddError(null); reset(); setStagedRules([]); setShowAdd(true); }} className="flex items-center gap-2">
           <Plus className="h-4 w-4" />
           Add Category
         </Button>
@@ -368,10 +412,11 @@ export default function CategoriesPage() {
 
       {/* ── Add modal ────────────────────────────────────────────────────────── */}
       {showAdd && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-background rounded-xl shadow-xl w-full max-w-md p-6 space-y-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-background rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto p-6 space-y-5">
             <h2 className="text-lg font-semibold">Add Category</h2>
             <form
+              id="add-category-form"
               onSubmit={handleSubmit((data) => addMutation.mutate(data))}
               className="space-y-4"
             >
@@ -454,31 +499,53 @@ export default function CategoriesPage() {
                 {errors.color && <p className="text-xs text-destructive">{errors.color.message}</p>}
               </div>
 
-              {addError && <p className="text-xs text-destructive">{addError}</p>}
-
-              <div className="flex justify-end gap-2 pt-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => { setShowAdd(false); setAddError(null); }}
-                >
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={addMutation.isPending}>
-                  {addMutation.isPending ? 'Saving…' : 'Add Category'}
-                </Button>
-              </div>
             </form>
+
+            {/* Outside the <form>: nothing in the rules editor may submit the category. */}
+            {isRuleCategoryType(addType) ? (
+              <RulesSection>
+                <StagedCategoryRules
+                  value={stagedRules}
+                  onChange={setStagedRules}
+                  existingRules={myRules}
+                  rulesUnavailable={myRulesLoading || myRulesError}
+                  disabled={addMutation.isPending}
+                />
+              </RulesSection>
+            ) : stagedRules.length > 0 && (
+              <p className="text-xs text-amber-600">
+                {stagedRules.length} staged rule{stagedRules.length === 1 ? '' : 's'} won&apos;t be saved — rules can only
+                assign income or expense categories.
+              </p>
+            )}
+
+            {addError && <p className="text-xs text-destructive">{addError}</p>}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                // Not while saving: the category and its rules would still be created.
+                disabled={addMutation.isPending}
+                onClick={() => { setShowAdd(false); setAddError(null); setStagedRules([]); }}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" form="add-category-form" disabled={addMutation.isPending}>
+                {addMutation.isPending ? 'Saving…' : 'Add Category'}
+              </Button>
+            </div>
           </div>
         </div>
       )}
 
       {/* ── Edit modal ───────────────────────────────────────────────────────── */}
       {editCat && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-background rounded-xl shadow-xl w-full max-w-md p-6 space-y-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-background rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto p-6 space-y-5">
             <h2 className="text-lg font-semibold">Edit Category</h2>
             <form
+              id="edit-category-form"
               onSubmit={editHandleSubmit((data) => editMutation.mutate({ ...data, id: editCat.id }))}
               className="space-y-4"
             >
@@ -559,17 +626,32 @@ export default function CategoriesPage() {
                 {editErrors.color && <p className="text-xs text-destructive">{editErrors.color.message}</p>}
               </div>
 
-              {editError && <p className="text-xs text-destructive">{editError}</p>}
-
-              <div className="flex justify-end gap-2 pt-2">
-                <Button type="button" variant="outline" onClick={() => setEditCat(null)}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={editMutation.isPending}>
-                  {editMutation.isPending ? 'Saving…' : 'Save Changes'}
-                </Button>
-              </div>
             </form>
+
+            {/* Outside the <form>: rule changes save immediately and must not submit it. */}
+            {isRuleCategoryType(editCat.type) && (
+              <RulesSection note="Changes are saved right away.">
+                <CategoryRulesManager categories={categories} categoryId={editCat.id} />
+                {/* Only your own rules are known here; other blockers (transactions, budgets,
+                    other members' rules) surface as the server's message on save. */}
+                {editType !== editCat.type && myRules.some((r) => r.categoryId === editCat.id) && (
+                  <p className="text-xs text-amber-600">
+                    A category with auto-categorization rules can&apos;t change type — remove its rules first.
+                  </p>
+                )}
+              </RulesSection>
+            )}
+
+            {editError && <p className="text-xs text-destructive">{editError}</p>}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={() => setEditCat(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" form="edit-category-form" disabled={editMutation.isPending}>
+                {editMutation.isPending ? 'Saving…' : 'Save Changes'}
+              </Button>
+            </div>
           </div>
         </div>
       )}
@@ -677,7 +759,8 @@ export default function CategoriesPage() {
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                Nothing is filed under it, so nothing will be lost.
+                No transactions are filed under it. Any auto-categorization rules that assign it
+                (yours or other family members&apos;) will be deleted too.
               </p>
             )}
 
@@ -967,5 +1050,22 @@ function CategoryGroup({ title, type, categories, activeMenu, setActiveMenu, onE
         <div className="space-y-2">{renderBranch(null, 0)}</div>
       )}
     </section>
+  );
+}
+
+/** Only income/expense categories can be assigned by auto-categorization rules. */
+function isRuleCategoryType(type: string | undefined): boolean {
+  return type === 'INCOME' || type === 'EXPENSE';
+}
+
+function RulesSection({ note, children }: { note?: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2 border-t pt-4">
+      <p className="text-sm font-medium">Auto-categorization rules</p>
+      <p className="text-xs text-muted-foreground">
+        Your personal rules — other family members don&apos;t see or use them.{note ? ` ${note}` : ''}
+      </p>
+      {children}
+    </div>
   );
 }

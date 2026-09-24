@@ -10,7 +10,7 @@
  * Handler count: 1 page-specific (/categories, already in base) + 5 base.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import CategoriesPage from '@/pages/admin/Categories';
@@ -201,7 +201,9 @@ describe('Categories page — safe delete', () => {
     await user.click(screen.getByRole('button', { name: /actions for fuel/i }));
     await user.click(screen.getByRole('button', { name: /^delete$/i }));
 
-    expect(await screen.findByText(/nothing will be lost/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no transactions are filed under it/i)).toBeInTheDocument();
+    // Deleting a category also deletes the auto-categorization rules that assign it (Cascade)
+    expect(screen.getByText(/auto-categorization rules that assign it.*will be deleted/i)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /^delete$/i }).slice(-1)[0]).toBeEnabled();
   });
 });
@@ -373,5 +375,303 @@ describe('Categories page — a new category is not forced to a default colour',
 
     await waitFor(() => expect(body).not.toBeNull());
     expect(body.color === '' || body.color === undefined).toBe(true);
+  });
+});
+
+describe('Categories page — auto-categorization rules in the Add/Edit dialogs', () => {
+  const FOOD_CAT = { id: 'food', name: 'Food', type: 'EXPENSE', parentId: null, isDefault: false, userId: null };
+  const GOLD_CAT = { id: 'gold', name: 'Gold', type: 'ASSET', parentId: null, isDefault: false, userId: null };
+  const NEW_CAT = { id: 'cat-new', name: 'Quick Commerce', type: 'EXPENSE', parentId: null, isDefault: false, userId: null, icon: null, color: null };
+
+  /** A stateful fake of /category-rules, so both lists on the page read one server truth. */
+  function rulesApi(initial: any[] = [], { failPatterns = [] as string[] } = {}) {
+    let rules = [...initial];
+    const calls: string[] = [];
+    const handlers = [
+      http.get(url('/category-rules'), () => HttpResponse.json({ data: rules })),
+      http.post(url('/category-rules'), async ({ request }) => {
+        const body = await request.json() as any;
+        calls.push(`POST rule ${body.pattern} → ${body.categoryId}`);
+        if (failPatterns.includes(body.pattern)) {
+          return HttpResponse.json({ message: 'A regex rule for "x" already exists' }, { status: 409 });
+        }
+        const rule = { id: `r-${rules.length + 1}`, ...body, category: { id: body.categoryId, name: 'Cat', type: 'EXPENSE' } };
+        rules.push(rule);
+        return HttpResponse.json({ data: rule }, { status: 201 });
+      }),
+      http.delete(url('/category-rules/:id'), ({ params }) => {
+        calls.push(`DELETE rule ${params.id}`);
+        rules = rules.filter((r) => r.id !== params.id);
+        return new HttpResponse(null, { status: 204 });
+      }),
+    ];
+    return { handlers, calls };
+  }
+
+  const createCategory = (calls: string[], status = 201) =>
+    http.post(url('/categories'), async ({ request }) => {
+      calls.push('POST category');
+      const body = await request.json() as any;
+      return status === 201
+        ? HttpResponse.json({ data: { ...NEW_CAT, type: body.type } }, { status: 201 })
+        : HttpResponse.json({ message: 'A EXPENSE category named "Quick Commerce" already exists' }, { status });
+    });
+
+  const dialog = (name: string) => within(screen.getByRole('heading', { name }).parentElement!);
+
+  async function openAdd(user: ReturnType<typeof userEvent.setup>) {
+    await screen.findByText('Food', { ignore: 'option, script, style' });
+    await user.click(screen.getByRole('button', { name: /add category/i }));
+    const d = dialog('Add Category');
+    await user.type(d.getByLabelText(/^name/i), 'Quick Commerce');
+    return d;
+  }
+
+  it('creates the category, then its staged rules one at a time in order, and shows them in the dedicated section', async () => {
+    const user = userEvent.setup();
+    const api = rulesApi();
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [...categoryHandlers([FOOD_CAT]), createCategory(api.calls), ...api.handlers],
+    });
+    const d = await openAdd(user);
+
+    expect(d.getByLabelText('Match type')).toHaveValue('REGEX');
+    await user.type(d.getByLabelText('Pattern'), '^upi/.*blinkit{Enter}');
+    await user.selectOptions(d.getByLabelText('Match type'), 'KEYWORD');
+    await user.type(d.getByLabelText('Pattern'), 'zepto');
+    await user.click(d.getByRole('button', { name: 'Add' }));
+    // Staging never submits the category form
+    expect(api.calls).toEqual([]);
+
+    await user.click(d.getByRole('button', { name: /^add category$/i }));
+
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Add Category' })).toBeNull());
+    expect(api.calls).toEqual([
+      'POST category',
+      'POST rule ^upi/.*blinkit → cat-new',
+      'POST rule zepto → cat-new',
+    ]);
+    const section = within(await screen.findByRole('list', { name: 'Auto-categorization rules' }));
+    expect(section.getByText('/^upi/.*blinkit/')).toBeInTheDocument();
+    expect(section.getByText('zepto')).toBeInTheDocument();
+  });
+
+  it('only creates the category when no rules are staged', async () => {
+    const user = userEvent.setup();
+    const api = rulesApi();
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [...categoryHandlers([FOOD_CAT]), createCategory(api.calls), ...api.handlers],
+    });
+    const d = await openAdd(user);
+    await user.click(d.getByRole('button', { name: /^add category$/i }));
+
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Add Category' })).toBeNull());
+    expect(api.calls).toEqual(['POST category']);
+  });
+
+  it('keeps the dialog busy until the last rule is saved', async () => {
+    const user = userEvent.setup();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const calls: string[] = [];
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [
+        ...categoryHandlers([FOOD_CAT]),
+        createCategory(calls),
+        http.get(url('/category-rules'), () => HttpResponse.json({ data: [] })),
+        http.post(url('/category-rules'), async () => {
+          await gate;
+          return HttpResponse.json({ data: {} }, { status: 201 });
+        }),
+      ],
+    });
+    const d = await openAdd(user);
+    await user.type(d.getByLabelText('Pattern'), 'blinkit{Enter}');
+    await user.click(d.getByRole('button', { name: /^add category$/i }));
+
+    await waitFor(() => expect(calls).toEqual(['POST category']));
+    expect(d.getByRole('button', { name: /saving/i })).toBeDisabled();
+    release();
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Add Category' })).toBeNull());
+  });
+
+  it('locks the staged rules (and Cancel) while saving, so what is saved is what was shown', async () => {
+    const user = userEvent.setup();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const calls: string[] = [];
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [
+        ...categoryHandlers([FOOD_CAT]),
+        createCategory(calls),
+        http.get(url('/category-rules'), () => HttpResponse.json({ data: [] })),
+        http.post(url('/category-rules'), async () => { await gate; return HttpResponse.json({ data: {} }, { status: 201 }); }),
+      ],
+    });
+    const d = await openAdd(user);
+    await user.type(d.getByLabelText('Pattern'), 'blinkit{Enter}');
+    await user.click(d.getByRole('button', { name: /^add category$/i }));
+    await waitFor(() => expect(calls).toEqual(['POST category']));
+
+    expect(d.getByLabelText('Pattern')).toBeDisabled();
+    expect(d.getByRole('button', { name: 'Add' })).toBeDisabled();
+    expect(d.getByRole('button', { name: 'Remove rule blinkit' })).toBeDisabled();
+    expect(d.getByRole('button', { name: /cancel/i })).toBeDisabled();
+    release();
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Add Category' })).toBeNull());
+  });
+
+  it('if a rule still fails after the category is created, opens the new category\'s Edit dialog saying which', async () => {
+    const user = userEvent.setup();
+    const api = rulesApi([], { failPatterns: ['zepto'] });
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [...categoryHandlers([FOOD_CAT]), createCategory(api.calls), ...api.handlers],
+    });
+    const d = await openAdd(user);
+    await user.type(d.getByLabelText('Pattern'), 'blinkit{Enter}');
+    await user.type(d.getByLabelText('Pattern'), 'zepto{Enter}');
+    await user.click(d.getByRole('button', { name: /^add category$/i }));
+
+    const edit = await screen.findByRole('heading', { name: 'Edit Category' });
+    expect(within(edit.parentElement!).getByText(
+      'Category created, but 1 rule could not be saved: "zepto" (A regex rule for "x" already exists)',
+    )).toBeInTheDocument();
+    expect(within(edit.parentElement!).getByLabelText(/^name/i)).toHaveValue('Quick Commerce');
+  });
+
+  it('does not post rules when the category itself is rejected, and keeps them staged', async () => {
+    const user = userEvent.setup();
+    const api = rulesApi();
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [...categoryHandlers([FOOD_CAT]), createCategory(api.calls, 409), ...api.handlers],
+    });
+    const d = await openAdd(user);
+    await user.type(d.getByLabelText('Pattern'), 'blinkit{Enter}');
+    await user.click(d.getByRole('button', { name: /^add category$/i }));
+
+    expect(await d.findByText(/already exists/)).toBeInTheDocument();
+    expect(api.calls).toEqual(['POST category']);
+    expect(within(d.getByRole('list', { name: 'Rules to add' })).getAllByRole('listitem')).toHaveLength(1);
+  });
+
+  it('hides rules for asset/liability categories and never saves staged ones for them', async () => {
+    const user = userEvent.setup();
+    const api = rulesApi();
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [...categoryHandlers([FOOD_CAT]), createCategory(api.calls), ...api.handlers],
+    });
+    const d = await openAdd(user);
+    await user.type(d.getByLabelText('Pattern'), 'blinkit{Enter}');
+    await user.selectOptions(d.getByLabelText(/^type/i), 'ASSET');
+
+    expect(d.queryByLabelText('Pattern')).toBeNull();
+    expect(d.getByText("1 staged rule won't be saved — rules can only assign income or expense categories.")).toBeInTheDocument();
+    await user.click(d.getByRole('button', { name: /^add category$/i }));
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Add Category' })).toBeNull());
+    expect(api.calls).toEqual(['POST category']);
+  });
+
+  it('starts every Add dialog with no staged rules (cancel discards them)', async () => {
+    const user = userEvent.setup();
+    const api = rulesApi();
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [...categoryHandlers([FOOD_CAT]), ...api.handlers],
+    });
+    let d = await openAdd(user);
+    await user.type(d.getByLabelText('Pattern'), 'blinkit{Enter}');
+    await user.click(d.getByRole('button', { name: /cancel/i }));
+    await user.click(screen.getByRole('button', { name: /add category/i }));
+    d = dialog('Add Category');
+    expect(d.queryByRole('list', { name: 'Rules to add' })).toBeNull();
+  });
+
+  it('Edit: lists, adds and removes this category\'s rules straight away — reflected in the dedicated section', async () => {
+    const user = userEvent.setup();
+    const api = rulesApi([
+      { id: 'r-1', matchType: 'REGEX', pattern: '^upi/.*swiggy', categoryId: 'food', category: FOOD_CAT },
+      { id: 'r-2', matchType: 'KEYWORD', pattern: 'salary', categoryId: 'sal', category: { id: 'sal', name: 'Salary', type: 'INCOME' } },
+    ]);
+    const puts: string[] = [];
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [
+        ...categoryHandlers([FOOD_CAT]),
+        http.put(url('/categories/:id'), () => { puts.push('PUT'); return HttpResponse.json({ data: FOOD_CAT }); }),
+        ...api.handlers,
+      ],
+    });
+    await screen.findByText('Food', { ignore: 'option, script, style' });
+    await user.click(screen.getByRole('button', { name: /actions for food/i }));
+    await user.click(screen.getByRole('button', { name: /^edit$/i }));
+    const d = dialog('Edit Category');
+
+    const scoped = await d.findByRole('list', { name: 'Rules for this category' });
+    expect(within(scoped).getAllByRole('listitem')).toHaveLength(1);
+    expect(d.getByText(/changes are saved right away/i)).toBeInTheDocument();
+
+    await user.type(d.getByLabelText('Pattern'), 'blinkit{Enter}');
+    await waitFor(() => expect(within(d.getByRole('list', { name: 'Rules for this category' })).getAllByRole('listitem')).toHaveLength(2));
+    const section = () => within(screen.getByRole('list', { name: 'Auto-categorization rules' }));
+    await waitFor(() => expect(section().getByText('/blinkit/')).toBeInTheDocument());
+
+    await user.click(d.getByRole('button', { name: 'Delete rule ^upi/.*swiggy' }));
+    await waitFor(() => expect(section().queryByText('/^upi/.*swiggy/')).toBeNull());
+
+    expect(screen.getByRole('heading', { name: 'Edit Category' })).toBeInTheDocument(); // still open
+    expect(puts).toEqual([]); // rule changes never save the category form
+    expect(api.calls).toEqual(['POST rule blinkit → food', 'DELETE rule r-1']);
+  });
+
+  it('Edit: warns that rules block a type change', async () => {
+    const user = userEvent.setup();
+    const api = rulesApi([{ id: 'r-1', matchType: 'REGEX', pattern: 'swiggy', categoryId: 'food', category: FOOD_CAT }]);
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [...categoryHandlers([FOOD_CAT]), ...api.handlers],
+    });
+    await screen.findByText('Food', { ignore: 'option, script, style' });
+    await user.click(screen.getByRole('button', { name: /actions for food/i }));
+    await user.click(screen.getByRole('button', { name: /^edit$/i }));
+    const d = dialog('Edit Category');
+
+    expect(d.queryByText(/can't change type/i)).toBeNull();
+    await user.selectOptions(d.getByLabelText(/^type/i), 'INCOME');
+    expect(d.getByText("A category with auto-categorization rules can't change type — remove its rules first.")).toBeInTheDocument();
+  });
+
+  it('Edit: no retype warning for a category without rules', async () => {
+    const user = userEvent.setup();
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [...categoryHandlers([FOOD_CAT]), ...rulesApi().handlers],
+    });
+    await screen.findByText('Food', { ignore: 'option, script, style' });
+    await user.click(screen.getByRole('button', { name: /actions for food/i }));
+    await user.click(screen.getByRole('button', { name: /^edit$/i }));
+    const d = dialog('Edit Category');
+    await d.findByText('No rules for this category yet.');
+    await user.selectOptions(d.getByLabelText(/^type/i), 'INCOME');
+    expect(d.queryByText(/can't change type/i)).toBeNull();
+  });
+
+  it('Edit: no rules section for an asset category', async () => {
+    const user = userEvent.setup();
+    renderPage(<CategoriesPage />, {
+      route: '/categories',
+      handlers: [...categoryHandlers([FOOD_CAT, GOLD_CAT]), ...rulesApi().handlers],
+    });
+    await screen.findByText('Gold', { ignore: 'option, script, style' });
+    await user.click(screen.getByRole('button', { name: /actions for gold/i }));
+    await user.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(dialog('Edit Category').queryByRole('list', { name: 'Rules for this category' })).toBeNull();
+    expect(dialog('Edit Category').queryByLabelText('Pattern')).toBeNull();
   });
 });

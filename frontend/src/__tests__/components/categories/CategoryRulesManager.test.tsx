@@ -12,7 +12,19 @@ import { describe, it, expect, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { CategoryRulesManager, type CategoryRule } from '@/components/categories/CategoryRulesManager';
+import { useState } from 'react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import {
+  CategoryRulesManager,
+  MAX_PATTERN_LENGTH,
+  MAX_RULES,
+  REGEX_LITERAL_WITH_FLAGS,
+  StagedCategoryRules,
+  validateRuleInput,
+  type CategoryRule,
+  type RuleDraft,
+} from '@/components/categories/CategoryRulesManager';
 import { renderPage, failOnConsoleError } from '../../support/renderPage';
 import { url } from '../../support/handlers';
 import { CATEGORIES } from '../../support/fixtures';
@@ -250,7 +262,7 @@ describe('CategoryRulesManager — adding a rule', () => {
       handlers: [
         rulesHandler(),
         http.post(url('/category-rules'), () =>
-          HttpResponse.json({ message: 'A keyword rule for "swiggy" already exists' }, { status: 409 })),
+          HttpResponse.json({ message: 'A keyword rule for "zepto" already exists' }, { status: 409 })),
       ],
     });
     await screen.findByRole('list', { name: 'Auto-categorization rules' });
@@ -270,7 +282,7 @@ describe('CategoryRulesManager — adding a rule', () => {
     });
     await screen.findByRole('list', { name: 'Auto-categorization rules' });
 
-    await fillForm(user, { pattern: 'swiggy' });
+    await fillForm(user, { pattern: 'zepto' });
     await user.click(screen.getByRole('button', { name: 'Add' }));
 
     expect(await screen.findByText('Could not save rule')).toBeInTheDocument();
@@ -322,5 +334,236 @@ describe('CategoryRulesManager — deleting a rule', () => {
     await user.click(await screen.findByRole('button', { name: 'Delete rule swiggy' }));
 
     expect(await screen.findByText('Could not delete rule')).toBeInTheDocument();
+  });
+});
+
+describe('validateRuleInput — mirrors the server so a staged rule can\'t fail after its category is created', () => {
+  const EXISTING: RuleDraft[] = [
+    { matchType: 'KEYWORD', pattern: 'swiggy' },
+    { matchType: 'REGEX', pattern: '^upi/.*zomato' },
+  ];
+
+  it.each([
+    ['KEYWORD', '   ', 'Pattern is required'],
+    ['KEYWORD', 'x'.repeat(201), 'Pattern must be at most 200 characters'],
+    ['REGEX', '/swiggy/i', 'Enter the pattern without the surrounding slashes and flags — matching is already case-insensitive'],
+    ['REGEX', '.*', 'This pattern matches empty text, so it would match every transaction'],
+    ['KEYWORD', '  SWIGGY ', 'A keyword rule for "swiggy" already exists'],
+    ['REGEX', '^upi/.*zomato', 'A regex rule for "^upi/.*zomato" already exists'],
+  ] as const)('%s %j → %s', (matchType, pattern, message) => {
+    expect(validateRuleInput(matchType, pattern, EXISTING)).toBe(message);
+  });
+
+  it('reports a regex syntax error the way the server does', () => {
+    expect(validateRuleInput('REGEX', '(a+', [])).toMatch(/^Invalid regular expression: /);
+  });
+
+  it.each([
+    ['KEYWORD', 'amazon (pay'], // "(" is a literal character in a text rule
+    ['REGEX', '/upi/.*/gym'], // a bare slash pattern is a real UPI segment, not a literal
+    ['REGEX', 'Swiggy'], // regexes aren't case-folded, so this isn't the keyword "swiggy"
+    ['REGEX', 'swiggy'], // same text as a KEYWORD rule is a different rule
+    ['KEYWORD', 'x'.repeat(200)],
+  ] as const)('accepts %s %j', (matchType, pattern) => {
+    expect(validateRuleInput(matchType, pattern, EXISTING)).toBeNull();
+  });
+});
+
+describe('CategoryRulesManager — scoped to one category (Edit Category dialog)', () => {
+  function renderScoped(categoryId = 'cat-food', handlers = [rulesHandler()]) {
+    return renderPage(<CategoryRulesManager categories={CATEGORIES} categoryId={categoryId} />, { route: '/', handlers });
+  }
+
+  it('lists only that category\'s rules, with no category picker, defaulting to regex', async () => {
+    renderScoped('cat-food');
+    const list = await screen.findByRole('list', { name: 'Rules for this category' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(1);
+    expect(list).toHaveTextContent('swiggy');
+    expect(list).not.toHaveTextContent('NEFT');
+    expect(screen.queryByLabelText('Category')).toBeNull();
+    expect(screen.getByLabelText('Match type')).toHaveValue('REGEX');
+  });
+
+  it('shows a scoped empty state', async () => {
+    renderScoped('cat-rent');
+    expect(await screen.findByText('No rules for this category yet.')).toBeInTheDocument();
+  });
+
+  it('saves straight away against the fixed category', async () => {
+    const user = userEvent.setup();
+    let body: any = null;
+    renderScoped('cat-food', [rulesHandler(), http.post(url('/category-rules'), async ({ request }) => {
+      body = await request.json();
+      return HttpResponse.json({ data: {} }, { status: 201 });
+    })]);
+    await screen.findByRole('list', { name: 'Rules for this category' });
+
+    await user.type(screen.getByLabelText('Pattern'), '^UPI/.*BLINKIT');
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(body).toEqual({ matchType: 'REGEX', pattern: '^UPI/.*BLINKIT', categoryId: 'cat-food' }));
+  });
+
+  it('never submits a surrounding form — Add, Enter or delete', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn((e: any) => e.preventDefault());
+    renderPage(
+      <form onSubmit={onSubmit}><CategoryRulesManager categories={CATEGORIES} categoryId="cat-food" /></form>,
+      {
+        route: '/',
+        handlers: [
+          rulesHandler(),
+          http.post(url('/category-rules'), () => HttpResponse.json({ data: {} }, { status: 201 })),
+          http.delete(url('/category-rules/:id'), () => new HttpResponse(null, { status: 204 })),
+        ],
+      },
+    );
+    await screen.findByRole('list', { name: 'Rules for this category' });
+
+    await user.type(screen.getByLabelText('Pattern'), 'blinkit');
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+    await user.type(screen.getByLabelText('Pattern'), 'zepto{Enter}');
+    await user.click(screen.getByRole('button', { name: 'Delete rule swiggy' }));
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
+
+describe('CategoryRulesManager — no double submit', () => {
+  it('ignores a second Enter while the first add is still saving', async () => {
+    const user = userEvent.setup();
+    let posts = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    renderPage(<CategoryRulesManager categories={CATEGORIES} categoryId="cat-food" />, {
+      route: '/',
+      handlers: [rulesHandler(), http.post(url('/category-rules'), async () => {
+        posts++;
+        await gate;
+        return HttpResponse.json({ data: {} }, { status: 201 });
+      })],
+    });
+    await screen.findByRole('list', { name: 'Rules for this category' });
+
+    await user.type(screen.getByLabelText('Pattern'), 'blinkit{Enter}{Enter}');
+    release();
+    await waitFor(() => expect(screen.getByLabelText('Pattern')).toHaveValue(''));
+    expect(posts).toBe(1);
+  });
+});
+
+describe('client/server rule limits stay in sync', () => {
+  // The frontend image can't import backend code, so pin the mirrored constants against
+  // the backend source (both are in the same checkout in CI).
+  const read = (rel: string) => readFileSync(resolve(__dirname, '../../../../../backend/src', rel), 'utf8');
+
+  it('uses the same rules-per-user cap as categoryRuleService', () => {
+    expect(read('services/categoryRuleService.ts')).toContain(`MAX_RULES_PER_USER = ${MAX_RULES};`);
+  });
+
+  it('uses the same /pattern/flags detector as safeRegex', () => {
+    expect(read('utils/safeRegex.ts')).toContain(`REGEX_LITERAL_WITH_FLAGS = ${REGEX_LITERAL_WITH_FLAGS.toString()};`);
+  });
+
+  it('uses the same pattern length cap as the category-rules route', () => {
+    expect(read('routes/categoryRules.ts')).toContain(`.max(${MAX_PATTERN_LENGTH})`);
+  });
+});
+
+describe('CategoryRulesManager — unscoped (dedicated section) keeps its behavior', () => {
+  it('defaults to "Contains text" and offers the category picker', async () => {
+    renderManager();
+    expect(await screen.findByLabelText('Match type')).toHaveValue('KEYWORD');
+    expect(screen.getByLabelText('Category')).toBeInTheDocument();
+  });
+
+  it('blocks a new rule at the 100-rule cap without a request', async () => {
+    const user = userEvent.setup();
+    const many: CategoryRule[] = Array.from({ length: 100 }, (_, i) => ({
+      id: `r-${i}`, matchType: 'KEYWORD', pattern: `kw${i}`, categoryId: 'cat-food', category: FOOD,
+    }));
+    const onBody = vi.fn();
+    renderManager({ handlers: [rulesHandler(many), http.post(url('/category-rules'), () => { onBody(); return HttpResponse.json({}); })] });
+    await screen.findByRole('list', { name: 'Auto-categorization rules' });
+
+    await fillForm(user, { pattern: 'another' });
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+
+    expect(await screen.findByText('You can have at most 100 auto-categorization rules')).toBeInTheDocument();
+    expect(onBody).not.toHaveBeenCalled();
+  });
+});
+
+describe('StagedCategoryRules (Add Category dialog — nothing is saved until the category is)', () => {
+  function Harness({ existing = [] as RuleDraft[], initial = [] as RuleDraft[], rulesUnavailable = false, onValue = (_: RuleDraft[]) => {} }) {
+    const [value, setValue] = useState<RuleDraft[]>(initial);
+    return (
+      <form onSubmit={(e) => { e.preventDefault(); throw new Error('the category form must not submit'); }}>
+        <StagedCategoryRules
+          value={value}
+          onChange={(v) => { setValue(v); onValue(v); }}
+          existingRules={existing}
+          rulesUnavailable={rulesUnavailable}
+        />
+      </form>
+    );
+  }
+
+  it('stages rules locally (regex by default) without any request, and removes them', async () => {
+    const user = userEvent.setup();
+    const onValue = vi.fn();
+    // No MSW handler for /category-rules POST: any request would fail the test.
+    renderPage(<Harness onValue={onValue} />, { route: '/' });
+
+    expect(screen.getByLabelText('Match type')).toHaveValue('REGEX');
+    expect(screen.getByText('Rules are saved when you add the category.')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Pattern'), '^upi/.*swiggy{Enter}');
+    await user.selectOptions(screen.getByLabelText('Match type'), 'KEYWORD');
+    await user.type(screen.getByLabelText('Pattern'), 'zomato');
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+
+    const list = screen.getByRole('list', { name: 'Rules to add' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+    expect(onValue).toHaveBeenLastCalledWith([
+      { matchType: 'REGEX', pattern: '^upi/.*swiggy' },
+      { matchType: 'KEYWORD', pattern: 'zomato' },
+    ]);
+
+    await user.click(screen.getByRole('button', { name: 'Remove rule ^upi/.*swiggy' }));
+    expect(onValue).toHaveBeenLastCalledWith([{ matchType: 'KEYWORD', pattern: 'zomato' }]);
+  });
+
+  it('rejects a duplicate of an existing rule or of another staged one', async () => {
+    const user = userEvent.setup();
+    renderPage(<Harness existing={[{ matchType: 'REGEX', pattern: '^neft' }]} initial={[{ matchType: 'REGEX', pattern: 'blinkit' }]} />, { route: '/' });
+
+    await user.type(screen.getByLabelText('Pattern'), '^neft{Enter}');
+    expect(screen.getByText('A regex rule for "^neft" already exists')).toBeInTheDocument();
+    await user.clear(screen.getByLabelText('Pattern'));
+    await user.type(screen.getByLabelText('Pattern'), 'blinkit{Enter}');
+    expect(screen.getByText('A regex rule for "blinkit" already exists')).toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Rules to add' })).getAllByRole('listitem')).toHaveLength(1);
+  });
+
+  it('counts staged rules toward the 100-rule cap', async () => {
+    const user = userEvent.setup();
+    const existing = Array.from({ length: 99 }, (_, i) => ({ matchType: 'KEYWORD' as const, pattern: `kw${i}` }));
+    renderPage(<Harness existing={existing} initial={[{ matchType: 'REGEX', pattern: 'one' }]} />, { route: '/' });
+
+    await user.type(screen.getByLabelText('Pattern'), 'two{Enter}');
+    expect(screen.getByText('You can have at most 100 auto-categorization rules')).toBeInTheDocument();
+  });
+
+  it('says when existing rules could not be checked (loading or failed)', () => {
+    renderPage(<Harness rulesUnavailable />, { route: '/' });
+    expect(screen.getByText(/your existing rules aren't loaded/i)).toBeInTheDocument();
+  });
+
+  it('ignores an empty pattern', async () => {
+    const user = userEvent.setup();
+    const onValue = vi.fn();
+    renderPage(<Harness onValue={onValue} />, { route: '/' });
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+    expect(onValue).not.toHaveBeenCalled();
   });
 });
