@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import api from '@/lib/api';
+import { MAX_DOCUMENT_BYTES, MAX_STATEMENT_BYTES, fileTooLargeMessage } from '@/lib/uploadLimits';
 import { formatDate, formatNextOccurrence } from '@/lib/dateFormat';
 import { useDebounced } from '@/hooks/useDebounced';
 import { investmentsApi } from '@/api/investments';
@@ -875,6 +876,7 @@ function ImportModal({ onClose, targetUserId }: { onClose: () => void; targetUse
   const { data: categories = [] } = useCategories();
   const { data: rules = [] } = useCategoryRules(targetUserId);
   const [file, setFile] = useState<File | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [bankAccountId, setBankAccountId] = useState(AUTO_DETECT);
   const [autoDetectResult, setAutoDetectResult] = useState<AutoDetectResult>({ account: null, ambiguous: false });
   const [manualBankHint, setManualBankHint] = useState('');
@@ -925,7 +927,12 @@ function ImportModal({ onClose, targetUserId }: { onClose: () => void; targetUse
 
   // Shared handler for file selection (click + drag-drop).
   function handleFileSelected(f: File | null | undefined) {
-    const selected = f ?? null;
+    const tooLarge = f ? fileTooLargeMessage(f, MAX_STATEMENT_BYTES) : null;
+    setFileError(tooLarge);
+    // Clear the input so it doesn't show a file that won't upload, and so re-picking
+    // the same file (e.g. after compressing it) fires onChange again.
+    if (tooLarge && fileRef.current) fileRef.current.value = '';
+    const selected = tooLarge ? null : f ?? null;
     setFile(selected);
     setPdfPassword('');
     if (selected && bankAccountId === AUTO_DETECT) {
@@ -1055,6 +1062,7 @@ function ImportModal({ onClose, targetUserId }: { onClose: () => void; targetUse
                 onChange={(e) => handleFileSelected(e.target.files?.[0])}
               />
             </div>
+            {fileError && <p role="alert" className="text-sm text-destructive">{fileError}</p>}
             {isPDF && (
               <div className="space-y-1">
                 <Label>PDF Password (if protected)</Label>
@@ -1905,6 +1913,14 @@ function TransactionDocumentsModal({ tx, onClose }: { tx: Transaction; onClose: 
   const { toast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+
+  function selectFile(f: File | null) {
+    const tooLarge = f ? fileTooLargeMessage(f, MAX_DOCUMENT_BYTES) : null;
+    setFileError(tooLarge);
+    if (tooLarge && fileRef.current) fileRef.current.value = '';
+    setFile(tooLarge ? null : f);
+  }
 
   const { data: documents = [], isLoading } = useQuery({
     queryKey: ['documents', 'Transaction', tx.id],
@@ -1968,12 +1984,13 @@ function TransactionDocumentsModal({ tx, onClose }: { tx: Transaction; onClose: 
               ref={fileRef}
               type="file"
               accept=".pdf,.png,.jpg,.jpeg,.webp,.csv,.txt,.doc,.docx"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              onChange={(e) => selectFile(e.target.files?.[0] ?? null)}
             />
             <Button onClick={() => uploadMutation.mutate()} disabled={!file || uploadMutation.isPending}>
               {uploadMutation.isPending ? 'Uploading…' : 'Upload'}
             </Button>
           </div>
+          {fileError && <p role="alert" className="text-sm text-destructive">{fileError}</p>}
           {uploadMutation.isError && (
             <p className="text-sm text-destructive">{(uploadMutation.error as any)?.response?.data?.message ?? 'Upload failed'}</p>
           )}

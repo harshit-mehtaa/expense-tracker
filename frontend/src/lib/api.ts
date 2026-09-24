@@ -122,6 +122,15 @@ api.interceptors.response.use(
     // For all non-401 errors (and 401s that are not retried), dispatch a toast event.
     // Skip network errors that have no response (handled by queryClient onError).
     // Skip refresh/login 401s — those are handled by AuthContext/LoginPage.
+    // A 413 from a proxy (nginx's body-size cap) is not our JSON envelope. Normalize it
+    // so every caller — toast and inline errors reading response.data.message — agrees.
+    if (error.response?.status === 413) {
+      const body = error.response.data as { message?: unknown } | undefined;
+      if (typeof body?.message !== 'string') {
+        error.response.data = { success: false, message: 'File too large', code: 'FILE_TOO_LARGE' };
+      }
+    }
+
     if (error.response && !((isRefreshEndpoint || isLoginEndpoint) && error.response.status === 401)) {
       const data = error.response.data as { message?: string } | undefined;
       const message = data?.message ?? `Request failed (${error.response.status})`;

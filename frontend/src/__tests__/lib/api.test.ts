@@ -338,3 +338,28 @@ describe('api:error dispatch', () => {
     expect(logoutListener).not.toHaveBeenCalled();
   });
 });
+
+describe('413 from a proxy (nginx rejects the body before the backend sees it)', () => {
+  it('turns a non-JSON 413 into the standard FILE_TOO_LARGE envelope for callers and the toast', async () => {
+    server.use(http.post(`${BASE}/documents`, () =>
+      new HttpResponse('<html><body>413 Request Entity Too Large</body></html>', {
+        status: 413, headers: { 'Content-Type': 'text/html' },
+      })));
+
+    const err = await api.post('/documents', {}).catch((e) => e);
+
+    expect(err.response.status).toBe(413);
+    expect(err.response.data).toEqual({ success: false, message: 'File too large', code: 'FILE_TOO_LARGE' });
+    expect(apiErrorListener.mock.calls[0][0].detail).toEqual({ message: 'File too large' });
+  });
+
+  it('keeps the backend\'s own JSON 413 message untouched', async () => {
+    server.use(http.post(`${BASE}/documents`, () =>
+      HttpResponse.json({ success: false, message: 'Request body too large', code: 'PAYLOAD_TOO_LARGE' }, { status: 413 })));
+
+    const err = await api.post('/documents', {}).catch((e) => e);
+
+    expect(err.response.data.message).toBe('Request body too large');
+    expect(apiErrorListener.mock.calls[0][0].detail).toEqual({ message: 'Request body too large' });
+  });
+});

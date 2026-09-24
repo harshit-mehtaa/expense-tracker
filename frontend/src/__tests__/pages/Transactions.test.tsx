@@ -1270,3 +1270,67 @@ describe('Transactions page — edit/delete/import/bulk/convert cache invalidati
     });
   });
 });
+
+// ─── Browser-side upload size check ───────────────────────────────────────────
+// An oversized file must never start uploading: nginx rejects bodies over its cap
+// early, which a browser can surface as a connection reset rather than a 413. No POST
+// handler is registered below, so an upload attempt would fail the test as an
+// unhandled request.
+
+/** A File whose reported size exceeds the limit without allocating the bytes. */
+function fileOfSize(name: string, type: string, size: number): File {
+  const file = new File(['x'], name, { type });
+  Object.defineProperty(file, 'size', { value: size });
+  return file;
+}
+
+describe('upload size limits (checked before uploading)', () => {
+  it('import dialog: rejects a statement over 15 MB and keeps Import disabled', async () => {
+    const user = userEvent.setup();
+    const { container } = renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers() });
+    await screen.findAllByText('Grocery run');
+
+    await user.click(screen.getByRole('button', { name: /import csv/i }));
+    await screen.findByRole('heading', { name: 'Import Bank Statement' });
+    const input = container.querySelector('input[type="file"][accept=".csv,.pdf"]') as HTMLInputElement;
+    await user.upload(input, fileOfSize('huge.csv', 'text/csv', 15 * 1024 * 1024 + 1));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('File too large — the limit is 15 MB');
+    expect(screen.getByRole('button', { name: /^import$/i })).toBeDisabled();
+    expect(input.value).toBe(''); // cleared, so re-picking a fixed file fires onChange
+  });
+
+  it('import dialog: a valid file after an oversized one clears the error', async () => {
+    const user = userEvent.setup();
+    const { container } = renderPage(<TransactionsPage />, { route: '/transactions', handlers: txHandlers() });
+    await screen.findAllByText('Grocery run');
+
+    await user.click(screen.getByRole('button', { name: /import csv/i }));
+    await screen.findByRole('heading', { name: 'Import Bank Statement' });
+    const input = container.querySelector('input[type="file"][accept=".csv,.pdf"]') as HTMLInputElement;
+    await user.upload(input, fileOfSize('huge.csv', 'text/csv', 15 * 1024 * 1024 + 1));
+    await user.upload(input, fileOfSize('ok.csv', 'text/csv', 1024));
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^import$/i })).toBeEnabled();
+  });
+
+  it('documents dialog: rejects a file over 10 MB and keeps Upload disabled', async () => {
+    const user = userEvent.setup();
+    const { container } = renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [...txHandlers(), http.get(url('/documents'), () => HttpResponse.json({ data: [] }))],
+    });
+    await screen.findAllByText('Grocery run');
+
+    await user.click(screen.getAllByTitle('Transaction actions')[0]);
+    await user.click(await screen.findByText('Documents'));
+    await screen.findByRole('heading', { name: 'Documents' });
+    const input = container.querySelector('input[type="file"][accept^=".pdf"]') as HTMLInputElement;
+    await user.upload(input, fileOfSize('scan.pdf', 'application/pdf', 10 * 1024 * 1024 + 1));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('File too large — the limit is 10 MB');
+    expect(screen.getByRole('button', { name: /^upload$/i })).toBeDisabled();
+    expect(input.value).toBe('');
+  });
+});
