@@ -1,7 +1,10 @@
 import fs from 'fs';
 import { Router } from 'express';
 import multer from 'multer';
+import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
+import { singleFileUpload } from '../middleware/upload';
+import { optionalQuery } from '../utils/querySchemas';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendCreated } from '../utils/response';
 import { AppError } from '../utils/AppError';
@@ -22,7 +25,16 @@ if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
 const upload = multer({
   dest: uploadsDir,
-  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB — PDF bank statements can be larger than CSV
+  limits: {
+    fileSize: 15 * 1024 * 1024, // 15MB — PDF bank statements can be larger than CSV
+    // multer 2's opt-in hardening, sized to the real form: one file plus at most three
+    // text fields (bankAccountId, bank, pdfPassword — Transactions.tsx import dialog).
+    files: 1,
+    fields: 5,
+    parts: 6,
+    fieldSize: 1024,
+    fieldNestingDepth: 0, // no `a[b]` field names: every field is a flat string
+  },
   fileFilter: (_req, file, cb) => {
     const isCSV = ['text/csv', 'application/csv', 'text/plain', 'application/vnd.ms-excel'].includes(file.mimetype)
       || file.originalname.endsWith('.csv');
@@ -36,16 +48,20 @@ const upload = multer({
   },
 });
 
+// Multipart text fields arrive as strings; a repeated field would arrive as an array
+// and crash the parser (bankHint.toUpperCase), so shape them before use.
+const importBodySchema = z.object({
+  bankAccountId: optionalQuery(z.string().cuid()),
+  bank: optionalQuery(z.string().trim().max(50)), // free-form hint; the parser upper-cases it
+  pdfPassword: optionalQuery(z.string().max(1024)),
+});
+
 router.post(
   '/',
   requireAuth,
-  upload.single('file'),
+  singleFileUpload(upload, 'file'),
   asyncHandler(async (req, res) => {
     if (!req.file) throw AppError.badRequest('No file uploaded');
-
-    const accountId = req.body.bankAccountId as string | undefined;
-    const bankHint = req.body.bank as string | undefined;
-    const pdfPassword = req.body.pdfPassword as string | undefined;
 
     const isPDF = req.file.mimetype === 'application/pdf'
       || req.file.mimetype === 'application/x-pdf'
@@ -56,7 +72,10 @@ router.post(
     // anything that throws between upload and cleanup orphans a file on the volume.
     let buffer: Buffer;
     let ownerUserId: string;
+    let body: z.infer<typeof importBodySchema>;
     try {
+      // Validated inside the try so a rejected body still unlinks the temp file.
+      body = importBodySchema.parse(req.body);
       ownerUserId = await resolveWriteUserId(req);
       buffer = fs.readFileSync(req.file.path);
     } finally {
@@ -64,6 +83,7 @@ router.post(
       try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
     }
 
+    const { bankAccountId: accountId, bank: bankHint, pdfPassword } = body;
     const result = isPDF
       ? await parsePDF(buffer, bankHint, pdfPassword)
       : parseCSV(buffer, bankHint);

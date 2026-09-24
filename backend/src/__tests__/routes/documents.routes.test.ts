@@ -440,7 +440,14 @@ describe('multer configuration (destination/filename/fileFilter)', () => {
     expect(err.statusCode).toBe(400);
   });
 
-  it('the file size limit is 10MB', () => {
-    expect(hoisted.multerOpts.value.limits).toEqual({ fileSize: 10 * 1024 * 1024 });
+  it('limits: 10MB file size plus the multer 2 hardening sized to the attach form', () => {
+    expect(hoisted.multerOpts.value.limits).toEqual({
+      fileSize: 10 * 1024 * 1024,
+      files: 1,
+      fields: 4,
+      parts: 5,
+      fieldSize: 1024,
+      fieldNestingDepth: 0,
+    });
   });
 });

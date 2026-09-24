@@ -285,6 +285,83 @@ describe('POST /api/transactions/import — multer limits (real multer)', () => 
   });
 });
 
+describe('POST /api/transactions/import — form hardening (real multer)', () => {
+  const csv = () => [Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' }] as const;
+
+  it('accepts the real form: file + bankAccountId + bank + pdfPassword', async () => {
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .field('bankAccountId', 'clm0000000000accountid01')
+      .field('bank', 'HDFC')
+      .field('pdfPassword', 'secret')
+      .attach('file', ...csv());
+    expect(res.status).toBe(201);
+    expect(parseCSV).toHaveBeenCalledWith(expect.any(Buffer), 'HDFC');
+  });
+
+  it('rejects a repeated bank field with 422 (was a 500 in the parser) and unlinks the temp file', async () => {
+    const before = uploadsDirFiles();
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .field('bank', 'HDFC')
+      .field('bank', 'SBI')
+      .attach('file', ...csv());
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(parseCSV).not.toHaveBeenCalled();
+    expect(uploadsDirFiles()).toEqual(before);
+  });
+
+  it('rejects a non-CUID bankAccountId with 422', async () => {
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .field('bankAccountId', 'acc1')
+      .attach('file', ...csv());
+    expect(res.status).toBe(422);
+  });
+
+  it.each([
+    ['a bracketed field name', (r: request.Test) => r.field('bank[x]', 'HDFC')],
+    ['too many fields', (r: request.Test) => ['a', 'b', 'c', 'd', 'e', 'f'].reduce((acc, f) => acc.field(f, 'x'), r)],
+    ['an oversized field value', (r: request.Test) => r.field('pdfPassword', 'x'.repeat(2000))],
+  ])('rejects %s with 400 UPLOAD_REJECTED', async (_label, addFields) => {
+    const res = await addFields(request(mountImportRouter()).post('/api/transactions/import')).attach('file', ...csv());
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('UPLOAD_REJECTED');
+    expect(parseCSV).not.toHaveBeenCalled();
+  });
+
+  it('rejects a second file with 400 and leaves no temp files', async () => {
+    const before = uploadsDirFiles();
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .attach('file', ...csv())
+      .attach('file', ...csv());
+    expect(res.status).toBe(400);
+    expect(uploadsDirFiles()).toEqual(before);
+  });
+
+  it('rejects a multipart body with no boundary with 400, not 500', async () => {
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .set('Content-Type', 'multipart/form-data')
+      .send('xx');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('UPLOAD_REJECTED');
+  });
+
+  it('rejects a truncated body with 400 and leaves no temp file', async () => {
+    const before = uploadsDirFiles();
+    const body = '--B\r\nContent-Disposition: form-data; name="file"; filename="s.csv"\r\nContent-Type: text/csv\r\n\r\ndate,amount\n1';
+    const res = await request(mountImportRouter())
+      .post('/api/transactions/import')
+      .set('Content-Type', 'multipart/form-data; boundary=B')
+      .send(body);
+    expect(res.status).toBe(400);
+    expect(uploadsDirFiles()).toEqual(before);
+  });
+});
+
 describe('POST /api/transactions/import — validation', () => {
   it('returns 400 when no file is attached', async () => {
     const res = await request(mountImportRouter()).post('/api/transactions/import');
@@ -356,12 +433,12 @@ describe('POST /api/transactions/import — persistence and audit', () => {
   it('hands the parsed statement to the service with the RAW filename (service sanitizes)', async () => {
     await request(mountImportRouter())
       .post('/api/transactions/import')
-      .field('bankAccountId', 'acc1')
+      .field('bankAccountId', 'clm0000000000accountid01')
       .attach('file', Buffer.from('date,amount\n'), { filename: 'stmt.csv', contentType: 'text/csv' });
 
     expect(persistParsedStatement).toHaveBeenCalledWith({
       ownerUserId: 'admin-id',
-      accountId: 'acc1',
+      accountId: 'clm0000000000accountid01',
       bank: 'HDFC',
       rowCount: 1,
       transactions: [expect.objectContaining({ description: 'Coffee' })],

@@ -216,3 +216,68 @@ describe('errorHandler — MulterError', () => {
     expect(res.body.code).toBe('INTERNAL_ERROR');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// body-parser errors (malformed / oversized request bodies) → 4xx, not 500
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('errorHandler — request body errors', () => {
+  function makeBodyApp(limit?: string) {
+    const app = express();
+    app.use(express.json(limit ? { limit } : undefined));
+    app.post('/test', (_req: Request, res: Response) => { res.json({ ok: true }); });
+    app.use(errorHandler);
+    return app;
+  }
+
+  it('maps malformed JSON to 400 INVALID_BODY without leaking parser internals', async () => {
+    const res = await request(makeBodyApp()).post('/test').set('Content-Type', 'application/json').send('{bad');
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ success: false, message: 'Malformed request body', code: 'INVALID_BODY' });
+  });
+
+  it('maps an oversized JSON body to 413 PAYLOAD_TOO_LARGE', async () => {
+    const res = await request(makeBodyApp('10b')).post('/test').send({ a: 'more than ten bytes' });
+    expect(res.status).toBe(413);
+    expect(res.body).toEqual({ success: false, message: 'Request body too large', code: 'PAYLOAD_TOO_LARGE' });
+  });
+
+  it('does not log client body errors as server errors', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await request(makeBodyApp()).post('/test').set('Content-Type', 'application/json').send('{bad');
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('keeps other exposed http-errors (e.g. a 416 from res.download) as themselves, headers included', async () => {
+    const app = makeErrorApp(() => {
+      throw Object.assign(new Error('Range Not Satisfiable'), {
+        status: 416, statusCode: 416, expose: true, headers: { 'Content-Range': 'bytes */10' },
+      });
+    });
+    const res = await request(app).get('/test');
+    expect(res.status).toBe(416);
+    expect(res.headers['content-range']).toBe('bytes */10');
+    expect(res.body).toEqual({ success: false, message: 'Range Not Satisfiable', code: 'REQUEST_ERROR' });
+  });
+
+  it('maps an unsupported body encoding (415) to INVALID_BODY with its own status', async () => {
+    const app = express();
+    app.use(express.json());
+    app.post('/test', (_req: Request, res: Response) => { res.json({ ok: true }); });
+    app.use(errorHandler);
+    const res = await request(app).post('/test').set('Content-Type', 'application/json').set('Content-Encoding', 'xyz').send('{}');
+    expect(res.status).toBe(415);
+    expect(res.body.code).toBe('INVALID_BODY');
+  });
+
+  it('leaves a non-exposed or 5xx http-error on the 500 path', async () => {
+    const app = makeErrorApp(() => { throw Object.assign(new Error('internal'), { status: 500, expose: false }); });
+    const res = await request(app).get('/test');
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('INTERNAL_ERROR');
+  });
+});

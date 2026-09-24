@@ -6,6 +6,7 @@ import multer from 'multer';
 import { z } from 'zod';
 import { Role } from '@prisma/client';
 import { requireAuth } from '../middleware/auth';
+import { singleFileUpload } from '../middleware/upload';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendCreated, sendNoContent, sendSuccess } from '../utils/response';
 import { prisma } from '../config/prisma';
@@ -52,7 +53,15 @@ const documentStorage = multer.diskStorage({
 
 const upload = multer({
   storage: documentStorage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+    // One file plus the two text fields the attach form sends (entityType, entityId).
+    files: 1,
+    fields: 4,
+    parts: 5,
+    fieldSize: 1024,
+    fieldNestingDepth: 0,
+  },
   fileFilter: (_req, file, cb) => {
     const allowed = new Set([
       'application/pdf',
@@ -188,7 +197,7 @@ router.get('/', asyncHandler(async (req, res) => {
   sendSuccess(res, documents);
 }));
 
-router.post('/', upload.single('file'), asyncHandler(async (req, res) => {
+router.post('/', singleFileUpload(upload, 'file'), asyncHandler(async (req, res) => {
   const parsed = entityQuerySchema.safeParse(req.body);
   if (!parsed.success) {
     unlinkQuietly(req.file?.path);
