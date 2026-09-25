@@ -33,7 +33,7 @@ vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
     ...authState,
     login: vi.fn(),
-    logout: vi.fn(),
+    logout: vi.fn().mockResolvedValue(undefined),
     refreshUser: vi.fn(),
   }),
 }));

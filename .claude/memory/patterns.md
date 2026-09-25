@@ -51,6 +51,9 @@
   supertest against a `makeApp.ts` test harness. **Live-verified: 1720 tests, 48 files,
   all passing.**
 - Frontend: Vitest, `environment: jsdom`, React Testing Library, MSW for API mocking.
+  Radix menus in tests: open with `user.click(trigger)`; assert focus return with `waitFor`.
+  Hand-rolled popovers close via `hooks/useOutsideDismiss` (never a document `mousedown`
+  listener: Radix triggers preventDefault pointerdown, so mousedown never fires).
 - **Backend is at 100% statements/branches/functions/lines and CI gates on it** — the
   "Test backend" step runs `npm run test:coverage`, so any uncovered line fails the build.
   New backend code must ship with tests; there is no slack left in the threshold.

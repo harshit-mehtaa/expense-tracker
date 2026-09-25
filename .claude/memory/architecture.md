@@ -117,7 +117,8 @@ images, then flips GHCR package visibility to public.
   doesn't route CASH the way `recurringService.ts` does — see vision.md tech debt.
 
 ## Navigation & URL tabs (since 2026-09-25)
-- Sidebar (`Sidebar.tsx` NAV_GROUPS): Dashboard | Money | Wealth | Protection & Debt | Planning; Settings pinned.
+- Sidebar (`Sidebar.tsx` NAV_GROUPS): Dashboard | Money | Wealth | Protection & Debt | Planning. Settings lives in
+  the header account menu (`UserMenu.tsx`, Radix: identity, Settings, Log out); logout goes via `useLogout`.
 - URL tabs (`?tab=`, TABS/isTab pattern): Transactions (transactions/recurring/subscriptions — parent owns the
   member selector, children take required `viewUserId`), Settings (general/categories/family — family ADMIN-only,
   gated in Settings; no AdminRoute), Assets (assets/gold/real-estate). Redirects in App.tsx: /recurring

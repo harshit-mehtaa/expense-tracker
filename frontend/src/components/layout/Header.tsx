@@ -1,5 +1,4 @@
-import { Bell, Plus, Moon, Sun, LogOut, ChevronDown, ArrowUpRight } from 'lucide-react';
-import { useAuth } from '@/contexts/AuthContext';
+import { Bell, Plus, Moon, Sun, ChevronDown, ArrowUpRight } from 'lucide-react';
 import { useFY } from '@/contexts/FYContext';
 import { formatFYLabel, listFYOptions } from '@/lib/financialYear';
 import { Button } from '@/components/ui/button';
@@ -9,9 +8,10 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { fetchUpcomingAlerts } from '@/api/dashboard';
 import { formatINR } from '@/lib/indianFormat';
+import { UserMenu } from './UserMenu';
+import { useOutsideDismiss } from '@/hooks/useOutsideDismiss';
 
 export function Header() {
-  const { user, logout } = useAuth();
   const { selectedFY, setSelectedFY } = useFY();
   const [isDark, setIsDark] = useState(() => {
     const stored = localStorage.getItem('theme');
@@ -33,16 +33,7 @@ export function Header() {
     document.documentElement.classList.toggle('dark', isDark);
   }, [isDark]);
 
-  useEffect(() => {
-    if (!showNotifications) return;
-    function handleOutside(e: MouseEvent) {
-      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
-        setShowNotifications(false);
-      }
-    }
-    document.addEventListener('mousedown', handleOutside);
-    return () => document.removeEventListener('mousedown', handleOutside);
-  }, [showNotifications]);
+  useOutsideDismiss(notifRef, showNotifications, () => setShowNotifications(false));
 
   const toggleDark = () => {
     const next = !isDark;
@@ -143,19 +134,8 @@ export function Header() {
         {/* Divider */}
         <div className="mx-1 h-5 w-px bg-border" />
 
-        {/* User avatar + logout */}
-        <div className="flex items-center gap-2">
-          <div
-            className="flex h-7 w-7 items-center justify-center rounded-full text-white text-xs font-semibold shadow-sm"
-            style={{ backgroundColor: user?.colorTag ?? '#7c3aed' }}
-          >
-            {user?.name?.[0]?.toUpperCase() ?? 'U'}
-          </div>
-          <span className="hidden max-w-32 truncate text-sm font-medium text-foreground xl:block">{user?.name}</span>
-          <Button variant="ghost" size="icon" onClick={logout} aria-label="Logout" className="h-8 w-8 text-muted-foreground hover:text-foreground">
-            <LogOut className="h-4 w-4" />
-          </Button>
-        </div>
+        {/* Account menu: identity, Settings, Log out */}
+        <UserMenu />
       </div>
     </header>
   );

@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/contexts/AuthContext';
+import { useLogout } from '@/hooks/useLogout';
 import api from '@/lib/api';
 import { formatDate } from '@/lib/dateFormat';
 import { cn } from '@/lib/utils';
@@ -155,7 +156,8 @@ const TAB_CONTENT: Record<SettingsTab, () => JSX.Element> = {
 };
 
 function GeneralSettings() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
+  const logout = useLogout();
   const [pwdSuccess, setPwdSuccess] = useState(false);
 
   const profileForm = useForm<ProfileForm>({
@@ -225,7 +227,7 @@ function GeneralSettings() {
       {/* Logout */}
       <div className="rounded-lg border bg-card p-6">
         <h2 className="font-semibold mb-3">Session</h2>
-        <Button variant="destructive" onClick={logout} className="flex items-center gap-2">
+        <Button variant="destructive" onClick={() => { void logout(); }} className="flex items-center gap-2">
           <LogOut className="h-4 w-4" /> Log Out
         </Button>
       </div>

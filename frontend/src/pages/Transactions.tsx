@@ -16,6 +16,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import api from '@/lib/api';
+import { destructiveMenuItemClass, menuContentClass, menuItemClass } from '@/components/ui/menuItemClasses';
+import { useOutsideDismiss } from '@/hooks/useOutsideDismiss';
 import { MAX_DOCUMENT_BYTES, MAX_STATEMENT_BYTES, fileTooLargeMessage } from '@/lib/uploadLimits';
 import { formatDate, formatNextOccurrence } from '@/lib/dateFormat';
 import { useDebounced } from '@/hooks/useDebounced';
@@ -496,8 +498,6 @@ function TransactionActionMenu({
   // import dedup matches on importHash regardless of deletedAt, so a re-import of the same
   // file still treats the deleted row as already-imported and skips it.
   const canDeleteTransaction = true;
-  const itemClass = 'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none transition-colors hover:bg-muted focus:bg-muted';
-  const destructiveItemClass = cn(itemClass, 'text-destructive hover:bg-destructive/10 focus:bg-destructive/10');
   const actions = [
     {
       key: 'documents',
@@ -560,10 +560,10 @@ function TransactionActionMenu({
         <DropdownMenu.Content
           align="end"
           sideOffset={6}
-          className="z-50 min-w-52 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+          className={cn(menuContentClass, 'min-w-52')}
         >
           {actions.map((action) => (
-            <DropdownMenu.Item key={action.key} className={itemClass} onSelect={action.onSelect}>
+            <DropdownMenu.Item key={action.key} className={menuItemClass} onSelect={action.onSelect}>
               {action.icon}
               <span>{action.label}</span>
             </DropdownMenu.Item>
@@ -571,7 +571,7 @@ function TransactionActionMenu({
           {canDeleteTransaction && (
             <>
               <DropdownMenu.Separator className="my-1 h-px bg-border" />
-              <DropdownMenu.Item className={destructiveItemClass} onSelect={onDelete}>
+              <DropdownMenu.Item className={destructiveMenuItemClass} onSelect={onDelete}>
                 <Trash2 className="h-4 w-4" />
                 <span>Delete transaction</span>
               </DropdownMenu.Item>
@@ -2168,17 +2168,8 @@ export default function TransactionsPage() {
     }
   }, [canCreateForView, isAdmin, searchParams, setSearchParams, setViewUserId, user, viewUserId]);
 
-  // Close category dropdown on outside click
-  useEffect(() => {
-    if (!showCategoryDropdown) return;
-    const handler = (e: MouseEvent) => {
-      if (categoryDropdownRef.current && !categoryDropdownRef.current.contains(e.target as Node)) {
-        setShowCategoryDropdown(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [showCategoryDropdown]);
+  // Close category dropdown on outside press
+  useOutsideDismiss(categoryDropdownRef, showCategoryDropdown, () => setShowCategoryDropdown(false));
 
   function toggleFilter(field: 'types' | 'categoryIds' | 'paymentModes', value: string) {
     setFilters(f => ({

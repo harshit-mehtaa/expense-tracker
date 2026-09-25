@@ -14,6 +14,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import SettingsPage from '@/pages/Settings';
+import { useAuth } from '@/contexts/AuthContext';
 import { renderPage, failOnConsoleError, SearchParamsProbe } from '../support/renderPage';
 import { url } from '../support/handlers';
 import { ADMIN_USER, MEMBER_USER } from '../support/fixtures';
@@ -221,5 +222,32 @@ describe('Settings page — admin-only Family Members tab', () => {
     expect(screen.queryByRole('tab', { name: /family members/i })).toBeNull();
     expect(screen.queryByRole('heading', { name: /^family members$/i })).toBeNull();
     expect(seen).toEqual([]);
+  });
+});
+
+function AuthProbe() {
+  const { user } = useAuth();
+  return <div data-testid="auth-user">{user ? user.email : 'none'}</div>;
+}
+
+describe('Settings — Session log out', () => {
+  it('a failed server logout still signs out locally, without an unhandled rejection', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    renderPage(<><SettingsPage /><AuthProbe /></>, {
+      route: '/settings',
+      handlers: [
+        ...rateHandlers(),
+        http.post(url('/auth/logout'), () => { calls += 1; return HttpResponse.json({ message: 'Server exploded' }, { status: 500 }); }),
+      ],
+    });
+    await waitFor(() => expect(screen.getByTestId('auth-user')).toHaveTextContent('asha@example.com'));
+
+    await user.click(await screen.findByRole('button', { name: /log out/i }));
+
+    await waitFor(() => expect(calls).toBe(1));
+    // Signed out locally even though the server call failed; failOnConsoleError and
+    // vitest's unhandled-rejection check cover "no uncaught error".
+    await waitFor(() => expect(screen.getByTestId('auth-user')).toHaveTextContent('none'));
   });
 });

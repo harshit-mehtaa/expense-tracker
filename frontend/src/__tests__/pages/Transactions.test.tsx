@@ -1334,3 +1334,26 @@ describe('upload size limits (checked before uploading)', () => {
     expect(input.value).toBe('');
   });
 });
+
+describe('category filter dropdown', () => {
+  it('closes when a Radix menu trigger is clicked (pointerdown, not mousedown)', async () => {
+    // Radix triggers preventDefault on pointerdown, which suppresses the compatibility
+    // mousedown — a mousedown outside-click listener never fires and both stay open.
+    const user = userEvent.setup();
+    renderPage(<TransactionsPage />, {
+      route: '/transactions',
+      handlers: [...txHandlers(), http.get(url('/categories'), () => HttpResponse.json({ data: CATEGORIES }))],
+    });
+    await screen.findAllByText('Grocery run');
+
+    await user.click(screen.getByRole('button', { name: /filters/i }));
+    await user.click(await screen.findByRole('button', { name: /all categories/i }));
+    expect(await screen.findByText('Rent')).toBeInTheDocument();
+
+    await user.click(screen.getAllByTitle('Transaction actions')[0]);
+    await screen.findByRole('menu');
+    // ByText, not ByRole: the open Radix menu aria-hides everything else, so a role
+    // query would report the dropdown gone even while it is still rendered.
+    expect(screen.queryByText('Rent')).toBeNull();
+  });
+});

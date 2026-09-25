@@ -9,7 +9,6 @@ import {
   Target,
   CreditCard,
   FileText,
-  Settings,
   IndianRupee,
   Gem,
 } from 'lucide-react';
@@ -19,7 +18,8 @@ interface NavEntry { to: string; icon: ElementType; label: string; exact?: boole
 
 // Grouped under section labels. Moved out of the sidebar (old URLs redirect, App.tsx):
 // Reminders → the header bell's "View all"; Subscriptions → a Transactions tab;
-// Categories and Family Members (admin-only) → Settings tabs.
+// Categories and Family Members (admin-only) → Settings tabs. Settings itself → the
+// header's account menu (UserMenu).
 const NAV_GROUPS: Array<{ label: string | null; items: NavEntry[] }> = [
   { label: null, items: [{ to: '/', icon: LayoutDashboard, label: 'Dashboard', exact: true }] },
   {
@@ -119,13 +119,6 @@ export function Sidebar() {
           ))}
         </ul>
       </nav>
-
-      {/* Bottom: Settings */}
-      <div className="border-t border-border/60 p-3">
-        <ul className="space-y-0.5">
-          <NavItem to="/settings" icon={Settings} label="Settings" />
-        </ul>
-      </div>
     </aside>
   );
 }
